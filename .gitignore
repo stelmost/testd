@@ -7,6 +7,12 @@ src-tauri/icons/ios/
 src-tauri/icons/alt-plate/
 src-tauri/gen/
 /worktrees/
+# JS workspace output and caches.
+node_modules/
+/site/dist/
+/docs/.vitepress/cache/
+/docs/.vitepress/dist/
+/.playwright-cli/
 # Local PKI output from manual host runs.
 pki/
 *.cdx.json
