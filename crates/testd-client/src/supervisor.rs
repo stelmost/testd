@@ -21,11 +21,10 @@ use testd_core::protocol::{self, Request, Response};
 use testd_core::validate;
 
 use crate::listeners;
+use crate::process::ProcessTree;
 use crate::{Entry, Reader, Writer, connect};
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(3);
-#[cfg(unix)]
-const STOP_GRACE: Duration = Duration::from_secs(5);
 const PROBE_INTERVAL: Duration = Duration::from_millis(200);
 
 /// State of one `name:port` entry.
@@ -212,7 +211,7 @@ async fn run_launch(
 		send_state(&events, &entry.domain, &entry.target, EntryState::Configured, None).await;
 	}
 
-	let mut child = spawn_child(&spec, &events)?;
+	let (mut child, mut process_tree, output_readers) = spawn_child(&spec, &events)?;
 	let pid = child.id().unwrap_or_default();
 	let _ = events.send(LaunchEvent::Started { pid }).await;
 
@@ -252,13 +251,13 @@ async fn run_launch(
 						map.retain(|name, _| !revoked.contains(name));
 						confirmed = map;
 						if confirmed.is_empty() {
-							stop_child(&mut child).await;
+							process_tree.stop(&mut child).await?;
 							exit_code = None;
 							break;
 						}
 					},
 					None => {
-						stop_child(&mut child).await;
+						process_tree.stop(&mut child).await?;
 						exit_code = None;
 						break;
 					},
@@ -276,7 +275,7 @@ async fn run_launch(
 					let line = format!("testd: {domain} was stopped by the host operator (grants kept)");
 					let _ = events.send(LaunchEvent::Output { stream: OutputStream::Stderr, line }).await;
 					startup_abort.abort();
-					stop_child(&mut child).await;
+					process_tree.stop(&mut child).await?;
 					exit_code = None;
 					break;
 				},
@@ -299,7 +298,7 @@ async fn run_launch(
 					if started && confirmed.is_empty() {
 						// Nothing is left to publish for this run.
 						startup_abort.abort();
-						stop_child(&mut child).await;
+						process_tree.stop(&mut child).await?;
 						exit_code = None;
 						break;
 					}
@@ -307,7 +306,7 @@ async fn run_launch(
 				Some(SessionNotice::Closed(reason)) => {
 					let _ = events.send(LaunchEvent::Failed { message: reason }).await;
 					startup_abort.abort();
-					stop_child(&mut child).await;
+					process_tree.stop(&mut child).await?;
 					exit_code = None;
 					break;
 				},
@@ -316,14 +315,14 @@ async fn run_launch(
 			command = commands.recv() => match command {
 				None => {
 					startup_abort.abort();
-					stop_child(&mut child).await;
+					process_tree.stop(&mut child).await?;
 					exit_code = None;
 					break;
 				},
 				Some(Command::Stop { respond }) => {
 					startup_abort.abort();
 					stop_responder = Some(respond);
-					stop_child(&mut child).await;
+					process_tree.stop(&mut child).await?;
 					exit_code = None;
 					break;
 				},
@@ -348,7 +347,7 @@ async fn run_launch(
 								let _ = respond.send(Err("launch stopped during rebind".into()));
 								if let Some(Command::Stop { respond }) = command { stop_responder = Some(respond); }
 								startup_abort.abort();
-								stop_child(&mut child).await;
+								process_tree.stop(&mut child).await?;
 								exit_code = None;
 								break 'running;
 							},
@@ -368,7 +367,22 @@ async fn run_launch(
 	}
 
 	startup_abort.abort();
+	process_tree.stop(&mut child).await?;
 	session.stop().await;
+	for mut reader in output_readers {
+		match tokio::time::timeout(Duration::from_secs(2), &mut reader).await {
+			Ok(result) => result.context("launch output reader failed")?,
+			Err(_) => {
+				reader.abort();
+				let _ = events
+					.send(LaunchEvent::Output {
+						stream: OutputStream::Stderr,
+						line: "testd: output pipe did not close after process cleanup".into(),
+					})
+					.await;
+			},
+		}
+	}
 	for entry in &spec.entries {
 		send_state(&events, &entry.domain, &entry.target, EntryState::Configured, None).await;
 	}
@@ -515,7 +529,10 @@ async fn send_state(
 		.await;
 }
 
-fn spawn_child(spec: &LaunchSpec, events: &mpsc::Sender<LaunchEvent>) -> Result<Child> {
+fn spawn_child(
+	spec: &LaunchSpec,
+	events: &mpsc::Sender<LaunchEvent>,
+) -> Result<(Child, ProcessTree, Vec<tokio::task::JoinHandle<()>>)> {
 	let mut command = ProcessCommand::new(&spec.program);
 	command
 		.args(&spec.args)
@@ -528,21 +545,23 @@ fn spawn_child(spec: &LaunchSpec, events: &mpsc::Sender<LaunchEvent>) -> Result<
 	for (key, value) in &spec.env {
 		command.env(key, value);
 	}
-	own_process_tree(&mut command);
-
-	let mut child = command
-		.spawn()
-		.with_context(|| format!("failed to spawn {}", spec.program.display()))?;
+	let (mut child, process_tree) =
+		ProcessTree::spawn(&mut command).with_context(|| format!("failed to spawn {}", spec.program.display()))?;
+	let mut output_readers = Vec::new();
 	if let Some(stdout) = child.stdout.take() {
-		spawn_output_reader(stdout, OutputStream::Stdout, events.clone());
+		output_readers.push(spawn_output_reader(stdout, OutputStream::Stdout, events.clone()));
 	}
 	if let Some(stderr) = child.stderr.take() {
-		spawn_output_reader(stderr, OutputStream::Stderr, events.clone());
+		output_readers.push(spawn_output_reader(stderr, OutputStream::Stderr, events.clone()));
 	}
-	Ok(child)
+	Ok((child, process_tree, output_readers))
 }
 
-fn spawn_output_reader<R>(reader: R, stream: OutputStream, events: mpsc::Sender<LaunchEvent>)
+fn spawn_output_reader<R>(
+	reader: R,
+	stream: OutputStream,
+	events: mpsc::Sender<LaunchEvent>,
+) -> tokio::task::JoinHandle<()>
 where
 	R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
@@ -553,51 +572,7 @@ where
 				break;
 			}
 		}
-	});
-}
-
-pub(crate) fn own_process_tree(command: &mut ProcessCommand) {
-	command.kill_on_drop(true);
-	#[cfg(unix)]
-	command.process_group(0);
-	#[cfg(windows)]
-	command.creation_flags(0x0000_0200); /* CREATE_NEW_PROCESS_GROUP */
-}
-
-pub(crate) async fn stop_child(child: &mut Child) {
-	let Some(pid) = child.id() else {
-		return;
-	};
-
-	#[cfg(unix)]
-	{
-		unsafe {
-			libc::kill(-(pid as i32), libc::SIGTERM);
-		}
-		let _ = tokio::time::timeout(STOP_GRACE, child.wait()).await;
-		// Also clear descendants that outlived the direct child.
-		unsafe {
-			libc::kill(-(pid as i32), libc::SIGKILL);
-		}
-		let _ = child.wait().await;
-	}
-
-	#[cfg(windows)]
-	{
-		let _ = ProcessCommand::new("taskkill")
-			.args(["/PID", &pid.to_string(), "/T", "/F"])
-			.stdout(Stdio::null())
-			.stderr(Stdio::null())
-			.status()
-			.await;
-		let _ = child.wait().await;
-	}
-
-	#[cfg(not(any(unix, windows)))]
-	{
-		let _ = child.kill().await;
-		let _ = child.wait().await;
-	}
+	})
 }
 
 // --- host session ---
@@ -1051,12 +1026,13 @@ mod tests {
 	async fn sleep_fixture_stays_alive_with_redirected_stdin() {
 		let spec = spec_with_args("127.0.0.1:1");
 		let (events, _receiver) = mpsc::channel(16);
-		let mut child = spawn_child(&spec, &events).expect("failed to spawn sleep fixture");
+		let (mut child, mut process_tree, _output_readers) =
+			spawn_child(&spec, &events).expect("failed to spawn sleep fixture");
 
 		// Stay alive through a full connection attempt, including slow refusal on Windows.
 		tokio::time::sleep(Duration::from_secs(2)).await;
 		let status = child.try_wait();
-		stop_child(&mut child).await;
+		process_tree.stop(&mut child).await.unwrap();
 		let status = status.expect("failed to inspect sleep fixture");
 		assert!(status.is_none(), "sleep fixture exited with redirected stdin: {status:?}");
 	}
@@ -1096,13 +1072,12 @@ mod tests {
 	async fn stopping_an_owned_process_tree_stops_descendants() {
 		let mut command = ProcessCommand::new("sh");
 		command.args(["-c", "sleep 30 & echo $!; wait"]).stdout(Stdio::piped());
-		own_process_tree(&mut command);
-		let mut child = command.spawn().unwrap();
+		let (mut child, mut process_tree) = ProcessTree::spawn(&mut command).unwrap();
 		let mut output = BufReader::new(child.stdout.take().unwrap());
 		let mut line = String::new();
 		output.read_line(&mut line).await.unwrap();
 		let descendant: u32 = line.trim().parse().unwrap();
-		stop_child(&mut child).await;
+		process_tree.stop(&mut child).await.unwrap();
 		let path = format!("/proc/{descendant}/stat");
 		let stopped = tokio::time::timeout(Duration::from_secs(3), async {
 			loop {
@@ -1120,6 +1095,35 @@ mod tests {
 			}
 		}
 		assert!(stopped.is_ok(), "the descendant survived its process group");
+	}
+
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn a_failed_command_delivers_its_final_output_before_exit() {
+		let host = fake_host().await;
+		let (_listener, target) = target().await;
+		let mut spec = spec(&target);
+		spec.program = "/bin/sh".into();
+		spec.args =
+			vec!["-c".into(), "i=0; while [ $i -lt 200 ]; do echo failure-line >&2; i=$((i + 1)); done; exit 7".into()];
+		let mut launch = launch(spec, config(&host.addr)).await.unwrap();
+		let lines = tokio::time::timeout(Duration::from_secs(5), async {
+			let mut lines = 0;
+			loop {
+				match launch.events().recv().await.expect("launch ended without an exit event") {
+					LaunchEvent::Output { stream: OutputStream::Stderr, line } if line == "failure-line" => lines += 1,
+					LaunchEvent::Exited { code } => {
+						assert_eq!(code, Some(7));
+						return lines;
+					},
+					LaunchEvent::Failed { message } => panic!("{message}"),
+					_ => {},
+				}
+			}
+		})
+		.await
+		.unwrap();
+		assert_eq!(lines, 200, "the last command output must not be discarded at exit");
 	}
 
 	#[tokio::test]

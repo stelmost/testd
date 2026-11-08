@@ -62,6 +62,65 @@ fn operator_secret(home: &Path) -> String {
 	table["host"]["secret"].as_str().expect("init writes [host] secret").to_owned()
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn service_termination_stops_the_command_and_deregisters() {
+	use std::process::Stdio;
+	use std::time::Duration;
+	use tokio::io::{AsyncBufReadExt, BufReader};
+	use testd_core::protocol::{Auth, Request, Response, recv, send};
+
+	let home = TempDir::new().unwrap();
+	let host = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+	let address = host.local_addr().unwrap().to_string();
+	let mut command = testd_command(
+		home.path(),
+		&["run", "--host", &address, "app.example:3000", "--", "sh", "-c", "echo $$; sleep 30"],
+	);
+	command
+		.env("TESTD_TOKEN", "fixture-token")
+		.stdout(Stdio::piped())
+		.stderr(Stdio::piped());
+	let mut command = tokio::process::Command::from(command);
+	let mut child = command.kill_on_drop(true).spawn().unwrap();
+	let mut output = BufReader::new(child.stdout.take().unwrap());
+	let mut line = String::new();
+	tokio::time::timeout(Duration::from_secs(5), output.read_line(&mut line))
+		.await
+		.unwrap()
+		.unwrap();
+	let group: u32 = line.trim().parse().unwrap();
+	let result = tokio::time::timeout(Duration::from_secs(10), async {
+		let (stream, _) = host.accept().await.unwrap();
+		let mut reader = BufReader::new(stream);
+		assert!(recv::<_, Auth>(&mut reader).await.unwrap().is_some());
+		send(reader.get_mut(), &Response::Ok).await.unwrap();
+		assert!(matches!(recv::<_, Request>(&mut reader).await.unwrap(), Some(Request::Register { .. })));
+		send(reader.get_mut(), &Response::Ok).await.unwrap();
+		assert!(
+			tokio::process::Command::new("kill")
+				.args(["-TERM", &child.id().unwrap().to_string()])
+				.status()
+				.await
+				.unwrap()
+				.success()
+		);
+		let deregistered = recv::<_, Request>(&mut reader).await.unwrap();
+		let status = child.wait().await.unwrap();
+		(deregistered, status)
+	})
+	.await;
+	/* Clean up the fixture group even if the termination contract regresses. */
+	let _ = tokio::process::Command::new("kill")
+		.args(["-KILL", "--", &format!("-{group}")])
+		.stderr(Stdio::null())
+		.status()
+		.await;
+	let (deregistered, status) = result.expect("SIGTERM must finish cleanup instead of abandoning the command");
+	assert!(matches!(deregistered, Some(Request::Deregister { .. })));
+	assert!(!status.success(), "the interrupted command must not be reported as successful");
+}
+
 #[test]
 fn cli_does_not_offer_a_hosts_helper_command() {
 	let home = TempDir::new().unwrap();

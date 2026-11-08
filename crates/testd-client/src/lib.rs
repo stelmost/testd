@@ -14,6 +14,7 @@ use testd_core::protocol::{self, Auth, ErrorDisposition, Request, Response, Toke
 
 pub mod listeners;
 pub mod supervisor;
+mod process;
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(3);
 /// A host that does not answer must not stall a run or a failover attempt.
@@ -432,6 +433,20 @@ async fn deregister_best_effort(writer: &mut Writer, entries: &[Entry]) {
 	}
 }
 
+/// Wait for Ctrl+C or the service manager's normal termination signal.
+pub async fn shutdown_signal() -> std::io::Result<()> {
+	#[cfg(unix)]
+	{
+		let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+		tokio::select! {
+			result = tokio::signal::ctrl_c() => result,
+			_ = terminate.recv() => Ok(()),
+		}
+	}
+	#[cfg(not(unix))]
+	tokio::signal::ctrl_c().await
+}
+
 /// Register entries, run a command, deregister on exit.
 pub async fn run(entries: &[Entry], command: &[String], force: bool, config: ClientConfig) -> Result<()> {
 	let stop = Arc::new(Notify::new());
@@ -448,18 +463,19 @@ pub async fn run(entries: &[Entry], command: &[String], force: bool, config: Cli
 		.stdin(Stdio::inherit())
 		.stdout(Stdio::inherit())
 		.stderr(Stdio::inherit());
-	supervisor::own_process_tree(&mut process);
-	let mut child = process.spawn().with_context(|| format!("failed to spawn: {}", command[0]))?;
+	let (mut child, mut process_tree) =
+		process::ProcessTree::spawn(&mut process).with_context(|| format!("failed to spawn: {}", command[0]))?;
 
 	// Wait for child, signal, or a registration loop that stopped on its own.
 	let status = tokio::select! {
 		status = child.wait() => status?,
-		_ = tokio::signal::ctrl_c() => {
-			supervisor::stop_child(&mut child).await;
+		signal = shutdown_signal() => {
+			signal?;
+			process_tree.stop(&mut child).await?;
 			child.wait().await?
 		},
 		result = &mut registration => {
-			supervisor::stop_child(&mut child).await;
+			process_tree.stop(&mut child).await?;
 			match result {
 				// The operator's action already printed why; the child is ours
 				// to stop, and exiting cleanly matches the operator's intent.
@@ -471,6 +487,8 @@ pub async fn run(entries: &[Entry], command: &[String], force: bool, config: Cli
 			}
 		}
 	};
+
+	process_tree.stop(&mut child).await?;
 
 	// Stop the registration loop and deregister the names still published.
 	stop.notify_one();
@@ -491,7 +509,8 @@ pub async fn register(entries: &[Entry], force: bool, config: ClientConfig) -> R
 
 	eprintln!("[testd] Press Ctrl+C to deregister.");
 	tokio::select! {
-		_ = tokio::signal::ctrl_c() => {
+		signal = shutdown_signal() => {
+			signal?;
 			stop.notify_one();
 		},
 		result = &mut registration => match result {
