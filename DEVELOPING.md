@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Rust toolchain from `rust-toolchain.toml`; CLI/daemon MSRV 1.89, tray MSRV 1.90
+- Rust toolchain from `rust-toolchain.toml`; MSRV 1.90
 - Python 3.12 or newer for release tooling and reports; Bun for browser fixtures
 - `cargo-cyclonedx` for workspace SBOM generation
 - `cargo-nextest` for tests and `cargo-deny` for dependency checks
@@ -128,7 +128,7 @@ Each `ci-summary-*` artifact contains `ci-summary.json`, with source/OS/Python m
 Install the [prerequisites](#prerequisites), including the native Tauri build libraries/compiler even if you only want to run `ci`. Python 3.12 or newer is supported; hosted CI currently uses 3.14, while its minimum-runtime fixtures use 3.12. Ensure the rustup shims and Bun are on `PATH`; a distro-provided `cargo` cannot interpret `+stable`. On Linux/macOS, load `source "$HOME/.cargo/env"` in the current shell if needed; on Windows, reopen PowerShell after installation. Prepare the shared tools and checkout dependencies once:
 
 ```sh
-rustup toolchain install stable 1.89.0 1.90.0 --profile minimal
+rustup toolchain install stable 1.90.0 --profile minimal
 cargo +stable --version
 rustup component add --toolchain stable rustfmt clippy
 cargo +stable install --locked cargo-nextest cargo-deny
@@ -585,7 +585,7 @@ Recovery requires the same platform and any necessary sudo or elevation. It leav
 
 ### CI coverage
 
-`.github/workflows/ci.yml` provisions and runs the `ci` suite on Ubuntu 24.04, macOS 15 Apple Silicon and Intel, and Windows Server 2025. It installs Python 3.14, stable and both MSRV Rust toolchains, `cargo-nextest`, `cargo-deny`, Bun, and website dependencies; Linux build libraries come from the local dependency action. Xcode and MSVC/Windows SDK prerequisites come from the hosted runner images. Rust build caches are isolated by platform, and only master runs save them.
+`.github/workflows/ci.yml` provisions and runs the `ci` suite on Ubuntu 24.04, macOS 15 Apple Silicon and Intel, and Windows Server 2025. It installs Python 3.14, stable and the MSRV Rust toolchain, `cargo-nextest`, `cargo-deny`, Bun, and website dependencies; Linux build libraries come from the local dependency action. Xcode and MSVC/Windows SDK prerequisites come from the hosted runner images. Rust build caches are isolated by platform, and only master runs save them.
 
 A separate Fedora 44 container job installs Fedora build dependencies, uses its system Python, and runs the same suite as a normal user. It establishes Fedora userspace compilation and CLI/daemon behavior on the Ubuntu runner's kernel, not native Fedora resolver, trust, systemd-session, SELinux, or desktop integration. Hosted Windows Server is not desktop Windows 11 evidence.
 
@@ -667,8 +667,7 @@ A free release is a version tag, CLI archives, public tray bundles, workspace SB
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings`
 - [ ] `cargo nextest run --workspace`
 - [ ] `cargo deny check`
-- [ ] `cargo +1.89.0 check --workspace --exclude testd-gui --locked`
-- [ ] `cargo +1.90.0 check -p testd-gui --locked`
+- [ ] `cargo +1.90.0 check --workspace --locked`
 - [ ] `python3 scripts/release.py verify-version`
 - [ ] Enable GitHub private vulnerability reporting for the public repository
 - [ ] Run the release-validation suites above and retain reports for every claimed platform/browser

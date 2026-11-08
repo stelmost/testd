@@ -78,20 +78,18 @@ class ReleaseTests(unittest.TestCase):
 		self.assertEqual(policy['bans']['wildcards'], 'deny')
 		self.assertIn({'name': 'openssl'}, policy['bans']['deny'])
 
-	def test_core_and_ci_checks_match_declared_msrvs(self):
+	def test_core_and_ci_checks_use_the_declared_msrv(self):
 		run = Mock(args=SimpleNamespace(gui=True, strict=True))
 		with patch.object(runner.shutil, 'which', return_value='installed'):
 			runner.core(run)
 		commands = {call.args[0]: call.args[1] for call in run.command.call_args_list}
 		workspace = release.tomllib.loads((ROOT / 'Cargo.toml').read_text())
-		tray = release.tomllib.loads((ROOT / 'src-tauri/Cargo.toml').read_text())
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text()
-		versions = [workspace['workspace']['package']['rust-version'], tray['package']['rust-version']]
-		for name, version in zip(('msrv-cli', 'msrv-tray'), versions):
+		msrv = workspace['workspace']['package']['rust-version']
+		for name in ('msrv-cli', 'msrv-tray'):
 			with self.subTest(name=name):
-				self.assertEqual(commands[name][1], f'+{version}.0')
-		toolchains = ' '.join(f'{version}.0' for version in versions)
-		self.assertIn(f'rustup toolchain install {toolchains} --profile minimal', workflow)
+				self.assertEqual(commands[name][1], f'+{msrv}.0')
+		self.assertIn(f'rustup toolchain install {msrv}.0 --profile minimal', workflow)
 
 	def test_release_core_uses_the_absolute_browser_fixture_path(self):
 		run = Mock(args=SimpleNamespace(gui=False, strict=True))
@@ -351,7 +349,7 @@ class PlatformSequenceTests(unittest.TestCase):
 		self.assertEqual(commands['format'], ['cargo', '+stable', 'fmt', '--all', '--', '--check'])
 		self.assertEqual(commands['clippy'], ['cargo', '+stable', 'clippy', '--workspace', '--all-targets',
 			'--exclude', 'testd-gui', '--locked', '--', '-D', 'warnings'])
-		self.assertEqual(commands['rust-tests'], ['cargo', '+1.89.0', 'nextest', 'run', '--workspace',
+		self.assertEqual(commands['rust-tests'], ['cargo', '+1.90.0', 'nextest', 'run', '--workspace',
 			'--exclude', 'testd-gui', '--locked', *runner.NEXTEST_OUTPUT_OPTIONS])
 		self.assertEqual(commands['release-script-tests'], [sys.executable, '-m', 'unittest', 'discover',
 			'-s', 'tests/release', '-p', 'test_*.py', '-v'])
@@ -371,7 +369,7 @@ class PlatformSequenceTests(unittest.TestCase):
 		with patch.object(runner, 'require'):
 			runner.contracts(run)
 		command = run.command.call_args.args[1]
-		self.assertEqual(command, ['cargo', '+1.89.0', 'nextest', 'run', '--workspace', '--exclude',
+		self.assertEqual(command, ['cargo', '+1.90.0', 'nextest', 'run', '--workspace', '--exclude',
 			'testd-gui', '--locked', '--run-ignored', 'all', '--no-fail-fast', *runner.NEXTEST_OUTPUT_OPTIONS])
 
 	def test_dependency_audit_covers_the_whole_workspace(self):

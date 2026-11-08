@@ -367,7 +367,7 @@ def automated(run):
 	run.command('format', ['cargo', '+stable', 'fmt', '--all', '--', '--check'], 300)
 	run.command('clippy', ['cargo', '+stable', 'clippy', '--workspace', '--all-targets', '--exclude',
 		'testd-gui', '--locked', '--', '-D', 'warnings'], 1200)
-	run.command('rust-tests', ['cargo', '+1.89.0', 'nextest', 'run', '--workspace', '--exclude',
+	run.command('rust-tests', ['cargo', '+1.90.0', 'nextest', 'run', '--workspace', '--exclude',
 		'testd-gui', '--locked', *NEXTEST_OUTPUT_OPTIONS], 1200)
 	run.command('release-script-tests', [sys.executable, '-m', 'unittest', 'discover',
 		'-s', 'tests/release', '-p', 'test_*.py', '-v'], 300)
@@ -383,8 +383,8 @@ def contracts(run):
 	for tool in ('cargo', 'rustup', 'cargo-nextest'):
 		require(tool)
 	if run.args.gui:
-		raise RuntimeError('the Rust 1.89 contract gate excludes the GUI; run the GUI checks separately')
-	run.command('release-contracts', ['cargo', '+1.89.0', 'nextest', 'run', '--workspace', '--exclude',
+		raise RuntimeError('the Rust 1.90 contract gate excludes the GUI; run the GUI checks separately')
+	run.command('release-contracts', ['cargo', '+1.90.0', 'nextest', 'run', '--workspace', '--exclude',
 		'testd-gui', '--locked', '--run-ignored', 'all', '--no-fail-fast', *NEXTEST_OUTPUT_OPTIONS], 1200)
 
 
@@ -414,7 +414,7 @@ def core(run):
 		run.record('browser-fixture-tests', 'skip', 'Bun is not installed')
 	for tool, name, command in [
 		('cargo-deny', 'dependencies', ['cargo', 'deny', 'check']),
-		('rustup', 'msrv-cli', ['cargo', '+1.89.0', 'check', '--workspace', '--exclude', 'testd-gui', '--locked']),
+		('rustup', 'msrv-cli', ['cargo', '+1.90.0', 'check', '--workspace', '--exclude', 'testd-gui', '--locked']),
 	]:
 		if shutil.which(tool):
 			run.command(name, command, 1200)

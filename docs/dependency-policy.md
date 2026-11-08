@@ -33,4 +33,4 @@ Remove these exceptions once both dependency paths use zbus 6 and the standalone
 
 ## Notification MSRV
 
-The daemon requires `notify-rust` 4.18 for notification action callbacks on macOS and Windows. This release requires Rust 1.89, which is the CLI/daemon MSRV. The tray MSRV remains Rust 1.90. Release-validation and CI checks use these respective toolchains.
+The daemon requires `notify-rust` 4.18 for notification action callbacks on macOS and Windows. That release requires Rust 1.89, within the workspace MSRV of Rust 1.90. Release-validation and CI checks use Rust 1.90.

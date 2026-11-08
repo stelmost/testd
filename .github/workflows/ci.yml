@@ -62,7 +62,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-      - run: rustup toolchain install 1.89.0 1.90.0 --profile minimal
+      - run: rustup toolchain install 1.90.0 --profile minimal
       - uses: ./.github/actions/linux-dependencies
         if: runner.os == 'Linux'
       - uses: actions/setup-python@v5
@@ -117,7 +117,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-      - run: rustup toolchain install 1.89.0 1.90.0 --profile minimal
+      - run: rustup toolchain install 1.90.0 --profile minimal
       - uses: oven-sh/setup-bun@v2
       - uses: taiki-e/install-action@v2
         with:

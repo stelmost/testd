@@ -29,7 +29,7 @@ First public release. The CLI, daemon, and tray ship as one version; desktop bun
 - `testd init`, `doctor [--json] [--fix]`, `url`, `uninstall`, and `export-caddyfile`
 - `doctor` checks the resolver, the root trust, and the edge, repairs them with `--fix` (macOS DNS cache and mDNSResponder, Windows NRPT rules and the machine root store), and reports when an external front owns TLS
 - Host opt-ins: `[host] allow_remote_targets` for explicit remote targets, `[host] trust_forwarded_for` for a trusted front proxy, and `[host] edge_enabled = false` to drop only the built-in TLS listener while plain HTTP routing stays up
-- Homebrew formula and architecture-aware cask, launchd and systemd units, and an NSIS installer; building from source needs Rust 1.89, or 1.90 for the tray
+- Homebrew formula and architecture-aware cask, launchd and systemd units, and an NSIS installer; building from source needs Rust 1.90
 - Tag-triggered release automation: CLI archives, tray bundles, workspace SBOMs, generated Homebrew definitions, checksums, and a draft GitHub release
 - Cross-platform release validation for the host, browser, desktop, and artifact suites, including fixture self-tests for the privileged resolver and trust integration
 

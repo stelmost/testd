@@ -49,7 +49,7 @@ The report includes `ci-summary.json`, containing only OS/Python/source metadata
 
 `.github/workflows/ci.yml` performs the setup and runs this suite on Ubuntu 24.04, macOS 15 Apple Silicon and Intel, Windows Server 2025, and Fedora 44 userspace in a container. Pushes to master, release tags, pull requests, and manual workflow runs trigger the applicable jobs. The container shares the Ubuntu runner's kernel and lacks a real Fedora desktop/systemd session; it is not native Fedora system-integration evidence. Windows Server is not desktop Windows 11 evidence. Runner messages and command output appear in the job transcript; only status summaries are uploaded as artifacts.
 
-The workflow installs Python 3.14 on hosted VMs, uses Fedora's system Python, and installs stable Rust, Rust 1.89.0 and 1.90.0, cargo tools, Bun, and checkout dependencies. Linux libraries are installed explicitly; the macOS and Windows runner images supply their native build prerequisites. Manual and system-changing checks require separate restorable infrastructure and remain outside hosted CI.
+The workflow installs Python 3.14 on hosted VMs, uses Fedora's system Python, and installs stable Rust, the Rust 1.90 MSRV, cargo tools, Bun, and checkout dependencies. Linux libraries are installed explicitly; the macOS and Windows runner images supply their native build prerequisites. Manual and system-changing checks require separate restorable infrastructure and remain outside hosted CI.
 
 A manual workflow dispatch also builds the CLI archives and native desktop packages for every release target and generates the workspace SBOMs after all test gates pass. It uses the workspace version, retains unsigned build artifacts, and never creates a tag or publishes a release. Release publishing remains restricted to version tags. Package creation is not installer, signing, or uninstall evidence.
 
@@ -66,7 +66,7 @@ python3 scripts/test-macos.py all
 python scripts\test-windows.py all
 ```
 
-The scripts require Python 3.12 or newer, Rust 1.89, 1.90 and stable, `cargo-nextest`, `cargo-deny`, Bun, installed website dependencies, and the platform GUI prerequisites. They do not install dependencies. `all` builds a CLI unless `--bin` specifies an existing candidate; a pre-existing build candidate is backed up in the report. Website output and caches are isolated inside the report rather than overwriting the checkout's `dist/`. Run `all --plan` to list stages without executing them.
+The scripts require Python 3.12 or newer, Rust 1.90 and stable, `cargo-nextest`, `cargo-deny`, Bun, installed website dependencies, and the platform GUI prerequisites. They do not install dependencies. `all` builds a CLI unless `--bin` specifies an existing candidate; a pre-existing build candidate is backed up in the report. Website output and caches are isolated inside the report rather than overwriting the checkout's `dist/`. Run `all --plan` to list stages without executing them.
 
 For the system, desktop, browser, artifact, and manual stages, provide the candidate assets and explicitly opt in. The report directory must be new and persisted outside temporary storage. Use a disposable VM with a persisted full-system snapshot; on Windows, use an elevated PowerShell.
 
@@ -145,7 +145,7 @@ The scripts above run these checks and retain a transcript. Individual commands 
 ```sh
 cargo +stable fmt --all -- --check
 cargo +stable clippy --workspace --all-targets --exclude testd-gui --locked -- -D warnings
-cargo +1.89.0 nextest run --workspace --exclude testd-gui --locked \
+cargo +1.90.0 nextest run --workspace --exclude testd-gui --locked \
   --success-output immediate --failure-output immediate --status-level all --final-status-level all
 python3 -m unittest discover -s tests/release -p 'test_*.py' -v
 bun test "$(pwd)/tests/release/browser.test.ts"
@@ -153,12 +153,12 @@ bun test "$(pwd)/tests/release/browser.test.ts"
 
 Use an absolute fixture path: Bun treats a relative path as a search pattern and can otherwise run matching tests from nested worktrees or build snapshots. On Windows PowerShell, use `bun test "$PWD\tests\release\browser.test.ts"`.
 
-The GUI requires its platform build prerequisites and separate Rust 1.90 checks. Run the full dependency policy against the selected release scope; a non-GUI or CI-scoped pass does not clear a GUI-only advisory. The cross-language browser-report fixture requires Bun. PowerShell parser and behavior fixtures are required on Windows; their absence on other platforms is inapplicable. A PowerShell fixture is not a Windows platform run.
+The GUI requires its platform build prerequisites and Rust 1.90 checks. Run the full dependency policy against the selected release scope; a non-GUI or CI-scoped pass does not clear a GUI-only advisory. The cross-language browser-report fixture requires Bun. PowerShell parser and behavior fixtures are required on Windows; their absence on other platforms is inapplicable. A PowerShell fixture is not a Windows platform run.
 
 The release runner's `core` suite and stable version tags include ignored tests; prerelease tags and ordinary CI runs do not constitute release approval. Share-lifetime contracts use fake Unix providers and do not test the deferred grant-revocation race. Run the complete non-GUI suite including ignored cases and require no unexplained skips:
 
 ```sh
-cargo +1.89.0 nextest run --workspace --exclude testd-gui --locked --run-ignored all
+cargo +1.90.0 nextest run --workspace --exclude testd-gui --locked --run-ignored all
 ```
 
 ## Host and manual checks
