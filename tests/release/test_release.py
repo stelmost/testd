@@ -60,7 +60,9 @@ def fixture_symlink(test, path, target, **options):
 		path.symlink_to(target, **options)
 	except OSError as error:
 		if os.name == 'nt' and getattr(error, 'winerror', None) in (50, 1314):
-			test.skipTest(f'Windows symlink creation is unavailable: {error}')
+			test.skipTest(f'Windows symlink creation is unavailable: {error}. '
+				'Use a symlink-capable filesystem and enable Windows Developer Mode '
+				'or grant the test account SeCreateSymbolicLinkPrivilege.')
 		raise
 
 
@@ -75,8 +77,10 @@ class ReleaseTests(unittest.TestCase):
 		unavailable = OSError('fixture privilege unavailable')
 		unavailable.winerror = 1314
 		path.symlink_to.side_effect = unavailable
-		with patch.object(os, 'name', 'nt'), self.assertRaises(unittest.SkipTest):
+		with patch.object(os, 'name', 'nt'), self.assertRaises(unittest.SkipTest) as skipped:
 			fixture_symlink(self, path, 'target')
+		self.assertIn('Windows Developer Mode', str(skipped.exception))
+		self.assertIn('SeCreateSymbolicLinkPrivilege', str(skipped.exception))
 		unexpected = OSError('unexpected I/O failure')
 		unexpected.winerror = 5
 		path.symlink_to.side_effect = unexpected

@@ -16,6 +16,8 @@ python3 tests/run.py prepare
 
 Use `python` instead of `python3` on native Windows. Python uses only its standard library: no virtual environment or pip packages are required. `prepare` lists missing tools, toolchains, and website dependencies together; it installs nothing. Cargo-nextest is not required. PowerShell behavior fixtures are required on Windows; when PowerShell is unavailable on Unix, Windows-only checks are explicitly inapplicable, not passes.
 
+Windows fixtures need both file and directory symlink creation in the account's temporary directory. `prepare` probes this without changing system settings. For `WinError 1314`, enable Windows Developer Mode where supported, or grant a dedicated test account `SeCreateSymbolicLinkPrivilege` and start a new logon session. Use a symlink-capable filesystem. Keep routine checks unelevated; do not bypass this prerequisite by relabelling skipped safety checks as passes.
+
 GUI compilation is opt-in locally. Install the [Linux GTK/WebKit development packages](../.github/actions/linux-dependencies/action.yml), macOS Xcode tooling, or Windows WebView2 prerequisites before using `--gui`. `prepare --gui` also checks Linux `pkg-config` libraries. Tool detection does not establish that a native compiler, GUI, or installation works.
 
 ## Run

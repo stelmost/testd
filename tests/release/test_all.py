@@ -283,6 +283,19 @@ class AllChecksTests(unittest.TestCase):
 			self.assertEqual(outcome(parent, 'release-script-fixtures')['status'], 'blocked')
 			self.assertTrue(parent.metadata['incomplete'])
 
+	def test_known_fixture_skip_reports_its_reason_in_the_consolidated_report(self):
+		with tempfile.TemporaryDirectory() as temporary:
+			output = ('test_symlink ... skipped "Windows symlink creation unavailable; enable Developer Mode"\n'
+				'Ran 2 tests in 0.1s\n\nOK (skipped=1)\n')
+			parent, api, _ = fixture(temporary, outputs={'release-script-fixtures': output})
+			run = checks.AllChecks(parent, api, parent.args)
+			stage = next(item for item in run.stages() if item.name == 'release-script-fixtures')
+			with contextlib.redirect_stdout(io.StringIO()):
+				run.stage(1, 1, stage)
+			result = outcome(parent, 'release-script-fixtures')
+			self.assertEqual(result['status'], 'blocked')
+			self.assertIn('enable Developer Mode', result['checks'][-1]['detail'])
+
 	def test_source_diff_is_captured_only_by_the_parent_report(self):
 		with tempfile.TemporaryDirectory() as temporary:
 			args = arguments(include_git_diff=True)
@@ -296,6 +309,8 @@ class AllChecksTests(unittest.TestCase):
 	def test_platform_fixture_skips_are_not_confused_with_missing_evidence(self):
 		cases = (
 			('Ran 2 tests in 0.1s\n\nOK (skipped=0)\n', 'pass'),
+			('test_host ... skip     host-coverage: blocked: the host summary is missing\n'
+				'ok\nRan 1 test in 0.1s\n\nOK\n', 'pass'),
 			("test_a ... skipped 'not applicable: Unix only'\nRan 2 tests in 0.1s\n\nOK (skipped=1)\n", 'pass'),
 			("test_a ... skipped 'not applicable: PowerShell fixtures are required only on Windows'\n"
 				"Ran 2 tests in 0.1s\n\nOK (skipped=1)\n", 'pass'),

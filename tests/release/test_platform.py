@@ -114,9 +114,45 @@ class PreparationTests(unittest.TestCase):
 	def test_installed_prerequisites_pass_without_a_build(self):
 		with patch.object(runner.shutil, 'which', return_value='installed'), \
 			patch.object(runner, 'require_toolchain') as toolchain, \
-			contextlib.redirect_stdout(io.StringIO()):
+			patch.object(pathlib.Path, 'symlink_to'), contextlib.redirect_stdout(io.StringIO()):
 			self.assertEqual(runner.prepare(SimpleNamespace(gui=False)), 0)
 		self.assertEqual([call.args[0] for call in toolchain.call_args_list], ['stable', '1.90.0'])
+
+	def test_windows_preparation_checks_file_and_directory_symlinks_without_elevation(self):
+		with patch.object(runner, 'SYSTEM', 'Windows'), \
+			patch.object(runner.shutil, 'which', return_value='installed'), \
+			patch.object(runner, 'require_toolchain'), patch.object(pathlib.Path, 'symlink_to') as symlink, \
+			patch.object(runner.subprocess, 'run') as command, contextlib.redirect_stdout(io.StringIO()):
+			self.assertEqual(runner.prepare(SimpleNamespace(gui=False)), 0)
+		self.assertEqual(symlink.call_count, 2)
+		self.assertEqual(symlink.call_args_list[0].kwargs, {})
+		self.assertEqual(symlink.call_args_list[1].kwargs, {'target_is_directory': True})
+		command.assert_not_called()
+
+	def test_windows_symlink_prerequisite_reports_privilege_and_filesystem_blockers(self):
+		for code in (50, 1314):
+			for successful_links in (0, 1):
+				with self.subTest(code=code, successful_links=successful_links):
+					error = OSError('fixture: symlink unavailable')
+					error.winerror = code
+					output = io.StringIO()
+					with patch.object(runner, 'SYSTEM', 'Windows'), \
+						patch.object(runner.shutil, 'which', return_value='installed'), \
+						patch.object(runner, 'require_toolchain'), \
+						patch.object(pathlib.Path, 'symlink_to', side_effect=[None] * successful_links + [error]), \
+						contextlib.redirect_stdout(output):
+						self.assertEqual(runner.prepare(SimpleNamespace(gui=False)), 2)
+					self.assertIn('Missing: Windows symlink creation', output.getvalue())
+					self.assertIn('Windows Developer Mode', output.getvalue())
+					self.assertIn('SeCreateSymbolicLinkPrivilege', output.getvalue())
+
+	def test_windows_symlink_probe_does_not_hide_unexpected_io_errors(self):
+		error = OSError('fixture: unexpected access failure')
+		error.winerror = 5
+		with patch.object(runner, 'SYSTEM', 'Windows'), \
+			patch.object(runner.shutil, 'which', return_value='installed'), \
+			patch.object(pathlib.Path, 'symlink_to', side_effect=error), self.assertRaisesRegex(OSError, 'unexpected'):
+			runner.prepare(SimpleNamespace(gui=False))
 
 	def test_toolchain_check_never_installs_a_missing_toolchain(self):
 		for code in (0, 1):

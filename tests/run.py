@@ -23,6 +23,7 @@ import socket
 import subprocess
 import sys
 import tarfile
+import tempfile
 import threading
 import time
 import tomllib
@@ -1518,6 +1519,18 @@ def prepare(args):
 			missing.append('PowerShell: required for Windows host and resolver-safety fixtures')
 		else:
 			print('Optional: PowerShell enables mocked Windows resolver-safety fixtures on Unix.')
+	if SYSTEM == 'Windows':
+		with tempfile.TemporaryDirectory(prefix='testd-symlink-check-') as directory:
+			root = pathlib.Path(directory)
+			try:
+				(root / 'file-link').symlink_to(root / 'missing')
+				(root / 'directory-link').symlink_to(root, target_is_directory=True)
+			except OSError as error:
+				if getattr(error, 'winerror', None) not in (50, 1314):
+					raise
+				missing.append(f'Windows symlink creation is unavailable: {error}. '
+					'Use a symlink-capable filesystem and enable Windows Developer Mode '
+					'or grant the test account SeCreateSymbolicLinkPrivilege.')
 	if shutil.which('rustup'):
 		for toolchain in ('stable', '1.90.0'):
 			try:

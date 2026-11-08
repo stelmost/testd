@@ -210,6 +210,9 @@ class AllChecks:
 			return
 		if len(reasons) == count and all(reason.startswith('not applicable:') for reason in reasons):
 			child.record('coverage', 'skip', f'not applicable: {count} platform-specific fixture skips')
+		elif len(reasons) == count:
+			blocked = [reason for reason in reasons if not reason.startswith('not applicable:')]
+			child.record('coverage', 'skip', f'blocked: fixture check skipped: {blocked[0]}')
 		else:
 			child.record('coverage', 'skip', 'blocked: fixture skips or their reasons are incomplete; inspect the log')
 
