@@ -70,9 +70,24 @@ pub struct LogLine {
 	pub line: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum RunPhase {
+	Starting,
+	Running,
+	Stopping,
+	#[default]
+	Finished,
+}
+
+impl RunPhase {
+	fn is_active(self) -> bool {
+		self != Self::Finished
+	}
+}
+
 #[derive(Default)]
 struct RunState {
-	running: bool,
+	phase: RunPhase,
 	states: Vec<EntryStateView>,
 	logs: VecDeque<LogLine>,
 	error: Option<String>,
@@ -188,19 +203,19 @@ impl LaunchBook {
 	}
 
 	pub fn delete(&self, id: &str) -> Result<(), String> {
-		let running = self.running.lock().expect("launch state poisoned");
+		let mut running = self.running.lock().expect("launch state poisoned");
 		if running
 			.get(id)
-			.is_some_and(|state| state.state.lock().expect("launch state poisoned").running)
+			.is_some_and(|run| run.state.lock().expect("launch state poisoned").phase.is_active())
 		{
 			return Err("stop the launch before deleting it".into());
 		}
-		drop(running);
 		self.definitions
 			.lock()
 			.expect("launch definitions poisoned")
 			.retain(|saved| saved.id != id);
-		self.running.lock().expect("launch state poisoned").remove(id);
+		running.remove(id);
+		drop(running);
 		self.save()?;
 		self.bump();
 		Ok(())
@@ -215,7 +230,12 @@ impl LaunchBook {
 			.map(|definition| {
 				let live = running.get(&definition.id).map(|state| {
 					let state = state.state.lock().expect("launch state poisoned");
-					(state.running, state.states.clone(), state.logs.iter().cloned().collect(), state.error.clone())
+					(
+						state.phase.is_active(),
+						state.states.clone(),
+						state.logs.iter().cloned().collect(),
+						state.error.clone(),
+					)
 				});
 				let (is_running, states, logs, error) = live.unwrap_or_default();
 				LaunchView { definition, running: is_running, states, logs, error }
@@ -226,14 +246,14 @@ impl LaunchBook {
 	/// Start a saved launch. The supervisor connects before spawning the child;
 	/// that work happens off the request so the dashboard stays responsive.
 	pub fn start(self: &Arc<Self>, id: &str) -> Result<(), String> {
-		let running = self.running.lock().expect("launch state poisoned");
+		/* Hold the reservation lock through insertion so concurrent starts cannot spawn two supervisors. */
+		let mut running = self.running.lock().expect("launch state poisoned");
 		if running
 			.get(id)
-			.is_some_and(|state| state.state.lock().expect("launch state poisoned").running)
+			.is_some_and(|run| run.state.lock().expect("launch state poisoned").phase.is_active())
 		{
 			return Err("launch is already running".into());
 		}
-		drop(running);
 
 		let definition = self
 			.definitions
@@ -260,18 +280,15 @@ impl LaunchBook {
 
 		let (stop, stop_rx) = mpsc::channel(1);
 		let (rebind, rebind_rx) = mpsc::channel(4);
-		let state = Arc::new(Mutex::new(RunState { running: true, ..RunState::default() }));
+		let state = Arc::new(Mutex::new(RunState { phase: RunPhase::Starting, ..RunState::default() }));
 		let (done_tx, done) = watch::channel(false);
-		self.running
-			.lock()
-			.expect("launch state poisoned")
-			.insert(id.to_owned(), Running { stop, rebind, state: Arc::clone(&state), done });
+		running.insert(id.to_owned(), Running { stop, rebind, state: Arc::clone(&state), done });
+		drop(running);
 		self.bump();
 
 		let book = Arc::clone(self);
-		let id = id.to_owned();
 		tokio::spawn(async move {
-			run_launch(book, id, spec, config, stop_rx, rebind_rx, state).await;
+			run_launch(book, spec, config, stop_rx, rebind_rx, state).await;
 			let _ = done_tx.send(true);
 		});
 		Ok(())
@@ -279,10 +296,16 @@ impl LaunchBook {
 
 	pub fn stop(&self, id: &str) -> Result<(), String> {
 		let running = self.running.lock().expect("launch state poisoned");
-		let Some(state) = running.get(id) else { return Ok(()) };
-		if state.stop.try_send(()).is_err() {
-			return Err("launch is already stopping".into());
+		let Some(run) = running.get(id) else { return Ok(()) };
+		let mut state = run.state.lock().expect("launch state poisoned");
+		match state.phase {
+			RunPhase::Starting | RunPhase::Running => {
+				run.stop.try_send(()).map_err(|_| "launch is already stopping".to_owned())?;
+				state.phase = RunPhase::Stopping;
+			},
+			RunPhase::Stopping | RunPhase::Finished => return Err("launch is already stopping".into()),
 		}
+		drop(state);
 		self.bump();
 		Ok(())
 	}
@@ -291,7 +314,14 @@ impl LaunchBook {
 		let (respond, response) = oneshot::channel();
 		let sender = {
 			let running = self.running.lock().expect("launch state poisoned");
-			running.get(id).map(|state| state.rebind.clone())
+			match running.get(id) {
+				Some(run) => match run.state.lock().expect("launch state poisoned").phase {
+					RunPhase::Starting => return Err("launch is still starting".into()),
+					RunPhase::Running => Some(run.rebind.clone()),
+					RunPhase::Stopping | RunPhase::Finished => return Err("launch stopped".into()),
+				},
+				None => None,
+			}
 		};
 		let Some(sender) = sender else { return Err("launch is not running".into()) };
 		sender
@@ -337,7 +367,6 @@ fn new_id() -> String {
 
 async fn run_launch(
 	book: Arc<LaunchBook>,
-	id: String,
 	spec: LaunchSpec,
 	config: testd_core::config::ClientConfig,
 	mut stop: mpsc::Receiver<()>,
@@ -348,7 +377,7 @@ async fn run_launch(
 		Ok(launch) => launch,
 		Err(e) => {
 			let mut state = state.lock().expect("launch state poisoned");
-			state.running = false;
+			state.phase = RunPhase::Finished;
 			state.error = Some(format!("{e:#}"));
 			drop(state);
 			book.bump();
@@ -356,7 +385,7 @@ async fn run_launch(
 		},
 	};
 	let Some(mut events) = launch.take_events() else {
-		state.lock().expect("launch state poisoned").running = false;
+		state.lock().expect("launch state poisoned").phase = RunPhase::Finished;
 		book.bump();
 		return;
 	};
@@ -376,6 +405,7 @@ async fn run_launch(
 				}
 			},
 			Some(()) = stop.recv() => {
+				state.lock().expect("launch state poisoned").phase = RunPhase::Stopping;
 				let _ = launch.stop().await;
 				while let Ok(event) = events.try_recv() {
 					record(&state, &event);
@@ -389,14 +419,13 @@ async fn run_launch(
 			},
 		}
 	}
-	book.finish(&id);
+	book.finish(&state);
 }
 
 impl LaunchBook {
-	fn finish(&self, id: &str) {
-		if let Some(running) = self.running.lock().expect("launch state poisoned").get(id) {
-			running.state.lock().expect("launch state poisoned").running = false;
-		}
+	fn finish(&self, state: &Mutex<RunState>) {
+		/* Finish this run, not a replacement that may now have the same definition ID. */
+		state.lock().expect("launch state poisoned").phase = RunPhase::Finished;
 		self.bump();
 	}
 }
@@ -425,11 +454,15 @@ fn record(state: &Arc<Mutex<RunState>>, event: &LaunchEvent) {
 			state.logs.push_back(LogLine { stream: *stream, line: line.clone() });
 		},
 		LaunchEvent::Failed { message } => {
-			state.running = false;
+			state.phase = RunPhase::Finished;
 			state.error = Some(message.clone());
 		},
-		LaunchEvent::Exited { .. } => state.running = false,
-		LaunchEvent::Started { .. } => {},
+		LaunchEvent::Exited { .. } => state.phase = RunPhase::Finished,
+		LaunchEvent::Started { .. } => {
+			if state.phase == RunPhase::Starting {
+				state.phase = RunPhase::Running;
+			}
+		},
 	}
 }
 
@@ -470,6 +503,76 @@ mod tests {
 		let mut duplicate = definition("one");
 		duplicate.entries.push(duplicate.entries[0].clone());
 		assert!(book.upsert(duplicate).is_err());
+	}
+
+	fn reserve_run(book: &LaunchBook, phase: RunPhase) -> (Arc<Mutex<RunState>>, mpsc::Receiver<()>) {
+		let state = Arc::new(Mutex::new(RunState { phase, ..RunState::default() }));
+		let (stop, receiver) = mpsc::channel(1);
+		let (rebind, _) = mpsc::channel(4);
+		let (_, done) = watch::channel(false);
+		book.running
+			.lock()
+			.unwrap()
+			.insert("one".into(), Running { stop, rebind, state: Arc::clone(&state), done });
+		(state, receiver)
+	}
+
+	#[test]
+	fn launch_phases_keep_the_existing_running_view() {
+		let dir = tempfile::tempdir().unwrap();
+		let book = Arc::new(book(dir.path().join("launches.json")));
+		book.upsert(definition("one")).unwrap();
+		let (state, mut stop) = reserve_run(&book, RunPhase::Starting);
+		assert!(book.list()[0].running);
+
+		record(&state, &LaunchEvent::Started { pid: 1 });
+		assert_eq!(state.lock().unwrap().phase, RunPhase::Running);
+		book.stop("one").unwrap();
+		assert_eq!(state.lock().unwrap().phase, RunPhase::Stopping);
+		stop.try_recv().unwrap();
+		assert!(book.stop("one").is_err(), "draining the command must not permit another stop");
+		assert!(book.start("one").is_err());
+		assert!(book.delete("one").is_err());
+		assert!(book.list()[0].running, "cleanup still owns the launch");
+
+		record(&state, &LaunchEvent::Output { stream: OutputStream::Stderr, line: "last line".into() });
+		record(&state, &LaunchEvent::Exited { code: Some(0) });
+		let view = book.list().remove(0);
+		assert!(!view.running);
+		assert_eq!(view.logs[0].line, "last line");
+		let json = serde_json::to_value(view).unwrap();
+		assert_eq!(json["running"], false);
+		assert!(json.get("phase").is_none(), "the public format remains unchanged");
+		book.delete("one").unwrap();
+	}
+
+	#[test]
+	fn late_started_events_do_not_undo_stopping_or_completion() {
+		for phase in [RunPhase::Stopping, RunPhase::Finished] {
+			let state = Arc::new(Mutex::new(RunState { phase, ..RunState::default() }));
+			record(&state, &LaunchEvent::Started { pid: 1 });
+			assert_eq!(state.lock().unwrap().phase, phase);
+		}
+	}
+
+	#[test]
+	fn completing_an_old_run_does_not_finish_its_replacement() {
+		let dir = tempfile::tempdir().unwrap();
+		let book = book(dir.path().join("launches.json"));
+		let (old, _) = reserve_run(&book, RunPhase::Finished);
+		let (replacement, _) = reserve_run(&book, RunPhase::Starting);
+		book.finish(&old);
+		assert_eq!(replacement.lock().unwrap().phase, RunPhase::Starting);
+	}
+
+	#[tokio::test]
+	async fn rebind_is_only_accepted_while_running() {
+		let dir = tempfile::tempdir().unwrap();
+		let book = book(dir.path().join("launches.json"));
+		for phase in [RunPhase::Starting, RunPhase::Stopping, RunPhase::Finished] {
+			let (_state, _stop) = reserve_run(&book, phase);
+			assert!(book.rebind("one", "app.example".into(), "127.0.0.1:3001".into()).await.is_err());
+		}
 	}
 
 	#[test]
