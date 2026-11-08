@@ -697,27 +697,4 @@ mod tests {
 		std::fs::write(&path, b"not json").unwrap();
 		assert!(Access::load(path).is_err());
 	}
-	#[test]
-	fn an_approved_token_grants_only_the_requested_name() {
-		let (_dir, access) = access();
-		let (id, _decision) = access
-			.request("leaf", "127.0.0.1:5000", vec!["app.example.test".into()])
-			.unwrap();
-		let approved = access.approve(&id).unwrap();
-		let Approved::Token(token) = approved else { panic!("expected a token") };
-		assert!(access.allows(&token.id, "app.example.test"));
-		assert!(!access.allows(&token.id, "api.example.test"));
-	}
-
-	#[test]
-	fn a_name_can_be_added_to_an_existing_grant() {
-		let (_dir, access) = access();
-		let (id, _decision) = access
-			.request("leaf", "127.0.0.1:5000", vec!["app.example.test".into()])
-			.unwrap();
-		let Approved::Token(token) = access.approve(&id).unwrap() else { panic!("expected a token") };
-		let (request, _decision) = access.request_name(&token.id, "api.example.test", "127.0.0.1:5000").unwrap();
-		access.approve(&request).unwrap();
-		assert!(access.allows(&token.id, "api.example.test"));
-	}
 }

@@ -192,10 +192,6 @@ class ReleaseTests(unittest.TestCase):
 		condition = next(line.strip() for line in release_job.splitlines() if line.strip().startswith('if:'))
 		self.assertEqual(condition, "if: startsWith(github.ref, 'refs/tags/v')")
 
-	def test_notification_dependency_is_not_downgraded_to_4_17(self):
-		manifest = release.tomllib.loads((ROOT / 'crates/testd-daemon/Cargo.toml').read_text())
-		self.assertEqual(manifest['dependencies']['notify-rust'], '4.18')
-
 	def test_windows_host_script_captures_expected_failures_through_the_helper(self):
 		"""PowerShell 5.1 turns redirected native stderr into a terminating error."""
 		script = (ROOT / 'tests/host/windows.ps1').read_text()

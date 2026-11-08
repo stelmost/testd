@@ -1224,9 +1224,6 @@ mod tests {
 	#[cfg(target_os = "linux")]
 	#[tokio::test]
 	async fn auto_detects_the_child_listener() {
-		if std::process::Command::new("python3").arg("--version").output().is_err() {
-			return;
-		}
 		let host = fake_host().await;
 		let script = "import socket,time; s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); time.sleep(30)";
 		let mut spec = LaunchSpec::new("python3", vec![Entry::new("app", "auto")]);

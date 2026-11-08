@@ -366,14 +366,12 @@ mod tests {
 		use std::process::{Command, Stdio};
 
 		let script = "import socket,time; s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); print(s.getsockname()[1], flush=True); time.sleep(30)";
-		let Ok(mut child) = Command::new("python3")
+		let mut child = Command::new("python3")
 			.args(["-c", script])
 			.stdout(Stdio::piped())
 			.stderr(Stdio::null())
 			.spawn()
-		else {
-			return;
-		};
+			.expect("python3 is required for the child-listener fixture");
 		let stdout = child.stdout.take().expect("stdout");
 		let mut line = String::new();
 		BufReader::new(stdout).read_line(&mut line).unwrap();

@@ -1468,7 +1468,8 @@ async fn the_loopback_dashboard_is_local_and_exposes_local_actions() {
 	assert!(!page.contains("name=\"token\""), "the loopback page does not ask for a token: {page}");
 
 	let launches = http(harness.addr, &local_get("/api/local/launches")).await;
-	assert!(!launches.starts_with("HTTP/1.1 404"), "local routes are served locally: {launches}");
+	assert!(launches.starts_with("HTTP/1.1 503"), "the harness has no launch book: {launches}");
+	assert!(launches.contains("quick launches are not available"), "{launches}");
 
 	let rebinding = http(harness.addr, &local_get("/").replace("Host: testd.test", "Host: evil.test")).await;
 	assert!(rebinding.starts_with("HTTP/1.1 403"), "a foreign Host is refused: {rebinding}");

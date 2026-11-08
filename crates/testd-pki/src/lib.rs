@@ -495,9 +495,12 @@ mod tests {
 	fn distinct_serials_and_keys_per_leaf() {
 		let dir = temp_dir();
 		let ca = Ca::load_or_init(&dir).unwrap();
-		let (first, _) = ca.mint_der("a.test").unwrap();
-		let (second, _) = ca.mint_der("b.test").unwrap();
-		assert_ne!(first[0].as_ref(), second[0].as_ref());
+		let (first, first_key) = ca.mint_der("app.test").unwrap();
+		let (second, second_key) = ca.mint_der("app.test").unwrap();
+		let (_, first_cert) = x509_parser::parse_x509_certificate(first[0].as_ref()).unwrap();
+		let (_, second_cert) = x509_parser::parse_x509_certificate(second[0].as_ref()).unwrap();
+		assert_ne!(first_cert.raw_serial(), second_cert.raw_serial());
+		assert_ne!(first_key.secret_der(), second_key.secret_der());
 		std::fs::remove_dir_all(&dir).ok();
 	}
 

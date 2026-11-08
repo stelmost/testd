@@ -32,7 +32,14 @@ struct Harness {
 	edge: Edge,
 	registry: Arc<AsyncMutex<Registry>>,
 	dir: tempfile::TempDir,
-	upstream_dropped: Arc<Notify>,
+	upstream: Arc<UpstreamSignals>,
+}
+
+#[derive(Default)]
+struct UpstreamSignals {
+	dropped: Notify,
+	upload_received: Notify,
+	response_continue: Notify,
 }
 
 async fn start() -> Harness {
@@ -49,7 +56,7 @@ async fn start_plain() -> Harness {
 }
 
 async fn start_with(upstream_timeout: Duration, tls: bool) -> Harness {
-	let (upstream, upstream_dropped) = start_upstream().await;
+	let (upstream, signals) = start_upstream().await;
 	let dir = tempfile::tempdir().unwrap();
 
 	let registry = Arc::new(AsyncMutex::new(Registry::default()));
@@ -67,13 +74,13 @@ async fn start_with(upstream_timeout: Duration, tls: bool) -> Harness {
 	let tls_addr = tls.then(|| "127.0.0.1:0".parse().unwrap());
 	let edge = edge::start(Arc::new(ctx), tls_addr, "127.0.0.1:0".parse().unwrap(), &pki_dir).unwrap();
 
-	Harness { edge, registry, dir, upstream_dropped }
+	Harness { edge, registry, dir, upstream: signals }
 }
 
 /// Streams one byte and then never finishes. Dropped when the upstream
 /// connection closes; the test uses it to observe a client abort.
 struct HangStream {
-	dropped: Arc<Notify>,
+	signals: Arc<UpstreamSignals>,
 	started: bool,
 }
 
@@ -91,21 +98,21 @@ impl Stream for HangStream {
 
 impl Drop for HangStream {
 	fn drop(&mut self) {
-		self.dropped.notify_one();
+		self.signals.dropped.notify_one();
 	}
 }
 
-async fn start_upstream() -> (SocketAddr, Arc<Notify>) {
+async fn start_upstream() -> (SocketAddr, Arc<UpstreamSignals>) {
 	let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
 	let addr = listener.local_addr().unwrap();
-	let dropped = Arc::new(Notify::new());
-	let task_dropped = Arc::clone(&dropped);
+	let signals = Arc::new(UpstreamSignals::default());
+	let task_signals = Arc::clone(&signals);
 	tokio::spawn(async move {
 		loop {
 			let Ok((stream, _)) = listener.accept().await else { return };
-			let dropped = Arc::clone(&task_dropped);
+			let signals = Arc::clone(&task_signals);
 			tokio::spawn(async move {
-				let service = service_fn(move |request| upstream_service(request, Arc::clone(&dropped)));
+				let service = service_fn(move |request| upstream_service(request, Arc::clone(&signals)));
 				let _ = hyper::server::conn::http1::Builder::new()
 					.serve_connection(TokioIo::new(stream), service)
 					.with_upgrades()
@@ -113,10 +120,13 @@ async fn start_upstream() -> (SocketAddr, Arc<Notify>) {
 			});
 		}
 	});
-	(addr, dropped)
+	(addr, signals)
 }
 
-async fn upstream_service(request: Request<Incoming>, dropped: Arc<Notify>) -> Result<Response<Body>, Infallible> {
+async fn upstream_service(
+	mut request: Request<Incoming>,
+	signals: Arc<UpstreamSignals>,
+) -> Result<Response<Body>, Infallible> {
 	let path = request.uri().path().to_owned();
 	match path.as_str() {
 		"/slow" => {
@@ -124,19 +134,32 @@ async fn upstream_service(request: Request<Incoming>, dropped: Arc<Notify>) -> R
 			Ok(text(StatusCode::OK, "late"))
 		},
 		"/sse" => {
-			let frames = stream::unfold(0u8, |state| async move {
-				match state {
-					0 => Some((Ok::<_, Infallible>(Frame::data(Bytes::from_static(b"event: one\ndata: 1\n\n"))), 1)),
-					1 => {
-						tokio::time::sleep(Duration::from_millis(300)).await;
-						Some((Ok(Frame::data(Bytes::from_static(b"event: two\ndata: 2\n\n"))), 2))
-					},
-					_ => None,
+			let frames = stream::unfold(0u8, move |state| {
+				let signals = Arc::clone(&signals);
+				async move {
+					match state {
+						0 => {
+							Some((Ok::<_, Infallible>(Frame::data(Bytes::from_static(b"event: one\ndata: 1\n\n"))), 1))
+						},
+						1 => {
+							signals.response_continue.notified().await;
+							Some((Ok(Frame::data(Bytes::from_static(b"event: two\ndata: 2\n\n"))), 2))
+						},
+						_ => None,
+					}
 				}
 			});
 			Ok(Response::new(StreamBody::new(frames).boxed()))
 		},
-		"/hang" => Ok(Response::new(StreamBody::new(HangStream { dropped, started: false }).boxed())),
+		"/upload-stream" => {
+			let first = request.body_mut().frame().await.unwrap().unwrap().into_data().unwrap();
+			assert_eq!(first, "first");
+			signals.upload_received.notify_one();
+			let rest = request.into_body().collect().await.unwrap().to_bytes();
+			assert_eq!(rest, "last");
+			Ok(text(StatusCode::OK, "firstlast"))
+		},
+		"/hang" => Ok(Response::new(StreamBody::new(HangStream { signals, started: false }).boxed())),
 		"/chunked" => {
 			let frames = stream::iter(vec![
 				Ok::<_, Infallible>(Frame::data(Bytes::from_static(b"abc"))),
@@ -336,7 +359,7 @@ async fn the_connection_header_cannot_nominate_the_routing_host() {
 }
 
 #[tokio::test]
-async fn streams_request_bodies_both_ways() {
+async fn preserves_post_method_and_body() {
 	let harness = start().await;
 	let request = "POST /echo HTTP/1.1\r\nHost: app.test\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello world";
 	let response = raw_request(harness.edge.http_addr, request).await;
@@ -365,7 +388,7 @@ async fn client_abort_drops_the_upstream_connection() {
 		.expect("first byte")
 		.expect("read first byte");
 
-	let dropped = harness.upstream_dropped.notified();
+	let dropped = harness.upstream.dropped.notified();
 	drop(stream);
 	tokio::time::timeout(Duration::from_secs(2), dropped)
 		.await
@@ -403,7 +426,7 @@ async fn slow_upstream_is_504() {
 }
 
 #[tokio::test]
-async fn chunked_upstream_is_streamed() {
+async fn preserves_chunked_response_contents() {
 	let harness = start().await;
 	let response = raw_request(harness.edge.http_addr, &get("app.test", "/chunked")).await;
 	assert!(response.starts_with("HTTP/1.1 200"), "{response}");
@@ -563,14 +586,16 @@ async fn expect_100_continue_does_not_deadlock() {
 
 	// A well-behaved client waits for the interim response before sending the body.
 	let mut interim = Vec::new();
-	let _ = tokio::time::timeout(Duration::from_millis(500), async {
+	tokio::time::timeout(Duration::from_secs(5), async {
 		let mut byte = [0u8; 1];
 		while !interim.ends_with(b"\r\n\r\n") {
 			stream.read_exact(&mut byte).await.unwrap();
 			interim.push(byte[0]);
 		}
 	})
-	.await;
+	.await
+	.expect("100 Continue must arrive before the client sends its body");
+	assert!(interim.starts_with(b"HTTP/1.1 100 Continue\r\n"), "{}", String::from_utf8_lossy(&interim));
 
 	stream.write_all(b"hello").await.unwrap();
 	let mut rest = Vec::new();
@@ -584,7 +609,7 @@ async fn expect_100_continue_does_not_deadlock() {
 }
 
 #[tokio::test]
-async fn large_uploads_stream_through() {
+async fn preserves_large_upload_contents() {
 	let harness = start().await;
 	let payload = "x".repeat(4 * 1024 * 1024);
 	let request = format!(
@@ -605,12 +630,40 @@ async fn sse_first_event_arrives_before_the_stream_ends() {
 	let mut buffer = Vec::new();
 	let mut byte = [0u8; 1];
 	let needle = b"event: one\n";
-	tokio::time::timeout(Duration::from_millis(200), async {
+	tokio::time::timeout(Duration::from_secs(5), async {
 		while !buffer.windows(needle.len()).any(|window| window == needle) {
 			stream.read_exact(&mut byte).await.unwrap();
 			buffer.push(byte[0]);
 		}
 	})
 	.await
-	.expect("first SSE event should stream before the upstream finishes");
+	.expect("first SSE event must arrive while the final event is held back");
+	harness.upstream.response_continue.notify_one();
+	let mut rest = Vec::new();
+	tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut rest))
+		.await
+		.expect("SSE stream must finish after releasing the final event")
+		.unwrap();
+	assert!(String::from_utf8_lossy(&rest).contains("event: two\n"));
+}
+
+#[tokio::test]
+async fn upload_first_chunk_reaches_upstream_before_the_client_finishes() {
+	let harness = start().await;
+	let mut stream = TcpStream::connect(harness.edge.http_addr).await.unwrap();
+	let request = "POST /upload-stream HTTP/1.1\r\nHost: app.test\r\nTransfer-Encoding: chunked\r\n\
+		Connection: close\r\n\r\n5\r\nfirst\r\n";
+	stream.write_all(request.as_bytes()).await.unwrap();
+	tokio::time::timeout(Duration::from_secs(5), harness.upstream.upload_received.notified())
+		.await
+		.expect("first upload chunk must reach upstream before the final chunk is sent");
+	stream.write_all(b"4\r\nlast\r\n0\r\n\r\n").await.unwrap();
+	let mut response = Vec::new();
+	tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut response))
+		.await
+		.expect("upload response timed out")
+		.unwrap();
+	let response = String::from_utf8_lossy(&response);
+	assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+	assert!(response.ends_with("firstlast"), "{response}");
 }

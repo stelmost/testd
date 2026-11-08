@@ -130,7 +130,16 @@ mod tests {
 		assert!(validate_domain("my..app", "test").is_err());
 		assert!(validate_domain("app\nfoo", "test").is_err());
 		assert!(validate_domain(&"a".repeat(64), "test").is_err());
-		assert!(validate_domain(&"a".repeat(250), "test").is_err());
+	}
+
+	#[test]
+	fn full_domain_length_includes_the_tld() {
+		let prefix = format!("{}.{}.{}.", "a".repeat(63), "b".repeat(63), "c".repeat(63));
+		let longest = format!("{prefix}{}", "d".repeat(56));
+		assert_eq!(longest.len() + ".test".len(), 253);
+		assert!(validate_domain(&longest, "test").is_ok());
+		assert!(validate_domain_labels(&format!("{longest}d")).is_ok());
+		assert!(validate_domain(&format!("{longest}d"), "test").is_err());
 	}
 
 	#[test]
