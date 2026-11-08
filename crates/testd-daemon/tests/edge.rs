@@ -308,8 +308,10 @@ async fn trusted_fronts_preserve_https_and_reject_invalid_schemes() {
 	context.trust_forwarded_for = true;
 	let front = edge::start(Arc::new(context), None, "127.0.0.1:0".parse().unwrap(), harness.dir.path()).unwrap();
 	for (scheme, expected) in [("https", "https"), ("http", "http"), ("javascript", "http")] {
-		let request = format!("GET /redirect HTTP/1.1\r\nHost: app.test\r\nX-Forwarded-Proto: {scheme}\r\n\
-			Connection: close\r\n\r\n");
+		let request = format!(
+			"GET /redirect HTTP/1.1\r\nHost: app.test\r\nX-Forwarded-Proto: {scheme}\r\n\
+			Connection: close\r\n\r\n"
+		);
 		let response = raw_request(front.http_addr, &request).await;
 		assert!(response.contains(&format!("location: {expected}://app.test/return")), "{response}");
 	}
@@ -560,10 +562,14 @@ async fn tls_serves_a_minted_leaf_from_the_local_root() {
 	let guard = harness.registry.lock().await;
 	let handshake = connector.connect(name, tcp);
 	tokio::pin!(handshake);
-	assert!(tokio::time::timeout(Duration::from_millis(50), &mut handshake).await.is_err(),
-		"a busy registry must wait, not refuse a live TLS name");
+	assert!(
+		tokio::time::timeout(Duration::from_millis(50), &mut handshake).await.is_err(),
+		"a busy registry must wait, not refuse a live TLS name"
+	);
 	drop(guard);
-	let mut tls = tokio::time::timeout(Duration::from_secs(5), handshake).await.unwrap()
+	let mut tls = tokio::time::timeout(Duration::from_secs(5), handshake)
+		.await
+		.unwrap()
 		.expect("TLS handshake with the minted leaf");
 
 	let host = format!("App.Test.:{}", harness.edge.tls_addr.port());

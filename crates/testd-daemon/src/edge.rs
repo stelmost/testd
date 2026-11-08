@@ -440,8 +440,11 @@ async fn proxy(handler: Handler, request: Request<Incoming>, target: &str) -> Re
 		headers.insert("x-forwarded-for", value);
 	}
 	let scheme = if handler.plain && handler.ctx.trust_forwarded_for {
-		headers.get("x-forwarded-proto").and_then(|value| value.to_str().ok())
-			.filter(|scheme| matches!(*scheme, "http" | "https")).unwrap_or(handler.scheme)
+		headers
+			.get("x-forwarded-proto")
+			.and_then(|value| value.to_str().ok())
+			.filter(|scheme| matches!(*scheme, "http" | "https"))
+			.unwrap_or(handler.scheme)
 	} else {
 		handler.scheme
 	};
@@ -711,8 +714,8 @@ mod tests {
 	async fn certificate_and_front_checks_wait_for_the_live_registry() {
 		let dir = tempfile::tempdir().unwrap();
 		let registrations = registrations_with("app.test");
-		let store = CertStore::new(Arc::new(Ca::load_or_init(dir.path()).unwrap()), "test".into(),
-			Arc::clone(&registrations));
+		let store =
+			CertStore::new(Arc::new(Ca::load_or_init(dir.path()).unwrap()), "test".into(), Arc::clone(&registrations));
 		let context = EdgeContext::new("test", Arc::clone(&registrations));
 		let guard = registrations.lock().await;
 		let mint = store.mint("app.test");

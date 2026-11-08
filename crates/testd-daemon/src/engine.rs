@@ -154,13 +154,12 @@ impl HostEngine {
 	/// Run the TCP server on an already-bound listener.
 	pub async fn serve(&self, listener: TcpListener) -> io::Result<()> {
 		/* A specific remote bind does not accept loopback dashboard or local launch connections. */
-		let local_listener = if !self.config.listen_addr.ip().is_loopback()
-			&& !self.config.listen_addr.ip().is_unspecified()
-		{
-			Some(TcpListener::bind(self.config.local_client_addr()).await?)
-		} else {
-			None
-		};
+		let local_listener =
+			if !self.config.listen_addr.ip().is_loopback() && !self.config.listen_addr.ip().is_unspecified() {
+				Some(TcpListener::bind(self.config.local_client_addr()).await?)
+			} else {
+				None
+			};
 		let mut operator_rx = self
 			.operator_rx
 			.lock()
@@ -1451,14 +1450,21 @@ mod tests {
 					Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
 				}
 			};
-			stream.write_all(b"GET /api/status HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").await.unwrap();
+			stream
+				.write_all(b"GET /api/status HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+				.await
+				.unwrap();
 			let mut response = String::new();
 			stream.read_to_string(&mut response).await.unwrap();
 			assert!(response.starts_with("HTTP/1.1 200"), "{response}");
 			let mut stream = BufReader::new(TcpStream::connect(local).await.unwrap());
-			send(stream.get_mut(), &Auth { token: "local-token".into(), request_token: None }).await.unwrap();
+			send(stream.get_mut(), &Auth { token: "local-token".into(), request_token: None })
+				.await
+				.unwrap();
 			assert!(matches!(recv::<_, Response>(&mut stream).await.unwrap(), Some(Response::Ok)));
-		}).await.expect("loopback dashboard and authentication must remain available");
+		})
+		.await
+		.expect("loopback dashboard and authentication must remain available");
 		drop(server);
 	}
 

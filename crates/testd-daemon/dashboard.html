@@ -580,6 +580,8 @@
 			const summary = document.createElement('summary');
 			summary.textContent = 'Output';
 			const output = document.createElement('pre');
+			output.className = 'launch-output mono';
+			output.tabIndex = 0;
 			output.textContent = launch.logs.map((item) => item.line).join('\n');
 			details.append(summary, output);
 			main.append(details);
