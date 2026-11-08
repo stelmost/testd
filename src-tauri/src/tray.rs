@@ -436,7 +436,7 @@ pub fn start_daemon(
 					trace(&format!("dashboard window failed: {e}"));
 				}
 			} else if let Some(domain) = id.strip_prefix("domain-open:") {
-				let url = format!("https://{domain}");
+				let url = action_daemon.engine.domain_url(domain);
 				let _ = open::that(&url);
 			} else if let Some(domain) = id.strip_prefix("domain-stop:") {
 				let _ = action_menu.send(MenuAction::StopDomain(domain.to_owned()));

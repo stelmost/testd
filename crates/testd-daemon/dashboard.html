@@ -388,7 +388,7 @@
 		main.className = 'row-main';
 		const title = document.createElement('a');
 		title.className = 'row-title';
-		title.href = 'https://' + domain.domain;
+		title.href = domain.url;
 		title.target = '_blank';
 		title.rel = 'noreferrer';
 		title.textContent = domain.domain;
@@ -624,14 +624,18 @@
 		let quote = null;
 		let escaped = false;
 		let started = false;
-		for (const char of text) {
+		for (let index = 0; index < text.length; index++) {
+			const char = text[index];
 			if (escaped) {
 				current += char;
 				escaped = false;
 				started = true;
 				continue;
 			}
-			if (char === '\\' && quote !== "'") {
+			const next = text[index + 1];
+			// Ordinary backslashes belong to paths, including Windows drive and UNC paths.
+			if (char === '\\' && quote !== "'" &&
+				(next === '"' || (!quote && (next === "'" || /\s/.test(next || ''))))) {
 				escaped = true;
 				continue;
 			}

@@ -113,6 +113,10 @@ impl HostEngine {
 		self.config.local_dashboard_url()
 	}
 
+	pub fn domain_url(&self, domain: &str) -> String {
+		testd_core::config::https_url(domain, self.config.https_port())
+	}
+
 	/// The live registration set, shared with the edge.
 	pub fn registrations(&self) -> Registrations {
 		self.registrations.clone()
@@ -162,6 +166,7 @@ impl HostEngine {
 
 		let http_ctx = Arc::new(HttpContext {
 			tld: self.tld.clone(),
+			https_port: self.config.https_port(),
 			pki_dir: self.config.pki_dir.clone(),
 			registrations: self.registrations.clone(),
 			connections: Arc::clone(&connections),

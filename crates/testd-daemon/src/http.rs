@@ -21,6 +21,7 @@ use crate::registry::Claim;
 /// State shared by every dashboard request.
 pub struct HttpContext {
 	pub tld: String,
+	pub https_port: u16,
 	pub pki_dir: PathBuf,
 	pub registrations: crate::engine::Registrations,
 	/// Live connections, to tell a name's grant from a bare registration.
@@ -221,6 +222,7 @@ struct DashboardState {
 #[derive(serde::Serialize)]
 struct DomainView {
 	domain: String,
+	url: String,
 	target: String,
 	project: Option<String>,
 	granted: bool,
@@ -233,6 +235,7 @@ async fn dashboard_state(ctx: &HttpContext) -> DashboardState {
 		.claims
 		.iter()
 		.map(|claim| DomainView {
+			url: testd_core::config::https_url(&claim.registration.domain, ctx.https_port),
 			domain: claim.registration.domain.clone(),
 			target: claim.registration.target.clone(),
 			project: testd_core::naming::project_label(&claim.registration.domain).map(str::to_owned),
@@ -336,6 +339,7 @@ async fn serve_status<W: AsyncWriteExt + Unpin>(writer: &mut W, ctx: &HttpContex
 		"tld": ctx.tld,
 		"domains": regs.iter().map(|reg| serde_json::json!({
 			"domain": reg.domain,
+			"url": testd_core::config::https_url(&reg.domain, ctx.https_port),
 			"target": reg.target,
 			"project": testd_core::naming::project_label(&reg.domain),
 		})).collect::<Vec<_>>(),
@@ -371,7 +375,7 @@ fn render_dashboard(
 
 	crate::assets::load(crate::assets::DASHBOARD_HTML)
 		.replace("{tld}", &escape(&ctx.tld))
-		.replace("{domains}", &render_domains(claims, granted))
+		.replace("{domains}", &render_domains(claims, granted, ctx.https_port))
 		.replace("{domain_count}", &regs.len().to_string())
 		.replace("{shares}", &render_shares(shares))
 		.replace("{share_count}", &shares.len().to_string())
@@ -500,7 +504,7 @@ fn render_shares(shares: &[crate::share::ShareView]) -> String {
 	rows
 }
 
-fn render_domains(claims: &[Claim], granted: &HashSet<String>) -> String {
+fn render_domains(claims: &[Claim], granted: &HashSet<String>, https_port: u16) -> String {
 	if claims.is_empty() {
 		return r#"<p class="empty"><strong>No active domains</strong><span>Names appear here while a dev environment is connected.</span></p>"#
 			.to_owned();
@@ -521,6 +525,7 @@ fn render_domains(claims: &[Claim], granted: &HashSet<String>) -> String {
 		html.push_str(r#"<ul class="rows">"#);
 		for reg in items {
 			let domain = escape(&reg.domain);
+			let url = escape(&testd_core::config::https_url(&reg.domain, https_port));
 			// Only leaves with an issued token have a grant to delete.
 			let delete = if granted.contains(&reg.domain) {
 				format!(
@@ -530,7 +535,7 @@ fn render_domains(claims: &[Claim], granted: &HashSet<String>) -> String {
 				String::new()
 			};
 			html.push_str(&format!(
-				r#"<li class="row"><div class="row-main"><a class="row-title" href="https://{domain}" target="_blank" rel="noreferrer">{domain}</a><span class="row-meta">{target}</span></div><div class="row-actions"><button class="icon-btn icon-btn-stop" type="button" aria-label="Stop the leaf that publishes {domain}" title="Stop this leaf (keeps its grant)" onclick="stopName('{domain}', this)">{stop}</button>{delete}</div></li>"#,
+				r#"<li class="row"><div class="row-main"><a class="row-title" href="{url}" target="_blank" rel="noreferrer">{domain}</a><span class="row-meta">{target}</span></div><div class="row-actions"><button class="icon-btn icon-btn-stop" type="button" aria-label="Stop the leaf that publishes {domain}" title="Stop this leaf (keeps its grant)" onclick="stopName('{domain}', this)">{stop}</button>{delete}</div></li>"#,
 				target = escape(&reg.target),
 				stop = STOP_ICON,
 			));
@@ -818,6 +823,16 @@ async fn serve_ca_cert<W: AsyncWriteExt + Unpin>(writer: &mut W, pki_dir: &Path)
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn rendered_project_links_include_the_https_port() {
+		let claims = [Claim {
+			connection: 1,
+			registration: Registration { domain: "app.test".into(), target: "127.0.0.1:3000".into() },
+		}];
+		let html = render_domains(&claims, &HashSet::new(), 8443);
+		assert!(html.contains("href=\"https://app.test:8443\""));
+	}
 
 	#[tokio::test]
 	async fn a_dashboard_client_that_stops_reading_cannot_hold_a_writer_forever() {

@@ -75,6 +75,11 @@ pub struct HostConfig {
 }
 
 impl HostConfig {
+	/// Browser-facing HTTPS port; an external front normally owns 443.
+	pub fn https_port(&self) -> u16 {
+		if self.edge_enabled { self.edge_addr.port() } else { 443 }
+	}
+
 	/// Loopback endpoint of the client listener, whatever address it binds.
 	pub fn local_client_addr(&self) -> SocketAddr {
 		if self.listen_addr.ip().is_unspecified() {
@@ -88,6 +93,11 @@ impl HostConfig {
 	pub fn local_dashboard_url(&self) -> String {
 		format!("http://{}", self.local_client_addr())
 	}
+}
+
+/// Browser URL for a registered name, including a nonstandard HTTPS port.
+pub fn https_url(domain: &str, port: u16) -> String {
+	if port == 443 { format!("https://{domain}") } else { format!("https://{domain}:{port}") }
 }
 
 /// Dev-side node profiles. Stored in `~/.config/testd/leaf.toml`.
@@ -197,6 +207,16 @@ mod tests {
 		for key in ["resolver", "hosts_path", "hosts_helper_path"] {
 			assert!(!table.contains_key(key), "obsolete backend setting remains: {key}");
 		}
+	}
+
+	#[test]
+	fn browser_urls_follow_the_configured_https_port() {
+		let mut config: HostConfig = toml::from_str("").unwrap();
+		assert_eq!(https_url("app.test", config.https_port()), "https://app.test");
+		config.edge_addr = "127.0.0.1:8443".parse().unwrap();
+		assert_eq!(https_url("app.test", config.https_port()), "https://app.test:8443");
+		config.edge_enabled = false;
+		assert_eq!(config.https_port(), 443);
 	}
 
 	#[test]
