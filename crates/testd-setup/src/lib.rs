@@ -10,6 +10,8 @@ use std::path::Path;
 mod linux_resolver;
 #[cfg(target_os = "linux")]
 mod ownership;
+#[cfg(any(target_os = "macos", all(test, unix)))]
+mod macos_resolver;
 
 /// Spawn a child without popping a console window from a windowless parent.
 ///
@@ -50,21 +52,10 @@ pub fn is_os_resolver_configured(tld: &str, addr: SocketAddr) -> bool {
 #[cfg(target_os = "macos")]
 fn is_os_resolver_configured_macos(tld: &str, addr: SocketAddr) -> bool {
 	let path = format!("/etc/resolver/{tld}");
-	let Ok(content) = std::fs::read_to_string(&path) else { return false };
-
-	let mut has_nameserver = false;
-	let mut has_port = false;
-	for line in content.lines() {
-		let line = line.trim();
-		if let Some(value) = line.strip_prefix("nameserver") {
-			let ip = value.trim();
-			// Accept any loopback or local IP: the important part is the port.
-			has_nameserver = !ip.is_empty() && ip.parse::<std::net::IpAddr>().is_ok();
-		} else if let Some(value) = line.strip_prefix("port") {
-			has_port = value.trim().parse::<u16>().ok() == Some(addr.port());
-		}
+	if !std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file()) {
+		return false;
 	}
-	has_nameserver && has_port
+	std::fs::read_to_string(&path).is_ok_and(|content| macos_resolver::matches_route(&content, addr))
 }
 
 #[cfg(target_os = "linux")]
@@ -351,19 +342,6 @@ fn nrpt_has_name_server(output: &str, addr: SocketAddr) -> bool {
 	output.split_whitespace().any(|server| server == expected)
 }
 
-/// Commands needed to configure the OS resolver for a given TLD and DNS address.
-#[cfg(target_os = "macos")]
-fn resolver_commands(tld: &str, addr: SocketAddr) -> Vec<String> {
-	let path = format!("/etc/resolver/{tld}");
-	let content = format!("nameserver {}\\nport {}\\n", addr.ip(), addr.port());
-	vec![
-		"mkdir -p /etc/resolver".to_owned(),
-		format!("printf '{content}' > {path}"),
-		"dscacheutil -flushcache".to_owned(),
-		"killall -HUP mDNSResponder".to_owned(),
-	]
-}
-
 /// How to obtain the privileges for a one-time system change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Elevation {
@@ -397,7 +375,7 @@ impl Elevation {
 /// Uses `sudo`: requires a TTY for password input.
 pub fn setup_os_resolver(tld: &str, addr: SocketAddr) -> io::Result<()> {
 	#[cfg(target_os = "macos")]
-	return setup_sudo_unix(tld, addr);
+	return macos_resolver::setup(tld, addr, Elevation::Sudo);
 
 	#[cfg(target_os = "linux")]
 	return linux_resolver::setup(tld, addr, Elevation::Sudo);
@@ -409,25 +387,13 @@ pub fn setup_os_resolver(tld: &str, addr: SocketAddr) -> io::Result<()> {
 	Err(io::Error::new(io::ErrorKind::Unsupported, "unsupported platform for DNS resolver setup"))
 }
 
-/// Run each resolver command individually with `sudo`.
-#[cfg(target_os = "macos")]
-fn setup_sudo_unix(tld: &str, addr: SocketAddr) -> io::Result<()> {
-	for cmd in resolver_commands(tld, addr) {
-		let status = silent_command("sudo").args(["sh", "-c", &cmd]).status()?;
-		if !status.success() {
-			return Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("failed to run: {cmd}")));
-		}
-	}
-	Ok(())
-}
-
 // --- GUI entry point (native auth dialogs) ---
 
 /// Configure the OS to forward `.<tld>` queries to the given DNS server address.
 /// Uses native OS authentication dialogs: suitable for GUI apps without a TTY.
 pub fn setup_os_resolver_gui(tld: &str, addr: SocketAddr) -> io::Result<()> {
 	#[cfg(target_os = "macos")]
-	return setup_gui_macos(tld, addr);
+	return macos_resolver::setup(tld, addr, Elevation::Gui);
 
 	#[cfg(target_os = "linux")]
 	return linux_resolver::setup(tld, addr, Elevation::Gui);
@@ -437,22 +403,6 @@ pub fn setup_os_resolver_gui(tld: &str, addr: SocketAddr) -> io::Result<()> {
 
 	#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 	Err(io::Error::new(io::ErrorKind::Unsupported, "unsupported platform for DNS resolver setup"))
-}
-
-/// macOS: use `osascript` with `with administrator privileges` for a native auth dialog.
-#[cfg(target_os = "macos")]
-fn setup_gui_macos(tld: &str, addr: SocketAddr) -> io::Result<()> {
-	let script = resolver_commands(tld, addr).join(" && ");
-	let osascript = format!("do shell script \"{script}\" with administrator privileges");
-
-	let status = silent_command("osascript").args(["-e", &osascript]).status()?;
-	if !status.success() {
-		return Err(io::Error::new(
-			io::ErrorKind::PermissionDenied,
-			"resolver setup failed (user cancelled or auth error)",
-		));
-	}
-	Ok(())
 }
 
 /// Windows: install the NRPT rule through the audited elevated helper. The
@@ -794,19 +744,6 @@ mod tests {
 			assess_linux_resolver("test", addr, empty, empty, reset).unwrap(),
 			LinuxResolverPreflight::Ready { .. }
 		));
-	}
-
-	#[cfg(target_os = "macos")]
-	#[test]
-	fn macos_resolver_writes_the_route_and_flushes_the_cache() {
-		let addr: SocketAddr = "127.0.0.1:7753".parse().unwrap();
-		let commands = resolver_commands("test", addr);
-		assert_eq!(commands.len(), 4);
-		assert!(commands[1].contains("/etc/resolver/test"));
-		assert!(commands[1].contains("nameserver 127.0.0.1"));
-		assert!(commands[1].contains("port 7753"));
-		assert_eq!(commands[2], "dscacheutil -flushcache");
-		assert_eq!(commands[3], "killall -HUP mDNSResponder");
 	}
 
 	#[test]
