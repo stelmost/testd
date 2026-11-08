@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   # Classify the change set so documentation-only edits do not start builds.
-  # The filters themselves live in scripts/ci-changes.sh.
+  # The filters themselves live in tests/ci-changes.sh.
   changes:
     name: changes
     runs-on: ubuntu-latest
@@ -28,7 +28,7 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: bash scripts/ci-changes.sh
+        run: bash tests/ci-changes.sh
 
   test:
     name: test (${{ matrix.os }})
@@ -40,13 +40,9 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
-            platform: linux
           - os: macos-15
-            platform: macos
           - os: macos-15-intel
-            platform: macos
           - os: windows-2025
-            platform: windows
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -71,14 +67,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest,cargo-deny
+          tool: cargo-deny
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-${{ matrix.os }}
           save-if: ${{ github.ref == 'refs/heads/master' }}
       - run: bun install --frozen-lockfile
       - name: Run all unprivileged platform checks
-        run: python scripts/test-${{ matrix.platform }}.py ci --report ci-reports
+        run: python tests/run.py ci --report ci-reports --verbose
       - name: Retain status summary, never fixture state or raw reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -121,7 +117,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest,cargo-deny
+          tool: cargo-deny
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-fedora-44
@@ -132,7 +128,7 @@ jobs:
           chown -R testd-ci:testd-ci "$HOME" "$GITHUB_WORKSPACE"
           runuser -u testd-ci --preserve-environment -- \
             env USER=testd-ci LOGNAME=testd-ci \
-            python3 scripts/test-linux.py ci --report "$GITHUB_WORKSPACE/ci-reports"
+            python3 tests/run.py ci --report "$GITHUB_WORKSPACE/ci-reports" --verbose
       - name: Retain status summary, never fixture state or raw reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -151,9 +147,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      - run: bun run check
-      - run: bun run build
-      - run: bun run check:links
+      - name: Run isolated website checks once
+        run: python3 tests/run.py site --report ci-reports --verbose
 
   system-state-fixtures:
     name: system-state fixtures (${{ matrix.os }})

@@ -6,7 +6,7 @@ Run on each OS, architecture, packaging format, and upgrade path selected for re
 
 - [ ] INSTALL-01: Record the exact source commit, clean or dirty state, toolchains, build host, build commands, artifact names, and SHA-256 digests. Verify that every candidate binary was built from the intended source; a shared build cache alone is not provenance.
 - [ ] INSTALL-02: Verify the published checksum manifest against the downloaded candidate. Verify signing and notarization only when advertised; otherwise record the artifact as unsigned, not verified.
-- [ ] INSTALL-03: Run `python3 tests/release/run.py artifacts --artifacts /path/to/candidate --require-checksums --report /path/to/new-persisted-report`. Retain the report and distinguish archive checks from installed-app observations.
+- [ ] INSTALL-03: Run `python3 tests/run.py artifacts --artifacts /path/to/candidate --require-checksums --report /path/to/new-persisted-report`. Retain the report and distinguish archive checks from installed-app observations.
 
 ## Installed workflow
 

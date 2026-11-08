@@ -3,7 +3,7 @@
 #
 # Each script uses a throwaway HOME, TLD, edge port, and app ports so it does not
 # collide with a normal testd install. System changes (resolver, trust store) only
-# happen through tests/release/run.py, which snapshots the host integration first
+# happen through tests/run.py, which snapshots the host integration first
 # and restores it afterwards; a direct run of this script cannot do that.
 #
 # Environment:
@@ -13,7 +13,7 @@
 #   TESTD_HOST_APP_PORT       upstream port for registration (default 18080)
 #   TESTD_HOST_LAUNCH_PORT    quick-launch upstream port (default 18081)
 #   TESTD_HOST_TEST_SYSTEM    allow resolver and trust changes (default 0)
-#   TESTD_HOST_SNAPSHOT       snapshot directory from tests/release/run.py --system
+#   TESTD_HOST_SNAPSHOT       snapshot directory from tests/run.py --system
 
 set -euo pipefail
 

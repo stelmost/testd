@@ -1,14 +1,17 @@
 import pathlib
+import platform
 import shutil
 import subprocess
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 POWERSHELL = shutil.which('pwsh') or shutil.which('powershell')
+POWERSHELL_SKIP = ('PowerShell is required for Windows NRPT behavior fixtures' if platform.system() == 'Windows'
+	else 'not applicable: Windows-only NRPT helper; PowerShell is unavailable')
 
 
 class ResolverSafetyTests(unittest.TestCase):
-	@unittest.skipUnless(POWERSHELL, 'PowerShell is required for NRPT behavior fixtures')
+	@unittest.skipUnless(POWERSHELL, POWERSHELL_SKIP)
 	def test_existing_resolver_rules_are_preserved(self):
 		path = str(ROOT / 'scripts/testd-elevated.ps1').replace("'", "''")
 		command = r'''

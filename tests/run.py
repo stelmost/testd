@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Free-release validation: core, host, service, artifacts, browser, or desktop."""
+"""Portable test runner. Defaults to unprivileged checks; system and interactive checks are opt-in."""
 
 import argparse
 import codecs
@@ -31,7 +31,7 @@ import types
 import uuid
 import zipfile
 
-ROOT = pathlib.Path(__file__).resolve().parents[2]
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 SYSTEM = platform.system()
 # Every tool the suites drive writes UTF-8, and the host scripts switch PowerShell
 # to it. The locale encoding is the ANSI code page on non-English Windows, so
@@ -41,11 +41,7 @@ ENCODING = 'utf-8'
 HOST_TLD = os.environ.get('TESTD_HOST_TLD', 'testdcheck')
 # The desktop setup wizard always configures the product TLD.
 DESKTOP_TLD = 'test'
-NEXTEST_OUTPUT_OPTIONS = (
-	'--success-output', 'immediate', '--failure-output', 'immediate',
-	'--status-level', 'all', '--final-status-level', 'all',
-)
-
+COORDINATED_SUITES = ('check', 'ci', 'all', 'contracts', 'audit', 'site')
 
 def require(tool):
 	path = shutil.which(tool)
@@ -95,7 +91,7 @@ def match_redirected_encoding():
 @functools.cache
 def helper(name):
 	"""Load a sibling module from tests/release, which is not an installed package."""
-	spec = importlib.util.spec_from_file_location(name, pathlib.Path(__file__).with_name(f'{name}.py'))
+	spec = importlib.util.spec_from_file_location(name, ROOT / 'tests/release' / f'{name}.py')
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
 	return module
@@ -190,11 +186,12 @@ def run_transcript(run):
 
 
 class CommandOutput:
-	"""Drain both child streams live, preserving their terminal destinations."""
+	"""Drain both child streams to the log; verbose mode also preserves their terminal destinations."""
 
-	def __init__(self, process, log):
+	def __init__(self, process, log, *, verbose=False):
 		self.process = process
 		self.log = log
+		self.verbose = verbose
 		self.data = bytearray()
 		self.errors = []
 		self.lock = threading.Lock()
@@ -212,10 +209,12 @@ class CommandOutput:
 					self.data.extend(chunk)
 					self.log.write(chunk)
 					self.log.flush()
-				terminal.write(decoder.decode(chunk))
+				if self.verbose:
+					terminal.write(decoder.decode(chunk))
+					terminal.flush()
+			if self.verbose:
+				terminal.write(decoder.decode(b'', final=True))
 				terminal.flush()
-			terminal.write(decoder.decode(b'', final=True))
-			terminal.flush()
 		except Exception as error:
 			with self.lock:
 				self.errors.append(error)
@@ -256,37 +255,43 @@ def stop_command(process, signal_number):
 
 
 class Run:
-	def __init__(self, args):
+	def __init__(self, args, *, parent=None):
 		self.args = args
+		self.parent = parent
 		base = pathlib.Path(os.environ.get('LOCALAPPDATA', pathlib.Path.home() / '.local/share'))
 		stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
 		self.output = (args.report or base / 'testd/release-checks' / f'{stamp}-{uuid.uuid4().hex[:8]}').resolve()
 		self.output.mkdir(parents=True, exist_ok=False, mode=0o700)
 		self.results = []
 		self.log_count = 0
-		self.lock = threading.RLock()
+		self.lock = parent.lock if parent is not None else threading.RLock()
 		self.metadata = {'os': platform.platform(), 'python': sys.version, 'suite': args.suite}
-		git = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True,
-			encoding=ENCODING, errors='replace', check=True)
-		self.metadata['commit'] = git.stdout.strip()
-		status = subprocess.run(['git', 'status', '--porcelain'], cwd=ROOT, capture_output=True,
-			encoding=ENCODING, errors='replace', check=True)
-		self.metadata['dirty'] = bool(status.stdout.strip())
+		if parent is not None:
+			self.metadata.update({name: parent.metadata[name] for name in ('commit', 'dirty')})
+		else:
+			git = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True,
+				encoding=ENCODING, errors='replace', check=True)
+			self.metadata['commit'] = git.stdout.strip()
+			status = subprocess.run(['git', 'status', '--porcelain'], cwd=ROOT, capture_output=True,
+				encoding=ENCODING, errors='replace', check=True)
+			self.metadata['dirty'] = bool(status.stdout.strip())
 		if getattr(args, 'include_git_diff', False):
 			capture_source_diff(self)
 		self.save()
-		print(f'Report: {self.output}', flush=True)
 
 	def save(self):
+		if self.parent is not None:
+			self.parent.save()
+			return
 		with self.lock:
 			(self.output / 'report.json').write_text(
 				json.dumps({**self.metadata, 'checks': self.results}, indent=2) + '\n', encoding=ENCODING)
 
-	def record(self, name, status, detail=''):
+	def record(self, name, status, detail='', **evidence):
 		with self.lock:
 			if status == 'skip' and not detail.startswith('not applicable:'):
 				self.metadata['incomplete'] = True
-			self.results.append({'name': name, 'status': status, 'detail': detail})
+			self.results.append({'name': name, 'status': status, 'detail': detail, **evidence})
 			self.save()
 			print(f'{status:8} {name}: {detail}', flush=True)
 
@@ -297,7 +302,7 @@ class Run:
 			return path
 
 	def command(self, name, command, timeout=300, env=None, expected=0, interrupt_ok=False, terminal=False):
-		"""Run a command and mirror its output.
+		"""Run a command, retaining full output and optionally mirroring it.
 
 		`terminal` keeps the operator's terminal attached, stdin and session
 		alike. sudo keys its cached credential to that terminal, so a detached
@@ -305,7 +310,11 @@ class Run:
 		same shell. The child still leads its own process group, so a timeout can
 		stop the processes it started.
 		"""
+		if command[0] in ('cargo', 'rustc') and len(command) > 1 and command[1].startswith('+'):
+			# rustup run does not auto-install toolchains, unlike the +toolchain shim.
+			command = [require('rustup'), 'run', command[1][1:], command[0], *command[2:]]
 		log = self.log_path(name)
+		started = time.monotonic()
 		print(f'Running: {" ".join(map(str, command))}', flush=True)
 		# Nested Python tools would otherwise write the ANSI code page on Windows.
 		env = {**(os.environ if env is None else env), 'PYTHONUTF8': '1'}
@@ -314,7 +323,7 @@ class Run:
 				stderr=subprocess.PIPE, stdin=None if terminal else subprocess.DEVNULL,
 				start_new_session=SYSTEM != 'Windows' and not terminal,
 				**({'process_group': 0} if terminal and SYSTEM != 'Windows' else {}))
-			output = CommandOutput(process, log_file)
+			output = CommandOutput(process, log_file, verbose=getattr(self.args, 'verbose', False))
 			try:
 				text = output.wait(timeout)
 			except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
@@ -327,13 +336,24 @@ class Run:
 				if interrupt_ok and isinstance(error, KeyboardInterrupt):
 					self.record(name, 'pass', f'fixture stopped by operator; {log}')
 					return text
-				self.record(name, 'fail', f'timed out or interrupted; {log}')
+				self.show_failure(text, log)
+				self.record(name, 'fail', f'timed out or interrupted; {log}',
+					command=list(map(str, command)), log=str(log.relative_to(self.output)),
+					seconds=round(time.monotonic() - started, 2))
 				raise
 		status = 'pass' if process.returncode == expected else 'fail'
-		self.record(name, status, f'exit {process.returncode}; {log}')
+		self.record(name, status, f'exit {process.returncode}; {log}', command=list(map(str, command)),
+			returncode=process.returncode, seconds=round(time.monotonic() - started, 2),
+			log=str(log.relative_to(self.output)))
 		if status == 'fail':
+			self.show_failure(text, log)
 			raise RuntimeError(f'{name} failed; inspect {log}')
 		return text
+
+	def show_failure(self, text, log):
+		if not getattr(self.args, 'verbose', False) and text:
+			print(f'Last command output (full log: {log}):', file=sys.stderr)
+			print('\n'.join(text[-8000:].splitlines()[-20:]), file=sys.stderr, flush=True)
 
 	@contextlib.contextmanager
 	def serve(self, name, command, env=None, stop_signal=signal.SIGTERM):
@@ -344,7 +364,7 @@ class Run:
 		with log.open('xb') as log_file:
 			process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.PIPE,
 				stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, start_new_session=SYSTEM != 'Windows')
-			output = CommandOutput(process, log_file)
+			output = CommandOutput(process, log_file, verbose=getattr(self.args, 'verbose', False))
 			try:
 				yield process, output
 			finally:
@@ -358,72 +378,6 @@ class Run:
 					output.wait(10)
 				status = 'pass' if was_running or process.returncode == 0 else 'fail'
 				self.record(name, status, f'exit {process.returncode}; {log}')
-
-
-def automated(run):
-	for tool in ('cargo', 'rustup', 'cargo-nextest', 'bun'):
-		require(tool)
-	print('The default Rust suite skips ignored contracts; run the contracts suite for the release gate.', flush=True)
-	run.command('format', ['cargo', '+stable', 'fmt', '--all', '--', '--check'], 300)
-	run.command('clippy', ['cargo', '+stable', 'clippy', '--workspace', '--all-targets', '--exclude',
-		'testd-gui', '--locked', '--', '-D', 'warnings'], 1200)
-	run.command('rust-tests', ['cargo', '+1.90.0', 'nextest', 'run', '--workspace', '--exclude',
-		'testd-gui', '--locked', *NEXTEST_OUTPUT_OPTIONS], 1200)
-	run.command('release-script-tests', [sys.executable, '-m', 'unittest', 'discover',
-		'-s', 'tests/release', '-p', 'test_*.py', '-v'], 300)
-	fixture = ROOT / 'tests/release/browser.test.ts'
-	run.command('browser-fixture-tests', ['bun', 'test', str(fixture)], 300)
-	if run.args.gui:
-		run.command('msrv-tray', ['cargo', '+1.90.0', 'check', '-p', 'testd-gui', '--locked'], 1200)
-		run.command('gui-workspace-tests', ['cargo', '+stable', 'nextest', 'run', '--workspace', '--locked',
-			*NEXTEST_OUTPUT_OPTIONS], 1200)
-
-
-def contracts(run):
-	for tool in ('cargo', 'rustup', 'cargo-nextest'):
-		require(tool)
-	if run.args.gui:
-		raise RuntimeError('the Rust 1.90 contract gate excludes the GUI; run the GUI checks separately')
-	run.command('release-contracts', ['cargo', '+1.90.0', 'nextest', 'run', '--workspace', '--exclude',
-		'testd-gui', '--locked', '--run-ignored', 'all', '--no-fail-fast', *NEXTEST_OUTPUT_OPTIONS], 1200)
-
-
-def audit(run):
-	for tool in ('cargo', 'rustup', 'cargo-deny'):
-		require(tool)
-	run.command('workspace-dependencies', ['cargo', '+stable', 'deny', '--workspace', '--locked', 'check'], 1200)
-
-
-def core(run):
-	require('cargo')
-	run.command('format', ['cargo', 'fmt', '--check'])
-	packages = ['--workspace'] + ([] if run.args.gui else ['--exclude', 'testd-gui'])
-	run.command('clippy', ['cargo', 'clippy', *packages, '--all-targets', '--locked', '--', '-D', 'warnings'], 1200)
-	if shutil.which('cargo-nextest'):
-		command = ['cargo', 'nextest', 'run', *packages, '--locked', '--run-ignored', 'all', *NEXTEST_OUTPUT_OPTIONS]
-	else:
-		command = ['cargo', 'test', *packages, '--locked', '--', '--include-ignored', '--show-output']
-	run.command('rust-tests', command, 1200)
-	run.command('release-script-tests', [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests/release', '-v'])
-	if shutil.which('bun'):
-		fixture = ROOT / 'tests/release/browser.test.ts'
-		run.command('browser-fixture-tests', ['bun', 'test', str(fixture)])
-	elif run.args.strict:
-		raise RuntimeError('please install Bun to test the browser fixtures')
-	else:
-		run.record('browser-fixture-tests', 'skip', 'Bun is not installed')
-	for tool, name, command in [
-		('cargo-deny', 'dependencies', ['cargo', 'deny', 'check']),
-		('rustup', 'msrv-cli', ['cargo', '+1.90.0', 'check', '--workspace', '--exclude', 'testd-gui', '--locked']),
-	]:
-		if shutil.which(tool):
-			run.command(name, command, 1200)
-		elif run.args.strict:
-			raise RuntimeError(f'please install {tool} to complete {name}')
-		else:
-			run.record(name, 'skip', f'{tool} is not installed')
-	if run.args.gui:
-		run.command('msrv-tray', ['cargo', '+1.90.0', 'check', '-p', 'testd-gui', '--locked'], 1200)
 
 
 def candidate_build_environment(run):
@@ -1480,7 +1434,7 @@ def restore_report(directory):
 			snapshots.append((manifest['created'], path, manifest))
 	if not snapshots:
 		raise SystemExit(f'no system snapshot in {directory}; system checks are only run by '
-			'tests/release/run.py host --system')
+			'tests/run.py host --system')
 	status = 0
 	# Newest first; conflicting or unowned state is never replaced.
 	for created, path, manifest in sorted(snapshots, key=lambda item: item[0], reverse=True):
@@ -1510,7 +1464,7 @@ def interrupt(signum, frame):
 
 
 def require_disposable_host(parser, args):
-	if args.suite in ('all', 'ci'):
+	if args.suite in COORDINATED_SUITES:
 		return
 	changes_system = args.suite in ('artifacts', 'browser', 'desktop', 'service') or \
 		args.suite == 'host' and (args.system or args.service)
@@ -1533,36 +1487,131 @@ def require_disposable_host(parser, args):
 
 
 def all_suites(run):
-	doctest_output = helper('doctest_output')
 	api = types.SimpleNamespace(Run=Run, SYSTEM=SYSTEM, HOST_TLD=HOST_TLD, DESKTOP_TLD=DESKTOP_TLD,
-		NEXTEST_OUTPUT_OPTIONS=NEXTEST_OUTPUT_OPTIONS, prepare_doctests=doctest_output.prepare,
-		replay_doctests=doctest_output.replay, binary=binary, file_digest=file_digest,
+		binary=binary, file_digest=file_digest, require_toolchain=require_toolchain,
 		host=host, service=service, artifacts=artifacts,
 		desktop=desktop, browser=browser, system_snapshot=system_snapshot, system_restore=system_restore,
 		check_ports=check_ports, checklist_items=checklist_items)
 	helper('all_checks').execute(run, api)
 
 
-def main(argv=None):
-	if sys.version_info < (3, 12):
-		raise SystemExit('Please install Python 3.12 or newer for release validation')
-	# Start from UTF-8 so argparse and non-Windows captures never use the locale
-	# encoding; match_redirected_encoding then narrows a Windows capture to the
-	# code page its shell decodes with.
-	for stream in (sys.stdout, sys.stderr):
-		if hasattr(stream, 'reconfigure'):
-			stream.reconfigure(encoding=ENCODING)
+def require_toolchain(toolchain):
+	result = subprocess.run([require('rustup'), 'run', toolchain, 'rustc', '--version'], capture_output=True,
+		encoding=ENCODING, errors='replace', timeout=30)
+	if result.returncode:
+		raise RuntimeError(f'{result.stderr.strip()}; prepare with: '
+			f'rustup toolchain install {toolchain} --profile minimal')
+
+
+def prepare(args):
+	"""Report missing prerequisites without installing tools or touching product state."""
+	missing = []
+	tools = ['git', 'cargo', 'rustup', 'bun', 'cargo-deny', 'curl.exe' if SYSTEM == 'Windows' else 'curl']
+	if SYSTEM != 'Windows':
+		tools += ['bash', 'python3']
+	for tool in tools:
+		if not shutil.which(tool):
+			missing.append(f'{tool} (check PATH; rustup and Bun normally use ~/.cargo/bin and ~/.bun/bin)')
+	if not (shutil.which('pwsh') or shutil.which('powershell')):
+		if SYSTEM == 'Windows':
+			missing.append('PowerShell: required for Windows host and resolver-safety fixtures')
+		else:
+			print('Optional: PowerShell enables mocked Windows resolver-safety fixtures on Unix.')
+	if shutil.which('rustup'):
+		for toolchain in ('stable', '1.90.0'):
+			try:
+				require_toolchain(toolchain)
+			except (RuntimeError, subprocess.SubprocessError) as error:
+				missing.append(str(error))
+	for tool in ('tsc', 'vite', 'vitepress'):
+		if not shutil.which(tool, path=str(ROOT / 'node_modules/.bin')):
+			missing.append('website dependencies: bun install --frozen-lockfile')
+			break
+	if args.gui and SYSTEM == 'Linux':
+		if not shutil.which('pkg-config'):
+			missing.append('pkg-config and GTK/WebKit development packages (see .github/actions/linux-dependencies)')
+		else:
+			for library in ('gtk+-3.0', 'webkit2gtk-4.1'):
+				if subprocess.run(['pkg-config', '--exists', library], timeout=30).returncode:
+					missing.append(f'GUI development library: {library}')
+	for requirement in missing:
+		print(f'Missing: {requirement}')
+	print('Native GUI builds also require Xcode on macOS or Visual Studio C++ tools and WebView2 on Windows.'
+		if args.gui else 'GUI checks are opt-in with --gui; ci always includes them.')
+	print('No tools were installed. See tests/README.md for preparation commands.')
+	return 2 if missing else 0
+
+
+def validate_options(parser, args):
+	scopes = {
+		'gui': ('check', 'all', 'ci', 'contracts', 'prepare'),
+		'bin': ('check', 'all', 'ci', 'host', 'browser', 'desktop', 'service'),
+		'app': ('all', 'desktop'), 'artifacts': ('all', 'artifacts'),
+		'previous_bin': ('all', 'artifacts'), 'no_previous_release': ('all', 'artifacts'),
+		'interactive': ('all',), 'plan': COORDINATED_SUITES, 'system': ('all', 'host', 'browser', 'artifacts'),
+		'host': ('artifacts',), 'service': ('host', 'artifacts'), 'require_checksums': ('all', 'artifacts'),
+		'port': ('all', 'browser'), 'edge_port': ('all', 'browser'), 'intake_port': ('all', 'browser'),
+		'browser_engine': ('all', 'browser'),
+	}
+	for name, suites in scopes.items():
+		if getattr(args, name) and args.suite not in suites:
+			parser.error(f'--{name.replace("_", "-")} is only available for {", ".join(suites)}')
+	if args.suite == 'ci' and (args.app or args.artifacts or args.interactive or args.system):
+		parser.error('ci excludes system changes, artifacts, desktop, and real-browser checks')
+	if args.suite == 'all' and (args.artifacts or args.app or args.browser_engine) and not args.system:
+		parser.error('all candidate execution and interactive checks require --system and a backed-up disposable host')
+	if args.interactive and not args.system:
+		parser.error('--interactive requires --system and a backed-up disposable host')
+	if args.suite == 'all' and (args.app or args.browser_engine) and not args.interactive:
+		parser.error('all --app and --browser-engine require --interactive')
+	if args.suite == 'artifacts' and not args.artifacts:
+		parser.error('artifacts requires --artifacts')
+	if args.suite == 'desktop' and not args.app:
+		parser.error('desktop requires --app')
+	if args.suite in ('host', 'artifacts') and args.system and args.service:
+		parser.error('--system and --service require separate runs and restored snapshots')
+	if (args.previous_bin or args.no_previous_release or args.require_checksums) and not args.artifacts:
+		parser.error('--previous-bin, --no-previous-release, and --require-checksums require --artifacts')
+	if args.suite == 'all' and any(getattr(args, name) is not None for name in ('port', 'edge_port', 'intake_port')) \
+			and not args.interactive:
+		parser.error('all browser port options require --interactive')
+	for field in ('bin', 'previous_bin'):
+		path = getattr(args, field)
+		if path:
+			path = path.expanduser().resolve()
+			if not args.plan and not path.is_file():
+				parser.error(f'candidate is not a file: {path}')
+			setattr(args, field, path)
+	if not args.plan:
+		if args.app and not args.app.expanduser().exists():
+			parser.error(f'candidate app does not exist: {args.app}')
+		if args.artifacts and not args.artifacts.expanduser().is_dir():
+			parser.error(f'artifact directory does not exist: {args.artifacts}')
+	if args.report:
+		args.report = args.report.expanduser().absolute()
+		if args.report.exists() or args.report.is_symlink():
+			parser.error(f'report path already exists: {args.report}')
+	for name, default, maximum in [('port', 19080, 65534), ('edge_port', 443, 65535), ('intake_port', 7737, 65535)]:
+		value = getattr(args, name)
+		if value is not None and not 1 <= value <= maximum:
+			parser.error(f'--{name.replace("_", "-")} must be between 1 and {maximum}')
+		setattr(args, name, default if value is None else value)
+	if args.suite == 'ci':
+		args.gui = True
+
+
+def argument_parser():
 	parser = argparse.ArgumentParser(description=__doc__)
-	parser.add_argument('suite', nargs='?', choices=['automated', 'contracts', 'audit', 'all', 'ci', 'core', 'host',
-		'artifacts', 'browser', 'desktop', 'service'])
+	parser.add_argument('suite', nargs='?', default='check', choices=[*COORDINATED_SUITES, 'prepare',
+		'host', 'artifacts', 'browser', 'desktop', 'service'])
 	parser.add_argument('--report', type=pathlib.Path, help='new persisted report directory')
 	parser.add_argument('--include-git-diff', action='store_true',
 		help='save sensitive staged and unstaged tracked changes in the private report')
 	parser.add_argument('--restore-report', type=pathlib.Path,
 		help='restore the system integration recorded in an existing report directory, then exit')
 	parser.add_argument('--bin', type=pathlib.Path, help='candidate CLI; otherwise build from source')
-	parser.add_argument('--gui', action='store_true', help='include Tauri in automated or core checks')
-	parser.add_argument('--strict', action='store_true', help='fail rather than skip missing dependency/MSRV tools')
+	parser.add_argument('--gui', action='store_true', help='include native GUI compilation and tests (always on in ci)')
+	parser.add_argument('--verbose', action='store_true', help='mirror full command output; full logs are always retained')
 	parser.add_argument('--system', action='store_true',
 		help='test resolver/trust changes; integration is snapshotted and restored')
 	parser.add_argument('--artifacts', type=pathlib.Path)
@@ -1574,12 +1623,25 @@ def main(argv=None):
 	previous.add_argument('--previous-bin', type=pathlib.Path, help='previous CLI for artifact upgrade checks')
 	previous.add_argument('--no-previous-release', action='store_true', help='record upgrade checks as not applicable')
 	parser.add_argument('--interactive', action='store_true', help='include real browser, desktop, and manual checks')
-	parser.add_argument('--plan', action='store_true', help='list all or ci stages without running them')
-	parser.add_argument('--port', type=int, default=19080)
-	parser.add_argument('--edge-port', type=int, default=443)
-	parser.add_argument('--intake-port', type=int, default=7737)
+	parser.add_argument('--plan', action='store_true', help='list the selected automated stages without running them')
+	parser.add_argument('--port', type=int)
+	parser.add_argument('--edge-port', type=int)
+	parser.add_argument('--intake-port', type=int)
 	parser.add_argument('--browser-engine', choices=['chromium', 'firefox', 'webkit'],
 		help='run the real browser fixture with the selected Playwright engine')
+	return parser
+
+
+def main(argv=None):
+	if sys.version_info < (3, 12):
+		raise SystemExit('Please install Python 3.12 or newer for the test runner')
+	# Start from UTF-8 so argparse and non-Windows captures never use the locale
+	# encoding; match_redirected_encoding then narrows a Windows capture to the
+	# code page its shell decodes with.
+	for stream in (sys.stdout, sys.stderr):
+		if hasattr(stream, 'reconfigure'):
+			stream.reconfigure(encoding=ENCODING)
+	parser = argument_parser()
 	args = parser.parse_args(argv)
 	match_redirected_encoding()
 	if args.restore_report:
@@ -1592,22 +1654,15 @@ def main(argv=None):
 		if answer.strip().lower() != 'yes':
 			parser.error('system recovery was not confirmed')
 		return restore_report(args.restore_report)
-	if not args.suite:
-		parser.error('a suite is required unless --restore-report is given')
-	if args.suite == 'artifacts' and not args.artifacts:
-		parser.error('artifacts requires --artifacts')
-	if args.browser_engine and args.suite not in ('browser', 'all'):
-		parser.error('--browser-engine requires browser or all')
-	if args.suite in ('host', 'artifacts') and args.system and args.service:
-		parser.error('--system and --service require separate runs and restored snapshots')
-	if args.suite in ('all', 'ci'):
+	validate_options(parser, args)
+	if args.suite == 'prepare':
+		return prepare(args)
+	if args.suite in COORDINATED_SUITES:
 		all_checks = helper('all_checks')
 		all_checks.validate(parser, args)
 		if args.plan:
 			all_checks.print_plan(args)
 			return 0
-	elif args.interactive or args.plan or args.no_previous_release:
-		parser.error('--interactive and --no-previous-release require all; --plan requires all or ci')
 	require_disposable_host(parser, args)
 	# A supervisor restarting or an operator stopping the run must still restore.
 	for number in ('SIGTERM', 'SIGHUP'):
@@ -1616,7 +1671,7 @@ def main(argv=None):
 	run = Run(args)
 	with run_transcript(run):
 		try:
-			if args.suite in ('all', 'ci'):
+			if args.suite in COORDINATED_SUITES:
 				all_suites(run)
 			else:
 				globals()[args.suite](run)
@@ -1625,7 +1680,10 @@ def main(argv=None):
 			run.record(args.suite, 'skip', 'interrupted; check system-restore and use --restore-report if needed')
 			return 2
 		except Exception as error:
-			traceback.print_exc()
+			if args.verbose:
+				traceback.print_exc()
+			else:
+				print(str(error), file=sys.stderr)
 			run.record(args.suite, 'fail', str(error))
 			return 1
 		finally:

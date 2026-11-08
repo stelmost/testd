@@ -68,7 +68,7 @@ CI builds and link-checks `dist/` on every run and does not deploy it; publicati
 - `sites/bin/dev-servers.sh`: runs stock `vitepress dev` and `vite` inside the container
 - `src-tauri/icons/`: generated bundle and tray icons
 - `scripts/build-icons.py`: regenerates `src-tauri/icons/` from `assets/brand/`
-- `scripts/check-links.ts`: link checker for the built tree
+- `tests/check-links.ts`: Link checker for the built tree
 - `dist/`: combined build output, served at the origin root
 
 ## Brand assets

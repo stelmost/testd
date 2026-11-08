@@ -5,7 +5,7 @@
 - Rust toolchain from `rust-toolchain.toml`; MSRV 1.90
 - Python 3.12 or newer for release tooling and reports; Bun for browser fixtures
 - `cargo-cyclonedx` for workspace SBOM generation
-- `cargo-nextest` for tests and `cargo-deny` for dependency checks
+- `cargo-deny` for dependency checks; tests use native Cargo
 - `tauri-cli` and the platform's Tauri prerequisites for the tray app: Xcode command-line tools on macOS, WebKitGTK/GTK on Linux, MSVC on Windows
 - On Fedora/RHEL, `qt5-qttools` provides `qtpaths`, which the Linux AppImage bundler needs
 
@@ -46,7 +46,7 @@ The product site lives under `sites/`; the documentation Markdown lives under `d
 bun run dev
 ```
 
-The script runs the official Bun image (`oven/bun:1.4.4`) with `docs/`, `sites/`, and `scripts/` mounted, installs dependencies into the `testd-site-node-modules` volume, and runs the stock `vitepress` and `vite` CLI entrypoints with Bun. It prefers Podman and falls back to Docker; set `TESTD_SITE_RUNTIME` to pin one. The product server is the public origin and proxies `/docs/` to VitePress on loopback.
+The script runs the official Bun image (`oven/bun:1.4.4`) with `docs/`, `sites/`, `scripts/`, and the read-only test helpers mounted, installs dependencies into the `testd-site-node-modules` volume, and runs the stock `vitepress` and `vite` CLI entrypoints with Bun. It prefers Podman and falls back to Docker; set `TESTD_SITE_RUNTIME` to pin one. The product server is the public origin and proxies `/docs/` to VitePress on loopback.
 
 `--host 0.0.0.0` (or `TESTD_SITE_HOST`) serves the site to the network. `--port <port>` overrides the published port for `dev` or `preview`; `TESTD_SITE_PORT` and `TESTD_SITE_PREVIEW_PORT` set the defaults, and `TESTD_SITE_IMAGE` or `TESTD_SITE_VOLUME` overrides the image or dependency volume. Remove the volumes with `./sites/bin/site.sh clean`.
 
@@ -66,14 +66,15 @@ bun run check:links
 
 ## Test
 
-Use hosted CI for the repeatable platform matrix. Use the matching platform script to reproduce a failure locally. Run local commands from the repository root; GitHub commands below explicitly select `LapilliWorks/testd` and also work from another directory.
+Use hosted CI for the repeatable platform matrix. Use the OS-detecting `tests/run.py` to reproduce a failure locally. Run local commands from the repository root; GitHub commands below explicitly select `LapilliWorks/testd` and also work from another directory.
 
 | Run | Scope |
 |---|---|
 | Push to `master` or open a pull request | Change-filtered automated checks; documentation-only changes may skip builds |
 | Manual `ci.yml` workflow run | Full platform matrix, minimum-runtime fixtures, website checks, native package builds, and workspace SBOMs; no release publishing |
-| Local `ci` suite | The same 20 unprivileged stages on the current platform, including GUI compilation/tests, ignored contracts, doctests, fixtures, audit, website, and CLI/daemon checks |
-| Local `all` suite | Automated checks plus separately prepared and explicitly enabled system, artifact, desktop, browser, and manual stages; missing evidence remains blocked |
+| Local default `check` profile | Non-GUI Rust checks, fixtures, audit, isolated website, and CLI/daemon checks; `--gui` includes native GUI compilation/tests |
+| Local `ci` profile | Unprivileged whole-workspace checks including GUI; the separate CI `site` job validates the website once |
+| Local `all` profile | `check` plus explicitly selected system, artifact, desktop, browser, and manual stages; incomplete selected evidence remains blocked |
 
 ### Run the full matrix on GitHub
 
@@ -96,7 +97,7 @@ gh run watch RUN_ID --repo LapilliWorks/testd --interval 45 --exit-status
 gh run view RUN_ID --repo LapilliWorks/testd --web
 ```
 
-`watch --exit-status` returns nonzero for an unsuccessful run. A transport error or a watch timeout is not itself a CI failure: inspect `run view` and resume watching the same run. The five platform summaries must each contain 20 passing stages. For a full manual run, also require the website, minimum-runtime fixture, four bundle, and SBOM jobs to pass. An intentionally skipped release-publishing job is not missing test evidence.
+`watch --exit-status` returns nonzero for an unsuccessful run. A transport error or a watch timeout is not itself a CI failure: inspect `run view` and resume watching the same run. The five platform summaries must each show every selected unprivileged stage passing and the expected GUI scope. For a full manual run, also require the website, minimum-runtime fixture, four bundle, and SBOM jobs to pass. An intentionally skipped release-publishing job is not missing test evidence.
 
 ### Inspect failures and repeat a run
 
@@ -131,45 +132,36 @@ Install the [prerequisites](#prerequisites), including the native Tauri build li
 rustup toolchain install stable 1.90.0 --profile minimal
 cargo +stable --version
 rustup component add --toolchain stable rustfmt clippy
-cargo +stable install --locked cargo-nextest cargo-deny
+cargo +stable install --locked cargo-deny
 bun install --frozen-lockfile
+python3 tests/run.py prepare --gui
 ```
 
 The runner installs nothing. Run it from a normal user terminal with no existing testd daemon occupying the fixture ports. Do not initialize testd or install system integration first: the host checks create their own isolated home. Unset `CARGO_BUILD_TARGET` for automatic native builds, or pass `--bin` with a separately verified candidate CLI. When working in a Git worktree, point `CARGO_TARGET_DIR` at the main checkout's `target/` to share the build cache.
 
-On Linux, including Fedora, use:
+On Linux, including Fedora, and macOS:
 
 ```sh
 export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
-python3 scripts/test-linux.py ci --plan
-python3 scripts/test-linux.py ci --report "$HOME/testd-reports/linux-ci-$(date -u +%Y%m%dT%H%M%SZ)"
+python3 tests/run.py ci --plan
+python3 tests/run.py ci
 ```
 
-On macOS, use the same environment settings and timestamped report pattern with `scripts/test-macos.py`:
-
-```sh
-export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
-python3 scripts/test-macos.py ci --plan
-python3 scripts/test-macos.py ci --report "$HOME/testd-reports/macos-ci-$(date -u +%Y%m%dT%H%M%SZ)"
-```
-
-On Windows, use PowerShell, not WSL; no elevation is needed for `ci`:
+On native Windows, use PowerShell, not WSL; no elevation is needed for `ci`:
 
 ```powershell
 $env:CARGO_INCREMENTAL = '0'
 $env:CARGO_PROFILE_DEV_DEBUG = '0'
 $env:CARGO_PROFILE_TEST_DEBUG = '0'
-$stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
-$report = Join-Path $HOME "testd-reports\windows-ci-$stamp"
-python scripts\test-windows.py ci --plan
-python scripts\test-windows.py ci --report $report
+python tests/run.py ci --plan
+python tests/run.py ci
 ```
 
-The report path must not exist and must be outside temporary storage. To repeat a run, generate a new timestamp rather than deleting the previous report. Windows also requires a free UDP port 53. Other occupied fixture ports are reported by the runner; do not stop unrelated services merely to make a test pass.
+The runner prints a new persisted report path; choose another with `--report` if needed. Existing paths and temporary storage are refused. Use the default `check` profile for non-GUI checks including the website, or `site` for website-only checks. To repeat a run, retain the previous report and let the runner create a new one. Windows also requires a free UDP port 53. Other occupied fixture ports are reported by the runner; do not stop unrelated services merely to make a test pass.
 
 ### Read local outcomes and remaining coverage
 
-Inspect `report.json`, `run.log`, `boundaries.log`, and individual stage reports/logs. The `ci` suite additionally writes the publishable status-only `ci-summary.json`.
+Inspect `report.json` for consolidated stage/command evidence and `run.log` for progress. Full raw command output remains in the indexed stage logs; use `--verbose` to mirror it into the console and transcript. The `ci` suite additionally writes the publishable status-only `ci-summary.json`.
 
 | Exit code | Meaning |
 |---|---|
@@ -177,7 +169,7 @@ Inspect `report.json`, `run.log`, `boundaries.log`, and individual stage reports
 | `1` | At least one failure |
 | `2` | Incomplete coverage without failures |
 
-Missing prerequisites and unexpected skips are not passes. The `ci` suite excludes actual tray/login observations and all privileged, installer, real-browser, and manual stages; `all` retains missing release evidence as blocked. Therefore, an unprepared `all` run may exit `2` even when its automated checks pass.
+Missing prerequisites and unexpected skips are not passes. The `ci` profile excludes actual tray/login observations and privileged, installer, real-browser, and manual stages. `all` adds only explicitly selected sensitive stages; their incomplete evidence remains blocked. Unselected release checks are neither run nor passed.
 
 A Fedora container run establishes userspace behavior on the Ubuntu runner's kernel, not native Fedora system integration. Hosted Windows Server is not desktop Windows 11 evidence. Resolver/trust changes, service supervision, real browser trust, desktop setup, installation/uninstall, and signing/notarization remain separate checks. For those operations use the [release-validation commands](#release-validation) on a clean disposable host with a persisted full-system backup, retain reports outside the guest before recovery, and restore the baseline between sensitive stages. macOS and Windows product system/desktop checks remain blocked; do not bypass the guards or append `--system` to `ci`.
 
@@ -188,13 +180,13 @@ See [tests/README.md](tests/README.md) for individual suite commands, detailed c
 For quick individual checks without a runner report:
 
 ```sh
-cargo nextest run --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --check
-cargo deny check
+cargo +stable test --workspace --all-features --all-targets --no-fail-fast -- --include-ignored --show-output
+cargo +stable clippy --workspace --all-targets --locked -- -D warnings
+cargo +stable fmt --all -- --check
+cargo +stable deny --workspace --locked check
 ```
 
-Ordinary nextest runs skip ignored contracts; use the `ci` or `contracts` suite for the ignored release gate. Exclude `testd-gui` from workspace commands if the native GUI build prerequisites are absent.
+The test command above includes ignored contracts. The default runner also includes them; `contracts` is the focused Rust 1.90 runtime check, while routine profiles type-check the MSRV and run tests/doctests on stable Rust. Exclude `testd-gui` from workspace commands if the native GUI build prerequisites are absent.
 
 ## Release validation
 
@@ -273,7 +265,7 @@ Restore the prepared baseline, set the candidate/report variables, then run:
 
 ```sh
 sudo -v
-python3 tests/release/run.py host --system --bin "$CLI" --report "$REPORT-system"
+python3 tests/run.py host --system --bin "$CLI" --report "$REPORT-system"
 ```
 
 Do not run `testd init` first. This suite creates an isolated fixture home, installs its test-only route and public root, tests OS resolution and trusted HTTPS, stops its fixture, and invokes ownership-checked cleanup. It refuses existing testd integration. It can change the systemd-resolved drop-in, the distro CA anchor, and generated shared trust-store output/hooks.
@@ -288,7 +280,7 @@ Restore the prepared baseline and run from the test user's real desktop session:
 
 ```sh
 systemctl --user show-environment
-python3 tests/release/run.py service --bin "$CLI" --report "$REPORT-service"
+python3 tests/run.py service --bin "$CLI" --report "$REPORT-service"
 ```
 
 Do not add `--system` or run this as root. The suite uses a randomly named user unit, isolated home, fake provider, high ports, and actual manager-directed start, crash/restart, and stop. Verify the stopped listener and ownership-checked unit cleanup in the report; `service-unit.service` retains the generated unit. Keep macOS launchd marked blocked and Windows CLI service marked not applicable.
@@ -311,7 +303,7 @@ For an automatic real-engine run, restore the baseline, block guest external egr
 
 ```sh
 sudo -v
-python3 tests/release/run.py browser --system --bin "$CLI" --browser-engine chromium \
+python3 tests/run.py browser --system --bin "$CLI" --browser-engine chromium \
   --edge-port 8443 --report "$REPORT-chromium"
 ```
 
@@ -321,7 +313,7 @@ For the actual installed Chrome, Firefox, or Edge and their certificate viewers,
 
 ```sh
 sudo -v
-python3 tests/release/run.py browser --system --bin "$CLI" --edge-port 8443 --report "$REPORT-browser-manual"
+python3 tests/run.py browser --system --bin "$CLI" --edge-port 8443 --report "$REPORT-browser-manual"
 ```
 
 Open the printed `https://app.releasecheck.test:8443/` URL in a clean profile. If that browser uses its own trust store, import only the fixture's public root from `<report>/browser-home/.config/testd/pki/root.crt` into that disposable profile. Do not use certificate-warning bypasses, `--insecure`, browser-only DNS overrides, or a real account. Complete [BROWSER-01 through BROWSER-08](tests/manual/browser.md): certificate/SAN/chain/lifetime, WebSocket idle, SSE/upload, cookie scope, dashboard/dead upstream/unknown name, and renewal. Save the page's JSON report, stop with Ctrl+C, close the test browsers, and answer shutdown confirmations truthfully.
@@ -345,7 +337,7 @@ The real GUI executable must be able to bind port 443. On the backed-up guest on
 ```sh
 sudo setcap 'cap_net_bind_service=+ep' "$APP"
 getcap "$APP"
-python3 tests/release/run.py desktop --app "$APP" --bin "$CLI" --report "$REPORT-desktop"
+python3 tests/run.py desktop --app "$APP" --bin "$CLI" --report "$REPORT-desktop"
 ```
 
 Do not grant a capability to an AppImage launcher and assume its extracted child inherits it; identify the actual GUI executable. Do not run the entire desktop as root. The runner launches the app and prompts for [GUI-01 through GUI-28](tests/host/gui-checklist.md). Perform each action before answering `p`, `f`, `n`, or `q`; record evidence/reasons and never include the operator secret. Only confirm shutdown after all app/daemon/provider processes and fixture listeners have stopped. Deferred cleanup requires full-system recovery.
@@ -355,7 +347,7 @@ GUI-24 needs a **separate logout/login run**: retain evidence outside the guest,
 For archive smoke on each supported OS/architecture, on a separately restored VM:
 
 ```sh
-python3 tests/release/run.py artifacts --artifacts "$ASSETS" --require-checksums --report "$REPORT-artifacts"
+python3 tests/run.py artifacts --artifacts "$ASSETS" --require-checksums --report "$REPORT-artifacts"
 ```
 
 Windows equivalent, with a new report path on every attempt:
@@ -399,7 +391,7 @@ Keep `report.json`, `run.log`, command logs, scoped snapshots, and browser/deskt
 If interrupted, stop every candidate/fixture process and inspect the retained report. An interactive scoped recovery may be attempted on the same guest:
 
 ```sh
-python3 tests/release/run.py --restore-report /path/to/retained-report
+python3 tests/run.py --restore-report /path/to/retained-report
 ```
 
 This is not a full-system restore. Conflicts stay untouched, and Linux/macOS shared trust effects may still produce exit `2`. Preserve recovery logs and restore the full prepared VM baseline before any further sensitive test. Copy evidence out **before** reverting. A restored guest proves recoverability, not that the candidate's uninstall preserved all unowned state.
@@ -462,7 +454,7 @@ tests/host/linux.sh
 
 # Optional system checks on a backed-up disposable VM, with a new persisted report
 sudo -v
-python3 tests/release/run.py host --system --bin target/release/testd \
+python3 tests/run.py host --system --bin target/release/testd \
   --report ~/testd-reports/linux-system-01
 ```
 
@@ -535,7 +527,7 @@ scripts stop at the HTTP layer on purpose; they cannot judge a padlock.
 
 ### GUI
 
-The tray is a public source build and an optional free release artifact. On a backed-up disposable Linux desktop, run `python3 tests/release/run.py desktop --app <candidate> --bin <candidate-cli> --report <new-report>` to record `tests/host/gui-checklist.md`. The app and CLI must come from the intended source. macOS and Windows desktop runs remain blocked until system ownership is proven. Attach/detach of existing processes is deferred and does not gate this release.
+The tray is a public source build and an optional free release artifact. On a backed-up disposable Linux desktop, run `python3 tests/run.py desktop --app <candidate> --bin <candidate-cli> --report <new-report>` to record `tests/host/gui-checklist.md`. The app and CLI must come from the intended source. macOS and Windows desktop runs remain blocked until system ownership is proven. Attach/detach of existing processes is deferred and does not gate this release.
 
 ### Packaging and signing
 
@@ -578,18 +570,18 @@ File fixtures use exclusive creation and record their identity and content befor
 After an interrupted run, stop all candidate processes and inspect the persisted report and full-system snapshot. An interactive scoped recovery can be attempted with the relevant report or `self-test-state` directory:
 
 ```sh
-python3 tests/release/run.py --restore-report ~/testd-reports/linux-system-01
+python3 tests/run.py --restore-report ~/testd-reports/linux-system-01
 ```
 
 Recovery requires the same platform and any necessary sudo or elevation. It leaves conflicts untouched. Exit `2` means scoped state matched but shared trust effects remain unverified; restore or compare the full-system snapshot before reusing the machine. Direct host scripts cannot run privileged checks without the runner's safeguards.
 
 ### CI coverage
 
-`.github/workflows/ci.yml` provisions and runs the `ci` suite on Ubuntu 24.04, macOS 15 Apple Silicon and Intel, and Windows Server 2025. It installs Python 3.14, stable and the MSRV Rust toolchain, `cargo-nextest`, `cargo-deny`, Bun, and website dependencies; Linux build libraries come from the local dependency action. Xcode and MSVC/Windows SDK prerequisites come from the hosted runner images. Rust build caches are isolated by platform, and only master runs save them.
+`.github/workflows/ci.yml` provisions and runs the `ci` suite on Ubuntu 24.04, macOS 15 Apple Silicon and Intel, and Windows Server 2025. It installs Python 3.14, stable and the MSRV Rust toolchain, `cargo-deny`, Bun, and website dependencies; Linux build libraries come from the local dependency action. Xcode and MSVC/Windows SDK prerequisites come from the hosted runner images. Rust build caches are isolated by platform, and only master runs save them.
 
 A separate Fedora 44 container job installs Fedora build dependencies, uses its system Python, and runs the same suite as a normal user. It establishes Fedora userspace compilation and CLI/daemon behavior on the Ubuntu runner's kernel, not native Fedora resolver, trust, systemd-session, SELinux, or desktop integration. Hosted Windows Server is not desktop Windows 11 evidence.
 
-Every applicable job runs ignored contracts and executable doctests, rather than reserving them for stable tags. Missing prerequisites, unexpected skips, and incomplete checks make the CI command nonzero. The workflow uploads only `ci-summary.json`; fixture state and full report files are not uploaded. Separate Python 3.12 system-state fixture jobs retain minimum-runtime coverage without changing the runner's resolver or trust store. Site-only changes retain their lightweight website job.
+Every applicable job runs ignored contracts and executable doctests, rather than reserving them for stable tags. Missing prerequisites, unexpected skips, and incomplete checks make the CI command nonzero. The workflow uploads only `ci-summary.json`; fixture state and full report files are not uploaded. Separate Python 3.12 system-state fixture jobs retain minimum-runtime coverage without changing the runner's resolver or trust store. The dedicated `site` profile runs isolated website checks once, rather than repeating builds across platform jobs.
 
 Real system, service, browser-trust, installer, and desktop checks still require an explicitly confirmed disposable host with a persisted full-system snapshot; hosted CI does not supply that snapshot and does not run them. Tags and manual workflow dispatches build and package artifacts and generate SBOMs after the platform, minimum-runtime fixture, and website gates pass, without executing the interactive artifact smoke runner. Manual dispatches use the workspace version and do not publish a release; publishing remains restricted to version tags. Source builds and package creation do not replace installation, signing, or uninstall evidence. A green workflow is not release approval. Required-check settings must use the current platform job names rather than the removed standalone MSRV/audit jobs.
 
@@ -663,11 +655,8 @@ A free release is a version tag, CLI archives, public tray bundles, workspace SB
 
 ### Before tagging
 
-- [ ] `cargo fmt --check`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo nextest run --workspace`
-- [ ] `cargo deny check`
-- [ ] `cargo +1.90.0 check --workspace --locked`
+- [ ] `python3 tests/run.py ci`
+- [ ] `python3 tests/run.py site`
 - [ ] `python3 scripts/release.py verify-version`
 - [ ] Enable GitHub private vulnerability reporting for the public repository
 - [ ] Run the release-validation suites above and retain reports for every claimed platform/browser

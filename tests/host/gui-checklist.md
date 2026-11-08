@@ -11,7 +11,7 @@ The desktop runner requires a fresh user without a testd config directory and as
 On Linux, verify that the actual tray binary can bind port 443 before testing first-run setup. A failure to bind is a failed setup result, not a passed browser or tray check. On Windows, run the runner in an elevated PowerShell so it can snapshot the machine store and NRPT rules. macOS and Windows resolver and trust ownership protections remain incomplete; do not treat these checks as proof that either platform is safe for release.
 
 ```sh
-python3 tests/release/run.py desktop --app /path/to/candidate --report /path/to/new-persisted-report
+python3 tests/run.py desktop --app /path/to/candidate --report /path/to/new-persisted-report
 ```
 
 Answer each item `p`, `f`, `n`, or `q`. Give a reason for every failure or inapplicable item. A skipped item is not a pass; review every skip against the selected release scope. A zero exit from this runner alone is not release approval.

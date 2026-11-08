@@ -5,7 +5,7 @@ const port = Number(process.env.TESTD_BROWSER_PORT ?? '19080');
 const tld = process.env.TESTD_BROWSER_TLD ?? 'test';
 const edgePort = Number(process.env.TESTD_BROWSER_EDGE_PORT ?? '443');
 const reportDirectory = process.env.TESTD_BROWSER_REPORT;
-if (!reportDirectory) throw new Error('Run this fixture through tests/release/run.py browser');
+if (!reportDirectory) throw new Error('Run this fixture through tests/run.py browser');
 const appOrigin = new URL(`https://app.releasecheck.${tld}:${edgePort}`).origin;
 const metadata = JSON.parse(await Bun.file(join(reportDirectory, 'report.json')).text());
 

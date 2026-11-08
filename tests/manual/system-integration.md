@@ -5,7 +5,7 @@ These checks can modify machine-wide DNS and trust. Use only a disposable VM wit
 The release runner snapshots selected paths and refuses existing testd integration. Its snapshot is not a full machine backup and does not prove that shared CA bundles, hooks, unrelated resolver configuration, or login settings are unchanged. The conflicting-state cases below require separate, manually seeded disposable snapshots; do not use `host --system` to overwrite a conflict. Product system checks on macOS and Windows are blocked until equivalent ownership safeguards exist.
 
 ```sh
-python3 tests/release/run.py host --system --bin /path/to/candidate-testd --report /path/to/new-persisted-report
+python3 tests/run.py host --system --bin /path/to/candidate-testd --report /path/to/new-persisted-report
 ```
 
 ## Clean installation and recovery

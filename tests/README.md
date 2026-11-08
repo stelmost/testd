@@ -1,180 +1,140 @@
-# Test contracts
+# Testing
 
-The test suite is organized around observable standalone behavior: initialize a host, keep its default listeners local, register a name for the lifetime of a connection, resolve that name, serve it over trusted HTTPS, diagnose failures, and remove only owned integration. Shares and network exposure have additional safety contracts when included in the release. Team workspaces, payment, and organization authority are not prerequisites for a standalone test run.
+`tests/run.py` is the single, OS-detecting test entry point. It works on Linux, macOS, and native Windows; use the Linux environment in WSL. Run it from a normal user terminal. Routine checks need no daemon, account, system integration, or disposable VM.
 
-## Evidence levels
+## Prepare once
 
-| Level | What it establishes | What it does not establish |
-|---|---|---|
-| Unit | Parsing, validation, ownership decisions, protocol framing, and failure paths in isolation | A running system or browser |
-| Component integration | Real loopback TCP, UDP, TLS, subprocess, and proxy behavior using controlled fixtures | OS DNS routing, system trust, real providers, or a full installed product |
-| Host | A candidate CLI and daemon with an isolated user and test-only TLD; optional system changes only on a disposable host | A desktop UI or a real browser |
-| Manual | Actual installed artifacts, OS integration, GUI, browsers, and explicitly approved provider/network behavior | Other OS versions, browsers, or artifacts not tested |
-
-Never count an ignored, skipped, inapplicable, or unrun check as a pass. A successful command is not release approval: review its scope, failures, skips, candidate provenance, and the platform/browser matrix. Keep reports private until reviewed; they can contain credentials and local PKI material.
-
-## Contract matrix
-
-| Contract | Automated coverage | Remaining evidence or blocker |
-|---|---|---|
-| Fresh configuration, private state, DNS-only setup, and local defaults | `tests/cli.rs`, `testd-core` config tests | Installed packages, OS permissions, and actual GUI setup |
-| Authentication, name validation, duplicate ownership, rollback, disconnect, and revocation | `crates/testd-daemon/tests/engine.rs`, core protocol and registry tests, `product_flow.rs` | Platform workflow validation |
-| DNS A answers, case-insensitive names, unknown names, malformed input, and loopback listener | `resolver/dns.rs` unit tests and `product_flow.rs` over real UDP | Real OS resolver integration |
-| TLS name and root validation, proxy routing and failures | `crates/testd-daemon/tests/edge.rs`, `product_flow.rs`, `testd-pki` tests | Installed system and browser trust; real browser behavior |
-| Preserve unowned resolver and trust state, report conflicts, remove only proven owned state | Linux ownership, resolver, and trust script fixtures in `crates/testd-setup` | Shared trust-store effects and concurrent privileged changes; real disposable-host checks; macOS and Windows ownership safeguards are incomplete |
-| Loopback dashboard, quick launches, and request protections | `engine.rs`, `tests/host/`, dashboard and launch unit tests | Real tray and browser; dashboard authentication and other local-user boundaries are not implemented |
-| Share lifecycle and provider exits | Fake-provider claim, pending-start, established grant and token revocation, replacement, cleanup-failure, and reconciliation tests in `daemon.rs`, `engine.rs`, and `crates/testd-daemon/tests/share.rs` | Actual provider termination, network-pause behavior, tailnet ownership, and crash recovery remain unverified |
-| Explicit network exposure and pause on network change | Default listener tests only | Separate controls, dashboard authorization, network-change pause, and share handling are not implemented |
-| Packaging, rollback, and reports | `tests/release/test_release.py`, release-script fixtures, and artifact runner | Candidate provenance, actual installation, signing, upgrade, and uninstall on each claimed platform |
-| Browser fixture | `tests/release/browser.test.ts` exercises the fixture server; an opt-in Playwright runner drives a real browser | Run the selected engine on each claimed OS/browser combination; fixtures alone do not prove browser behavior |
-
-`crates/testd-daemon/tests/product_flow.rs` composes the real registration engine, DNS server, and TLS edge on ephemeral loopback sockets. Its root is trusted only by the test client, and a resolver wrapper forbids system integration. It is not a full daemon process, OS trust test, browser test, or GUI test.
-
-## Unprivileged CI run
-
-The `ci` suite runs the automated stages of `all`: GUI and non-GUI compilation and tests, ignored release contracts, doctests, release-script and browser-server fixtures, dependency audit, version and website checks, a candidate CLI build, and the CLI/daemon host suite. It never installs system integration, executes installer artifacts, starts a supervised service, or collects desktop, real-browser, or manual evidence. Sensitive options are rejected rather than silently ignored.
+Install Python 3.12 or newer, Git, rustup, Bun, and the native Rust compiler prerequisites. Ensure the rustup shims and Bun are on `PATH`; on Unix, `source "$HOME/.cargo/env"` loads the usual Rust installation. Windows Rust builds require Visual Studio C++ tools and the Windows SDK; macOS requires Xcode command-line tools.
 
 ```sh
-python3 scripts/test-linux.py ci --report "$HOME/testd-reports/linux-ci"
-python3 scripts/test-macos.py ci --report "$HOME/testd-reports/macos-ci"
+rustup toolchain install stable 1.90.0 --profile minimal
+rustup component add --toolchain stable rustfmt clippy
+cargo +stable install --locked cargo-deny
+bun install --frozen-lockfile
+python3 tests/run.py prepare
 ```
 
-```powershell
-python scripts\test-windows.py ci --report "$HOME\testd-reports\windows-ci"
-```
+Use `python` instead of `python3` on native Windows. Python uses only its standard library: no virtual environment or pip packages are required. `prepare` lists missing tools, toolchains, and website dependencies together; it installs nothing. Cargo-nextest is not required. PowerShell behavior fixtures are required on Windows; when PowerShell is unavailable on Unix, Windows-only checks are explicitly inapplicable, not passes.
 
-Use `ci --plan` to list the selected stages. The same prerequisites and new persisted report requirement as `all` apply. Missing tools, failures, and unexpected skips fail or block the run. Only the host suite's explicitly identified tray/login evidence is outside the CI scope; it is recorded as not applicable, not tested or passed. An ordinary `host` or `all` run still records that missing desktop evidence as incomplete.
+GUI compilation is opt-in locally. Install the [Linux GTK/WebKit development packages](../.github/actions/linux-dependencies/action.yml), macOS Xcode tooling, or Windows WebView2 prerequisites before using `--gui`. `prepare --gui` also checks Linux `pkg-config` libraries. Tool detection does not establish that a native compiler, GUI, or installation works.
 
-The report includes `ci-summary.json`, containing only OS/Python/source metadata and stage names, statuses, and durations. CI may publish that summary; full reports, fixture homes, profiles, keys, credentials, source patches, and raw command logs must remain private. A successful `ci` run establishes its unprivileged scope only and is not release approval.
-
-`.github/workflows/ci.yml` performs the setup and runs this suite on Ubuntu 24.04, macOS 15 Apple Silicon and Intel, Windows Server 2025, and Fedora 44 userspace in a container. Pushes to master, release tags, pull requests, and manual workflow runs trigger the applicable jobs. The container shares the Ubuntu runner's kernel and lacks a real Fedora desktop/systemd session; it is not native Fedora system-integration evidence. Windows Server is not desktop Windows 11 evidence. Runner messages and command output appear in the job transcript; only status summaries are uploaded as artifacts.
-
-The workflow installs Python 3.14 on hosted VMs, uses Fedora's system Python, and installs stable Rust, the Rust 1.90 MSRV, cargo tools, Bun, and checkout dependencies. Linux libraries are installed explicitly; the macOS and Windows runner images supply their native build prerequisites. Manual and system-changing checks require separate restorable infrastructure and remain outside hosted CI.
-
-A manual workflow dispatch also builds the CLI archives and native desktop packages for every release target and generates the workspace SBOMs after all test gates pass. It uses the workspace version, retains unsigned build artifacts, and never creates a tag or publishes a release. Release publishing remains restricted to version tags. Package creation is not installer, signing, or uninstall evidence.
-
-## All-in-one platform run
-
-Run the matching script on each actual platform and architecture. The `all` suite runs GUI and non-GUI Rust checks, the ignored release contracts, doctests, release-script and browser-server fixtures, the full dependency audit, version verification, website checks, a candidate CLI build, and the unprivileged host suite. Each stage has explicit `BEGIN` and `END` markers, its own report and logs, and a final summary. Failed stages do not prevent independent checks from running.
+## Run
 
 ```sh
-python3 scripts/test-linux.py all
-python3 scripts/test-macos.py all
+python3 tests/run.py --plan
+python3 tests/run.py
+python3 tests/run.py --gui
 ```
 
-```powershell
-python scripts\test-windows.py all
-```
+The default `check` profile runs formatting, Clippy, Rust 1.90 type-checking, stable Rust tests and doctests, Python harness/release fixtures, both Bun browser-server and dashboard fixtures, the full dependency audit, version verification, isolated website checks, a native candidate CLI build, and unprivileged CLI/daemon host checks. Rust checks cover all workspace features; GUI is excluded unless requested. Ignored Rust tests run, and independent stages continue after a failure.
 
-The scripts require Python 3.12 or newer, Rust 1.90 and stable, `cargo-nextest`, `cargo-deny`, Bun, installed website dependencies, and the platform GUI prerequisites. They do not install dependencies. `all` builds a CLI unless `--bin` specifies an existing candidate; a pre-existing build candidate is backed up in the report. Website output and caches are isolated inside the report rather than overwriting the checkout's `dist/`. Run `all --plan` to list stages without executing them.
-
-For the system, desktop, browser, artifact, and manual stages, provide the candidate assets and explicitly opt in. The report directory must be new and persisted outside temporary storage. Use a disposable VM with a persisted full-system snapshot; on Windows, use an elevated PowerShell.
-
-```sh
-python3 scripts/test-linux.py all --system --interactive --app /path/to/candidate-app \
-  --artifacts /path/to/host-assets --no-previous-release --report /path/to/new-persisted-report
-```
-
-```powershell
-python scripts\test-windows.py all --system --interactive --app C:\candidate\setup.exe `
-  --artifacts C:\candidate\assets --no-previous-release --report D:\testd-reports\run-001
-```
-
-On macOS, use `scripts/test-macos.py` with the same options. Pass `--bin` for a verified candidate CLI. Supply `--previous-bin` instead of `--no-previous-release` when a real previous release exists. The assets directory must contain the host-compatible candidate assets and `SHA256SUMS`. The build fingerprint and CLI hash do not establish release-artifact provenance.
-
-`--system` requires an interactive confirmation of the disposable host and full-system snapshot; each sensitive stage asks again. Artifact checks are sensitive because they execute candidate binaries. `--interactive` adds the desktop and browser runners and prompts for every manual checklist result and evidence. The browser stage refuses occupied fixture ports without contacting the listener and starts its own candidate daemon with real providers disabled. With `--browser-engine chromium`, `firefox`, or `webkit`, it drives the selected Playwright browser instead of collecting a manual browser report. Linux `--system` provisions a fixture-owned resolver and CA for the browser stage; other platforms remain blocked for product-managed system setup. Some checklists require separately restored snapshots, multiple machines, or separate browser runs; skip a stage and use another run on the appropriate VM. Network exposure and real providers still require explicit approval.
-
-Missing prerequisites, declined stages, unprovided artifacts, and skipped checks are recorded as blocked, not passed. Explicitly inapplicable platform fixtures remain recorded as skips without blocking the applicable fixture stage; system, browser, artifact, and other missing evidence remain separate blockers. Exit status is `1` for any failure, `2` for an incomplete run without failures, and `0` only when all applicable stages completed without failures. The full-workspace audit documents temporary exceptions for four informational maintenance notices; vulnerability advisories remain enforced. The Windows NRPT diagnostic and macOS resolver probe are blocked until their cleanup proves ownership.
-
-The artifact smoke check retains its isolated initialized home and reports uninstall and purge as blocked rather than changing system integration. Run the installation and uninstall checklist separately on a restored disposable host. In `all`, the incomplete artifact stage blocks later sensitive stages because cleanup has not been independently verified; use separate runs and restored snapshots.
-
-Every suite writes a live UTF-8 `run.log` containing runner messages and emitted command stdout and stderr. The `all` transcript includes every stage boundary and summary; individual command logs retain the raw combined bytes. Rust nextest output includes passing and failing tests. The `all` doctest stages retain each executable's separate stdout and stderr and replay them into the transcript, including ignored tests. If an existing Cargo rustdoc flag or custom target runner prevents safe capture, the tests still run unchanged but doctest logging is marked blocked.
-
-To retain the exact tracked staged and unstaged changes, including mode bits, pass `--include-git-diff`. The report stores separate binary patches and checks whether tracked changes remained stable during capture. It does not collect untracked file contents. Patches can contain secrets, so use this option only with a private report and review them before sharing.
-
-Inspect `report.json`, `run.log`, `boundaries.log`, and each stage's report and logs. Desktop app output, browser evidence, host fixture files, and system snapshots remain separate report files; typed input, sudo prompts, and GUI actions are not recorded. A failed or incomplete system stage blocks later sensitive stages unless its cleanup was verified. The real system self-test cannot verify shared trust-store output or hooks, so it records blocked coverage and stops later sensitive stages in that run. Use separate restored VMs or snapshots for other checks. After an interrupted self-test, its retained `self-test-state` directory can be passed to interactive `tests/release/run.py --restore-report`; scoped verification still does not replace full-system recovery. Complete logs can contain credentials and fixture keys and must remain private.
-
-## Individual platform suites
-
-Without arguments, the platform scripts retain their non-GUI automated sequence. Use the Linux script in WSL. Each entry point rejects a different operating system. Run `--help` to see all options:
-
-```sh
-python3 scripts/test-linux.py
-python3 scripts/test-macos.py
-```
-
-```powershell
-python scripts\test-windows.py
-```
-
-The same options work on all three platforms:
-
-| Invocation | Checks |
+| Profile | Scope |
 |---|---|
-| `all` | Every automated stage, plus explicitly enabled and prepared system, artifact, desktop, browser, and manual stages |
-| `ci` | All automated stages and the CLI/daemon host suite, excluding privileged, artifact, desktop, real-browser, and manual evidence |
-| `automated --gui` | Default automated checks plus the Rust 1.90 tray check and full-workspace tests; requires platform GUI prerequisites |
-| `contracts` | Release contracts including ignored cases |
-| `audit` | Full-workspace cargo-deny audit; requires `cargo-deny` |
-| `host --bin <candidate> --report <new-report>` | Unprivileged candidate CLI and daemon checks |
-| `host --build --report <new-report>` | Build a candidate, then run the unprivileged host checks |
-| `host --bin <candidate> --report <new-report> --system` | Linux-only resolver and trust checks; requires a disposable, backed-up host and interactive confirmation; shared trust effects remain unverified |
-| `browser --bin <candidate> --report <new-report>` | Launch the browser fixture against separately configured OS DNS and trust; complete the real-browser checklist yourself |
-| `browser --bin <candidate> --report <new-report> --browser-engine chromium` | Drive a real Playwright browser against separately configured OS DNS and trust |
-| `browser --bin <candidate> --report <new-report> --system --browser-engine chromium --edge-port 8443` | Linux-only fixture-owned system integration and Playwright check with scoped cleanup and verification; shared trust effects remain unverified |
-| `desktop --app <candidate> --bin <candidate-cli> --report <new-report>` | Run the Linux interactive desktop checklist with ownership-checked cleanup; macOS and Windows are blocked |
+| `check` or no profile | Routine non-GUI checks above |
+| `check --gui` | The same checks including native GUI compilation and tests, not actual tray observations |
+| `ci` | Includes GUI; excludes the website build because CI's separate `site` job runs it once |
+| `site` | Website type-check, isolated build, and link/asset/anchor validation |
+| `contracts` | Rust tests, including ignored cases, on Rust 1.90; `--gui` is optional |
+| `audit` | Full-workspace cargo-deny policy |
+| `all` | `check`, plus only explicitly selected system, artifact, desktop, browser, and manual stages |
+| `host` | Standalone candidate CLI/daemon checks; tray/login evidence can remain incomplete |
+| `artifacts`, `browser`, `desktop`, `service` | Protected candidate/system or interactive checks below |
+| `prepare` | Prerequisite detection without execution or product-state changes |
 
-For example, `python3 scripts/test-linux.py host --build --report "$HOME/testd-reports/linux-host"` builds and tests on Linux. On Windows, use `python scripts\test-windows.py host --bin target\release\testd.exe --report C:\testd-reports\windows-host`. Report paths must not exist already; build, system, and desktop reports must be outside temporary directories. The build uses the stable compiler's native target under `CARGO_TARGET_DIR` (or this checkout's `target/`), preserves an existing target binary in the report, and uses a checkout-specific compiler fingerprint. It does not by itself establish release-artifact provenance. Automatic builds reject `CARGO_BUILD_TARGET`; use `--bin` for a separately built candidate or a cross-target build.
+`--plan` previews coordinated profiles without commands, report creation, or tool installation. An ordinary `all` run does not mark unselected release checks as passes or create blockers for missing assets nobody requested. Its report states the selected scope.
 
-System, service, desktop, browser-trust, artifact, and installation checks require a clean disposable machine and a persisted full-system snapshot. Linux `host --system` also needs cached sudo in the same terminal. macOS and Windows product system and desktop checks, macOS launchd supervision, and the platform resolver probes are blocked until ownership and cleanup can be established. The runner's scoped snapshot is not a full-machine backup. Desktop checks and manual browser checks need actual operator interaction; they are not covered by automated fixtures.
+`--bin /path/to/testd` selects an identified CLI instead of building one. Automatic builds use stable Rust's explicit native target, preserve any existing candidate in the report, and reject `CARGO_BUILD_TARGET`; use `--bin` for separately verified cross-target candidates. In a Git worktree, set `CARGO_TARGET_DIR` to the main checkout's `target/` to share the build cache. A build fingerprint or CLI hash is not release-artifact provenance.
 
-### Playwright browser run
+Host fixtures use isolated homes and `.testdcheck`, bind fixed loopback ports, and refuse busy ports. Do not initialize testd first, compete with a real daemon, or stop an unrelated service to make a check pass. Windows also needs a free UDP port 53.
 
-Install the `playwright` package where Bun can resolve it and install the selected browser on the disposable machine before running the suite. On Linux, Chromium and Firefox also require the NSS `certutil` tool for an isolated browser-profile trust store. The runner installs no tools or browsers. Use a fresh, private report and confirm that the VM blocks external network egress. The fixture accepts only loopback DNS results and browser requests to its named HTTPS origins; it does not change firewall policy.
+## Reports
 
-For bounded Linux product integration, run `python3 scripts/test-linux.py browser --bin /path/to/candidate-testd --report /path/to/new-persisted-report --system --browser-engine chromium --edge-port 8443`. A high edge port avoids privileged-port access requirements. The runner creates a private fixture home, starts its own daemon, applies the candidate's resolver and root CA through `doctor --fix`, drives a fresh Playwright profile, stops its processes, asks the candidate to remove only owned integration, and compares scoped state. It refuses pre-existing conflicting state. If browser, restart-watcher, or listener shutdown cannot be verified, it leaves system state untouched and requires full-system recovery. Shared trust-store effects remain unverified, so this run is incomplete until the VM is restored or independently compared.
+Every execution creates a new persisted report directory. The default is `~/.local/share/testd/release-checks/<UTC timestamp>-<id>` or `%LOCALAPPDATA%/testd/release-checks/<UTC timestamp>-<id>`. The runner prints the path. Set `--report /path/to/new-report` to choose it; existing paths are refused, and coordinated or sensitive runs reject temporary storage.
 
-Without `--system`, initialize and configure the same candidate's `.test` DNS and trust separately on the disposable host. The automatic runner requires the candidate root at the default `testd/pki/root.crt` location, verifies OS resolver and trust status, and refuses an occupied intake port. macOS and Windows support this preconfigured browser mode but still require separately proven, recoverable system setup. A pre-existing daemon is never adopted or restarted.
+- `report.json`: Source/OS/Python metadata, selected scope, stage outcomes, and nested command/check evidence for coordinated profiles; standalone suites retain their checks at the top level
+- `run.log`: Live UTF-8 runner progress, stage boundaries, and final summary
+- `<stage>/<number>-<command>.log`: Full combined raw stdout/stderr; command arguments, exit codes, durations, and log paths are indexed in `report.json`
+- Fixture files: Retained host homes, PKI, browser profiles/evidence, candidate backups, and scoped system snapshots where applicable
+- `ci-summary.json`: CI-only allowlisted source/platform/scope metadata and stage statuses/durations, suitable for reviewed CI publication
 
-The Playwright report records the engine, user agent, candidate and root hashes, browser-reported certificate details, loopback responses, the fixture's WebSocket, SSE, upload and cookie checks, and leaf fingerprints before and after a runner-owned daemon restart. Separate TLS probes use OS DNS and Python's default platform trust store with hostname verification and must match both browser-run leaf fingerprints. HTTPS errors are not bypassed and DNS is not overridden. The browser uses a direct connection and isolated profile without inherited proxy or trust overrides. Linux's isolated profile imports only the fixture's public root after the OS trust check; it does not modify the operator's browser profile. A short-lived private runtime directory is removed only if it remains owned and empty. A Playwright engine does not establish coverage for installed branded browsers, their certificate viewers, desktop UI, or untested platforms. Reports and retained profiles are private and may contain fixture credentials.
+The console is quiet by default and shows a bounded output tail on command failure. `--verbose` mirrors complete stdout/stderr into the console and `run.log`; full command logs are retained in either mode. CI enables it so command output survives in job logs. There are no duplicate boundary logs or per-stage report JSON files. Native Cargo supplies test/doctest output; no custom rustdoc or target-runner interception is installed.
 
-## Routine automated checks
+`--include-git-diff` retains separate binary patches for tracked staged and unstaged changes, including mode bits, and checks that tracked changes remained stable during capture. It does not collect untracked file contents. Reports, patches, profiles, logs, and fixture keys can contain secrets: keep them private until reviewed. Typed input, sudo prompts, and GUI actions are not recorded automatically.
 
-The scripts above run these checks and retain a transcript. Individual commands print output without creating a runner report:
+| Exit | Meaning |
+|---|---|
+| `0` | Applicable selected checks completed without failures |
+| `1` | At least one failure |
+| `2` | Incomplete selected coverage without failures |
 
-```sh
-cargo +stable fmt --all -- --check
-cargo +stable clippy --workspace --all-targets --exclude testd-gui --locked -- -D warnings
-cargo +1.90.0 nextest run --workspace --exclude testd-gui --locked \
-  --success-output immediate --failure-output immediate --status-level all --final-status-level all
-python3 -m unittest discover -s tests/release -p 'test_*.py' -v
-bun test "$(pwd)/tests/release/browser.test.ts"
-```
+Ignored, skipped, inapplicable, blocked, and unrun checks are never passes. A completed unprivileged profile is not native UI, browser trust, installer, provider, or release approval. Review individual outcomes and candidate provenance, not only the exit code.
 
-Use an absolute fixture path: Bun treats a relative path as a search pattern and can otherwise run matching tests from nested worktrees or build snapshots. On Windows PowerShell, use `bun test "$PWD\tests\release\browser.test.ts"`.
+## System and interactive checks
 
-The GUI requires its platform build prerequisites and Rust 1.90 checks. Run the full dependency policy against the selected release scope; a non-GUI or CI-scoped pass does not clear a GUI-only advisory. The cross-language browser-report fixture requires Bun. PowerShell parser and behavior fixtures are required on Windows; their absence on other platforms is inapplicable. A PowerShell fixture is not a Windows platform run.
-
-The release runner's `core` suite and stable version tags include ignored tests; prerelease tags and ordinary CI runs do not constitute release approval. Share-lifetime contracts use fake Unix providers. The engine suite also checks permission withdrawal while a registration waits for the registry lock. Run the complete non-GUI suite including ignored cases and require no unexplained skips:
+Use a clean disposable machine, an interactive terminal, a new persisted report, and a persisted full-system snapshot. Scoped runner backups do not cover the full OS, user profile, browser stores, package installation, login items, or shared CA-store effects. Linux system checks need `sudo -v` in the same terminal. Do not use elevated privileges for routine `check` or `ci`.
 
 ```sh
-cargo +1.90.0 nextest run --workspace --exclude testd-gui --locked --run-ignored all
+python3 tests/run.py host --bin /path/to/candidate --system --report /path/to/new-system-report
+python3 tests/run.py desktop --app /path/to/candidate-app --bin /path/to/candidate --report /path/to/new-ui-report
+python3 tests/run.py artifacts --artifacts /path/to/host-assets --require-checksums --report /path/to/new-archive-report
 ```
 
-## Host and manual checks
-
-For an unprivileged host run, use an identified candidate and a new persisted report path. The suite binds fixed loopback fixture ports and refuses busy ports; it must not compete with a real daemon.
+For aggregation, select the sensitive scope explicitly:
 
 ```sh
-python3 tests/release/run.py host --bin /path/to/candidate-testd --report /path/to/new-persisted-report
+python3 tests/run.py all --gui --system --interactive --app /path/to/candidate-app \
+  --artifacts /path/to/host-assets --no-previous-release --report /path/to/new-report
 ```
 
-Resolver and trust operations, package installation, and desktop sessions require a clean disposable machine and a persisted full-system snapshot. The runner's scoped snapshot is not a full-machine backup. Use the following contracts and record pass, fail, blocked, or not applicable with a reason for every selected platform and feature:
+`all --system` confirms the disposable host and full-system backup once. Each stage still checks its prerequisites, ownership, and authorization. `--interactive` requires `--system` and adds real desktop/browser and manual evidence prompts. `--app` and `--browser-engine` require that interactive scope; `--artifacts` requires system authorization because it executes extracted candidates. Use `--previous-bin` rather than `--no-previous-release` when a real previous CLI exists; candidate assets must include `SHA256SUMS`.
 
-- [Desktop setup and tray](host/gui-checklist.md)
-- [Real browsers](manual/browser.md)
-- [Resolver and trust coexistence](manual/system-integration.md)
-- [Installation and artifacts](manual/installation.md)
-- [Conditional network and share behavior](manual/network-and-sharing.md)
+macOS and Windows product-managed system/desktop checks and macOS service supervision remain blocked until ownership and cleanup are proven. Windows has no shipped service feature. Unsupported resolver probes are not part of the runnable suite. Actual network exposure and real providers still require separate explicit approval.
 
-The Linux GUI runner requires an interactive terminal, a fresh user, the candidate CLI, and backup and shutdown confirmation. It refuses an empty checklist, snapshots selected `.test` integration, and defers cleanup if candidate processes have not been confirmed stopped. macOS and Windows GUI runs remain blocked. Scoped recovery leaves unowned or changed state untouched and does not verify shared trust-store effects; a full VM snapshot remains necessary.
+A failed or incomplete sensitive stage blocks later sensitive operations unless its cleanup was verified. The system self-test cannot verify shared trust-store output/hooks and records incomplete coverage. Artifact smoke checks retain their isolated home and report real uninstall/purge as blocked. Use separate restored machines for other checks and actual installation/uninstall observations; aggregation is not one-click release approval.
+
+For interrupted or deferred cleanup, stop every candidate app, daemon, and provider first. Pass the recorded stage directory or retained `self-test-state` directory to `python3 tests/run.py --restore-report /path/to/recorded-state`. Recovery uses the retained snapshot manifests, not stage report JSON. It refuses changed or unowned state and cannot replace full-system recovery or shared trust-store comparison.
+
+## Real-browser checks
+
+Install Playwright where Bun can resolve it and install the selected browser on the disposable machine. Linux Chromium/Firefox also need NSS `certutil` for an isolated profile. The runner installs neither tools nor browsers. Block external egress at the VM boundary; the fixture restricts requests and DNS results to loopback but does not configure a firewall.
+
+```sh
+python3 tests/run.py browser --bin /path/to/candidate --system --browser-engine chromium \
+  --edge-port 8443 --report /path/to/new-browser-report
+```
+
+Linux `--system` creates a private fixture home, starts its own candidate daemon with real providers disabled, applies fixture-owned resolver/CA integration through `doctor --fix`, drives a fresh browser profile, stops owned processes, and compares scoped state. The high edge port avoids privileged-port requirements. Conflicting pre-existing integration is refused. Unverified shutdown defers system cleanup; shared trust effects remain incomplete until independently compared or the VM is restored.
+
+Without `--system`, configure the same candidate's `.test` OS DNS and trust separately. The runner verifies the default `testd/pki/root.crt`, OS resolver/trust status, and free fixture ports; it never adopts or restarts an existing daemon. This preconfigured mode is available on macOS/Windows but still requires separately proven, recoverable setup.
+
+The browser report records engine/user agent, candidate/root hashes, certificate details, loopback responses, WebSocket/SSE/upload/cookie checks, and matching leaf fingerprints before and after an owned daemon restart. Independent TLS probes use OS DNS and the default platform trust store with hostname verification. HTTPS errors are not bypassed; DNS is not overridden. Profiles use direct connections without inherited proxies/trust overrides. Linux imports only the public fixture root into its isolated profile after the OS trust check. An engine run does not validate installed branded browsers, their certificate viewers, tray UI, or another platform.
+
+## Coverage and remaining evidence
+
+| Contract | Automated coverage | Still needs native/manual evidence |
+|---|---|---|
+| Configuration, private state, local defaults, DNS-only setup | `tests/cli.rs`, core config tests | Installed packages, permissions, actual GUI setup |
+| Authentication, name ownership, disconnect, revocation, rollback | Engine, protocol, registry, and `product_flow.rs` tests | Platform workflows and local-user authority boundaries |
+| DNS answers and malformed/unknown names | DNS unit tests and real loopback UDP fixtures | OS resolver routing |
+| TLS validation, proxy routing, forwarding, and failures | Edge, PKI, and product-flow tests | Installed OS/browser trust |
+| Preserve unowned integration and remove only proven-owned state | Setup ownership/resolver/trust fixtures | Shared trust hooks, concurrent privileged changes, complete macOS/Windows ownership |
+| Dashboard, quick launches, lifecycle, and local request protections | Engine/launch tests, `tests/host/`, Bun dashboard fixtures | Actual tray/browser, local-user dashboard authorization |
+| Shares, provider exits, and revocation | Fake-provider lifecycle and reconciliation tests | Real providers, network-pause controls, crash recovery |
+| Packaging, rollback, and recovery reports | Python release/harness fixtures and protected artifact checks | Provenance, signing, installed upgrade/uninstall on each platform |
+| Browser fixture protocols and reports | Bun fixture tests and opt-in Playwright | Each claimed OS/browser combination |
+
+`product_flow.rs` composes registration, DNS, and TLS on ephemeral loopback sockets. Only its test client trusts the root, and its resolver wrapper forbids system integration. It is component evidence, not a full installed daemon, browser, or GUI. Explicit network-exposure/pause controls and dashboard authorization remain unfinished; tests of local defaults do not establish them.
+
+CI provisions the unprivileged profile on Ubuntu 24.04, macOS 15 Apple Silicon/Intel, Windows Server 2025, and Fedora 44 userspace. The Fedora container shares the Ubuntu kernel and has no actual desktop/systemd session; Windows Server is not Windows 11 desktop evidence. A separate website job avoids repeated cross-platform builds, and Python 3.12 fake-state jobs retain minimum-runtime coverage. Manual/tag runs also create unsigned packages/SBOMs after test gates; only tags publish releases. Artifact creation is not installation or signing approval.
+
+## Files and manual contracts
+
+- `run.py`: Portable entry point, candidate/fixture execution, logs, and recovery
+- `release/`: Shared coordination/system/service/browser helpers, Python regression tests, and Bun fixtures
+- `host/`: Native CLI/daemon fixtures and [desktop checklist](host/gui-checklist.md)
+- `check-links.ts`: Built website link/asset/anchor validation, also used by `bun run check:links`
+- `ci-changes.sh`: CI job-input classification
+- `tray-debug.ps1`: Read-only Windows tray/build/install diagnostics
+- `manual/`: [Browsers](manual/browser.md), [system integration](manual/system-integration.md), [installation](manual/installation.md), and [network/sharing](manual/network-and-sharing.md) contracts
+
+Runtime elevation, icon/build, packaging, release, and SBOM helpers remain in `scripts/`: they are product/build operations, not test entry points.

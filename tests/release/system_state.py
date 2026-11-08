@@ -402,7 +402,7 @@ def load(directory):
 	path = pathlib.Path(directory) / MANIFEST
 	if path.is_symlink() or not path.is_file():
 		raise HostError(f'no regular system snapshot at {path}; system checks are only run by '
-			'tests/release/run.py host --system')
+			'tests/run.py host --system')
 	return json.loads(path.read_text())
 
 

@@ -33,12 +33,26 @@ def load(name, path):
 
 
 release = load('release', ROOT / 'scripts/release.py')
-runner = load('release_checks', ROOT / 'tests/release/run.py')
+runner = load('release_checks', ROOT / 'tests/run.py')
 state = load('system_state', ROOT / 'tests/release/system_state.py')
 
 
 def workspace_version():
 	return release.tomllib.loads((ROOT / 'Cargo.toml').read_text())['package']['version']
+
+
+def automated_commands(*, gui=False, suite='check'):
+	checks = runner.helper('all_checks')
+	stages = checks.AllChecks(None, None, SimpleNamespace(suite=suite, gui=gui)).stages()
+	run = Mock()
+	run.command.return_value = ''
+	names = {'format', 'clippy', 'msrv', 'rust-tests', 'doctests', 'browser-server-fixtures',
+		'dependency-audit', 'release-version'}
+	with patch.object(checks.shutil, 'which', return_value='installed'):
+		for stage in stages:
+			if stage.name in names:
+				stage.action(run)
+	return {call.args[0]: call.args[1] for call in run.command.call_args_list}
 
 
 def fixture_symlink(test, path, target, **options):
@@ -78,30 +92,24 @@ class ReleaseTests(unittest.TestCase):
 		self.assertEqual(policy['bans']['wildcards'], 'deny')
 		self.assertIn({'name': 'openssl'}, policy['bans']['deny'])
 
-	def test_core_and_ci_checks_use_the_declared_msrv(self):
-		run = Mock(args=SimpleNamespace(gui=True, strict=True))
-		with patch.object(runner.shutil, 'which', return_value='installed'):
-			runner.core(run)
-		commands = {call.args[0]: call.args[1] for call in run.command.call_args_list}
+	def test_default_and_ci_checks_use_the_declared_msrv(self):
 		workspace = release.tomllib.loads((ROOT / 'Cargo.toml').read_text())
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text()
 		msrv = workspace['workspace']['package']['rust-version']
-		for name in ('msrv-cli', 'msrv-tray'):
-			with self.subTest(name=name):
-				self.assertEqual(commands[name][1], f'+{msrv}.0')
+		for suite in ('check', 'ci'):
+			with self.subTest(suite=suite):
+				self.assertEqual(automated_commands(suite=suite)['msrv'][1], f'+{msrv}.0')
 		self.assertIn(f'rustup toolchain install {msrv}.0 --profile minimal', workflow)
 
-	def test_release_core_uses_the_absolute_browser_fixture_path(self):
-		run = Mock(args=SimpleNamespace(gui=False, strict=True))
-		with patch.object(runner.shutil, 'which', return_value='installed'):
-			runner.core(run)
-		command = next(call.args[1] for call in run.command.call_args_list if call.args[0] == 'browser-fixture-tests')
-		self.assertEqual(command, ['bun', 'test', str(ROOT / 'tests/release/browser.test.ts')])
+	def test_default_checks_use_both_absolute_web_fixture_paths(self):
+		command = automated_commands()['browser-server-fixtures']
+		self.assertEqual(command, ['bun', '--no-install', 'test',
+			str(ROOT / 'tests/release/browser.test.ts'), str(ROOT / 'tests/release/dashboard.test.ts')])
 
 	def test_ci_uses_the_runner_with_the_absolute_browser_fixture_path(self):
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
 		test_job = workflow.split('\n  test:\n', 1)[1].split('\n  fedora:\n', 1)[0]
-		self.assertIn('scripts/test-${{ matrix.platform }}.py ci --report ci-reports', test_job)
+		self.assertIn('tests/run.py ci --report ci-reports --verbose', test_job)
 		self.assertNotIn('bun test tests/release/browser.test.ts', test_job)
 		checks = runner.helper('all_checks')
 		stage = next(stage for stage in checks.AllChecks(None, None, SimpleNamespace(suite='ci')).stages()
@@ -111,14 +119,15 @@ class ReleaseTests(unittest.TestCase):
 		with patch.object(checks.shutil, 'which', return_value='installed'):
 			stage.action(child)
 		self.assertEqual(child.command.call_args.args[1],
-			['bun', '--no-install', 'test', str(ROOT / 'tests/release/browser.test.ts')])
+			['bun', '--no-install', 'test', str(ROOT / 'tests/release/browser.test.ts'),
+				str(ROOT / 'tests/release/dashboard.test.ts')])
 
 	def test_ci_provisions_supported_platforms_and_uploads_only_status_summaries(self):
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
 		test_job = workflow.split('\n  test:\n', 1)[1].split('\n  site:\n', 1)[0]
 		for platform in ('ubuntu-24.04', 'macos-15', 'macos-15-intel', 'windows-2025'):
 			self.assertIn(f'os: {platform}', test_job)
-		for prerequisite in ("python-version: '3.14'", 'cargo-nextest,cargo-deny',
+		for prerequisite in ("python-version: '3.14'", 'tool: cargo-deny',
 				'bun install --frozen-lockfile', 'persist-credentials: false', 'timeout-minutes: 90'):
 			self.assertIn(prerequisite, test_job)
 		self.assertIn('container: fedora:44', test_job)
@@ -133,6 +142,31 @@ class ReleaseTests(unittest.TestCase):
 		for package in ('webkit2gtk4.1-devel', 'libappindicator-gtk3-devel', 'unzip', 'systemd'):
 			self.assertIn(package, dependencies)
 
+	@unittest.skipIf(os.name == 'nt', 'not applicable: the site container fixture uses a Unix shell')
+	def test_site_container_mounts_the_relocated_link_checker_read_only(self):
+		with tempfile.TemporaryDirectory() as temporary:
+			root = pathlib.Path(temporary).resolve()
+			entrypoint = root / 'sites/bin/site.sh'
+			entrypoint.parent.mkdir(parents=True)
+			shutil.copyfile(ROOT / 'sites/bin/site.sh', entrypoint)
+			(root / 'dist').mkdir()
+			(root / 'tests').mkdir()
+			bin_dir = root / 'bin'
+			bin_dir.mkdir()
+			for name, script in [('fixture-runtime', 'printf "%s\\n" "$@"'),
+				('getenforce', 'printf "%s\\n" "$FIXTURE_SELINUX"')]:
+				path = bin_dir / name
+				path.write_text(f'#!/bin/sh\n{script}\n', encoding='utf-8')
+				path.chmod(0o700)
+			for policy, suffix in [('Permissive', ''), ('Enforcing', ',Z')]:
+				with self.subTest(policy=policy):
+					env = {**os.environ, 'TESTD_SITE_RUNTIME': 'fixture-runtime', 'FIXTURE_SELINUX': policy,
+						'PATH': str(bin_dir) + os.pathsep + os.environ.get('PATH', '')}
+					result = subprocess.run(['sh', str(entrypoint), 'links'], env=env,
+						capture_output=True, text=True, check=True, timeout=10)
+					self.assertIn(f'{root}/tests:/src/tests:ro{suffix}', result.stdout.splitlines())
+					self.assertIn('/src/sites/bin/entrypoint.sh', result.stdout.splitlines())
+
 	@unittest.skipUnless(shutil.which('bun'), 'Bun is not installed')
 	def test_link_checker_uses_the_isolated_site_output(self):
 		with tempfile.TemporaryDirectory() as temporary:
@@ -141,7 +175,7 @@ class ReleaseTests(unittest.TestCase):
 			(root / 'index.html').write_text('<a href="/docs/">Docs</a>', encoding='utf-8')
 			(root / 'docs/index.html').write_text('<h1 id="top">Docs</h1>', encoding='utf-8')
 			env = {**os.environ, 'TESTD_SITE_OUT_DIR': str(root)}
-			command = ['bun', str(ROOT / 'scripts/check-links.ts')]
+			command = ['bun', str(ROOT / 'tests/check-links.ts')]
 			result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, timeout=30)
 			self.assertEqual(result.returncode, 0, result.stderr)
 			self.assertIn('2 pages ok', result.stdout)
@@ -150,32 +184,21 @@ class ReleaseTests(unittest.TestCase):
 			self.assertNotEqual(result.returncode, 0)
 			self.assertIn('/missing', result.stderr)
 
-	def test_release_core_runs_known_contracts_in_both_rust_test_modes(self):
-		for nextest in (True, False):
-			with self.subTest(nextest=nextest):
-				run = Mock(args=SimpleNamespace(gui=False, strict=True))
-				def which(name):
-					return None if name == 'cargo-nextest' and not nextest else 'installed'
-				with patch.object(runner.shutil, 'which', side_effect=which):
-					runner.core(run)
-				command = next(call.args[1] for call in run.command.call_args_list if call.args[0] == 'rust-tests')
-				if nextest:
-					self.assertIn('--run-ignored', command)
-					self.assertEqual(command[command.index('--run-ignored') + 1], 'all')
-				else:
-					self.assertIn('--include-ignored', command)
+	def test_default_checks_run_known_contracts_without_a_nextest_dependency(self):
+		command = automated_commands()['rust-tests']
+		self.assertIn('--include-ignored', command)
+		self.assertIn('--no-fail-fast', command)
+		self.assertNotIn('nextest', command)
 
 	def test_ci_always_runs_ignored_contracts_and_gates_release_builds(self):
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
 		checks = runner.helper('all_checks')
 		stages = checks.AllChecks(None, None, SimpleNamespace(suite='ci')).stages()
-		for name in ('contracts-msrv', 'cli-stable', 'workspace-stable'):
-			child = Mock()
-			child.command.return_value = ''
-			with patch.object(checks.shutil, 'which', return_value='installed'):
-				next(stage for stage in stages if stage.name == name).action(child)
-			command = child.command.call_args.args[1]
-			self.assertEqual(command[command.index('--run-ignored') + 1], 'all')
+		child = Mock()
+		child.command.return_value = ''
+		with patch.object(checks.shutil, 'which', return_value='installed'):
+			next(stage for stage in stages if stage.name == 'rust-tests').action(child)
+		self.assertIn('--include-ignored', child.command.call_args.args[1])
 		for job, following in (('bundle', 'sbom'), ('sbom', 'release')):
 			section = workflow.split(f'\n  {job}:\n', 1)[1].split(f'\n  {following}:\n', 1)[0]
 			self.assertIn('needs: [test, fedora, system-state-fixtures, site]', section)
@@ -338,46 +361,37 @@ class ArtifactInstallFixture:
 
 
 class PlatformSequenceTests(unittest.TestCase):
-	def test_automated_sequence_runs_the_documented_non_gui_checks(self):
-		run = Mock(args=SimpleNamespace(gui=False))
-		with patch.object(runner, 'require') as required:
-			runner.automated(run)
-		self.assertEqual([call.args[0] for call in required.call_args_list], ['cargo', 'rustup', 'cargo-nextest', 'bun'])
-		commands = {call.args[0]: call.args[1] for call in run.command.call_args_list}
+	def test_default_sequence_covers_the_non_gui_workspace_once(self):
+		commands = automated_commands()
 		self.assertEqual(commands['format'], ['cargo', '+stable', 'fmt', '--all', '--', '--check'])
-		self.assertEqual(commands['clippy'], ['cargo', '+stable', 'clippy', '--workspace', '--all-targets',
-			'--exclude', 'testd-gui', '--locked', '--', '-D', 'warnings'])
-		self.assertEqual(commands['rust-tests'], ['cargo', '+1.90.0', 'nextest', 'run', '--workspace',
-			'--exclude', 'testd-gui', '--locked', *runner.NEXTEST_OUTPUT_OPTIONS])
-		self.assertEqual(commands['release-script-tests'], [sys.executable, '-m', 'unittest', 'discover',
-			'-s', 'tests/release', '-p', 'test_*.py', '-v'])
-		self.assertEqual(commands['browser-fixture-tests'], ['bun', 'test', str(ROOT / 'tests/release/browser.test.ts')])
+		for name in ('clippy', 'msrv', 'rust-tests', 'doctests'):
+			with self.subTest(name=name):
+				self.assertIn('--workspace', commands[name])
+				self.assertIn('--exclude', commands[name])
+				self.assertIn('testd-gui', commands[name])
+		self.assertEqual(commands['rust-tests'][:3], ['cargo', '+stable', 'test'])
 
-	def test_gui_sequence_adds_the_tray_msrv_and_full_workspace_tests(self):
-		run = Mock(args=SimpleNamespace(gui=True))
-		with patch.object(runner, 'require'):
-			runner.automated(run)
-		commands = {call.args[0]: call.args[1] for call in run.command.call_args_list}
-		self.assertEqual(commands['msrv-tray'], ['cargo', '+1.90.0', 'check', '-p', 'testd-gui', '--locked'])
-		self.assertEqual(commands['gui-workspace-tests'], ['cargo', '+stable', 'nextest', 'run', '--workspace', '--locked',
-			*runner.NEXTEST_OUTPUT_OPTIONS])
+	def test_gui_and_ci_sequences_include_the_whole_workspace_without_duplicate_tests(self):
+		for options in ({'gui': True}, {'suite': 'ci'}):
+			with self.subTest(options=options):
+				commands = automated_commands(**options)
+				for name in ('clippy', 'msrv', 'rust-tests', 'doctests'):
+					self.assertNotIn('--exclude', commands[name])
+					self.assertIn('--workspace', commands[name])
 
-	def test_contract_sequence_includes_ignored_cases_without_fail_fast(self):
-		run = Mock(args=SimpleNamespace(gui=False))
-		with patch.object(runner, 'require'):
-			runner.contracts(run)
-		command = run.command.call_args.args[1]
-		self.assertEqual(command, ['cargo', '+1.90.0', 'nextest', 'run', '--workspace', '--exclude',
-			'testd-gui', '--locked', '--run-ignored', 'all', '--no-fail-fast', *runner.NEXTEST_OUTPUT_OPTIONS])
+	def test_focused_contract_suite_runs_on_the_msrv_without_fail_fast(self):
+		commands = automated_commands(suite='contracts')
+		self.assertEqual(set(commands), {'rust-tests'})
+		self.assertEqual(commands['rust-tests'][:3], ['cargo', '+1.90.0', 'test'])
+		self.assertIn('--include-ignored', commands['rust-tests'])
+		self.assertIn('--no-fail-fast', commands['rust-tests'])
 
-	def test_dependency_audit_covers_the_whole_workspace(self):
-		run = Mock(args=SimpleNamespace(gui=False))
-		with patch.object(runner, 'require') as required:
-			runner.audit(run)
-		self.assertEqual([call.args[0] for call in required.call_args_list], ['cargo', 'rustup', 'cargo-deny'])
-		self.assertEqual(run.command.call_args.args[1], ['cargo', '+stable', 'deny', '--workspace', '--locked', 'check'])
+	def test_focused_dependency_audit_covers_the_whole_workspace(self):
+		commands = automated_commands(suite='audit')
+		self.assertEqual(commands,
+			{'dependency-audit': ['cargo', '+stable', 'deny', '--workspace', '--locked', 'check']})
 
-	def test_service_suite_loads_its_helper_from_the_release_runner_directory(self):
+	def test_service_suite_loads_the_shared_helper(self):
 		run = Mock()
 		checks = Mock()
 		with patch.object(runner, 'helper', return_value=checks) as helper, \
@@ -458,6 +472,9 @@ class PlatformSequenceTests(unittest.TestCase):
 			fake_cargo.write_text(f'#!/bin/sh\nprintf "new executable" > "$CARGO_TARGET_DIR/{triple}/release/testd"\n'
 				'printf "%s" "$RUSTFLAGS" > "$CARGO_TARGET_DIR/flags"\n', encoding='utf-8')
 			fake_cargo.chmod(0o700)
+			fake_rustup = fake_bin / 'rustup'
+			fake_rustup.write_text('#!/bin/sh\n[ "$1" = run ] || exit 1\nshift 2\nexec "$@"\n', encoding='utf-8')
+			fake_rustup.chmod(0o700)
 			args = SimpleNamespace(report=root / 'report', suite='fixture', bin=None)
 			with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
 				run = runner.Run(args)
@@ -1217,8 +1234,8 @@ class ReleaseEntrySafetyTests(unittest.TestCase):
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
 		self.assertIn('-k SystemStateTests', workflow)
 		self.assertNotIn('system_state.py --self-test', workflow)
-		self.assertNotIn('tests/release/run.py host --system', workflow)
-		self.assertNotIn('tests/release/run.py artifacts', workflow)
+		self.assertNotIn('tests/run.py host --system', workflow)
+		self.assertNotIn('tests/run.py artifacts', workflow)
 		self.assertNotIn('pull_request_target:', workflow)
 
 	def test_restore_report_requires_interactive_confirmation_before_recovery(self):
@@ -1687,7 +1704,7 @@ quick_launch_diagnostics fixture
 			marker.write_text('existing data', encoding='utf-8')
 			env = {**os.environ, 'HOME': temporary, 'TESTD_HOST_TEST_SYSTEM': '1',
 				'TESTD_HOST_OUTPUT_DIR': str(root / 'output')}
-			for script in ('tests/host/macos.sh', 'tests/release/macos-resolver-probe.sh'):
+			for script in ('tests/host/macos.sh',):
 				with self.subTest(script=script):
 					result = subprocess.run(['bash', script], cwd=ROOT, env=env, capture_output=True, text=True, timeout=15)
 					self.assertEqual(result.returncode, 2)
@@ -1696,13 +1713,16 @@ quick_launch_diagnostics fixture
 					self.assertFalse((root / 'output').exists())
 
 	def test_change_filter_classifies_platform_job_inputs(self):
-		self.assertNotIn('declare -n', (ROOT / 'scripts/ci-changes.sh').read_text())
+		self.assertNotIn('declare -n', (ROOT / 'tests/ci-changes.sh').read_text())
 		cases = (
 			('README.md', (True, False, False)),
-			('tests/README.md', (True, False, False)),
-			('tests/manual/browser.md', (True, False, False)),
-			('tests/host/gui-checklist.md', (True, False, False)),
-			('scripts/test-linux.py', (False, True, False)),
+			('tests/README.md', (True, True, False)),
+			('tests/manual/browser.md', (True, True, False)),
+			('tests/host/gui-checklist.md', (True, True, False)),
+			('tests/run.py', (False, True, True)),
+			('tests/release/all_checks.py', (False, True, True)),
+			('tests/check-links.ts', (False, True, True)),
+			('tests/ci-changes.sh', (False, True, True)),
 			('docs/usage.md', (False, False, True)),
 			('.github/workflows/ci.yml', (True, True, True)),
 			('README.md\ndocs/usage.md', (True, False, True)),
@@ -1720,7 +1740,7 @@ quick_launch_diagnostics fixture
 					env = {**os.environ, 'PATH': f'{directory}{os.pathsep}{os.environ.get("PATH", "")}',
 						'EVENT': 'push', 'BASE': 'fixture', 'GITHUB_REF': 'refs/heads/master',
 						'GITHUB_OUTPUT': str(output), 'CHANGED_FILE': path}
-					subprocess.run(['bash', 'scripts/ci-changes.sh'], cwd=ROOT, env=env, timeout=5, check=True)
+					subprocess.run(['bash', 'tests/ci-changes.sh'], cwd=ROOT, env=env, timeout=5, check=True)
 					expected = ''.join(f'{name}={str(value).lower()}\n'
 						for name, value in zip(('rust', 'release', 'site'), flags))
 					self.assertEqual(output.read_text(), expected)
@@ -2593,7 +2613,7 @@ class BrowserTests(unittest.TestCase):
 
 class TranscriptTests(unittest.TestCase):
 	def create_run(self, directory):
-		args = SimpleNamespace(report=pathlib.Path(directory) / 'report', suite='fixture')
+		args = SimpleNamespace(report=pathlib.Path(directory) / 'report', suite='fixture', verbose=True)
 		with redirect_stdout(io.StringIO()):
 			return runner.Run(args)
 
@@ -2657,9 +2677,55 @@ class TranscriptTests(unittest.TestCase):
 
 class CommandOutputTests(unittest.TestCase):
 	def create_run(self, directory):
-		args = SimpleNamespace(report=pathlib.Path(directory) / 'report', suite='fixture')
+		args = SimpleNamespace(report=pathlib.Path(directory) / 'report', suite='fixture', verbose=True)
 		with redirect_stdout(io.StringIO()):
 			return runner.Run(args)
+
+	def test_default_output_is_quiet_but_full_logs_and_command_metadata_are_retained(self):
+		with tempfile.TemporaryDirectory() as directory:
+			run = self.create_run(directory)
+			run.args.verbose = False
+			stdout, stderr = io.StringIO(), io.StringIO()
+			code = "import os; os.write(1, b'quiet-out\\n'); os.write(2, b'quiet-err\\n')"
+			with redirect_stdout(stdout), redirect_stderr(stderr):
+				with runner.run_transcript(run):
+					text = run.command('quiet', [sys.executable, '-c', code], timeout=10)
+			for value in ('quiet-out', 'quiet-err'):
+				self.assertIn(value, text)
+				self.assertIn(value, (run.output / '00-quiet.log').read_text())
+				self.assertNotIn(value + '\n', (run.output / 'run.log').read_text())
+				self.assertNotIn(value + '\n', stdout.getvalue() + stderr.getvalue())
+			check = json.loads((run.output / 'report.json').read_text())['checks'][0]
+			self.assertEqual(check['command'], [sys.executable, '-c', code])
+			self.assertEqual(check['returncode'], 0)
+			self.assertEqual(check['log'], '00-quiet.log')
+			self.assertGreaterEqual(check['seconds'], 0)
+
+	def test_quiet_failures_show_only_a_bounded_tail(self):
+		with tempfile.TemporaryDirectory() as directory:
+			run = self.create_run(directory)
+			run.args.verbose = False
+			stderr = io.StringIO()
+			code = "import sys; print('\\n'.join(f'line {i}' for i in range(100))); sys.exit(7)"
+			with redirect_stdout(io.StringIO()), redirect_stderr(stderr), self.assertRaises(RuntimeError):
+				run.command('tail', [sys.executable, '-c', code], timeout=10)
+			self.assertIn('line 99', stderr.getvalue())
+			self.assertNotIn('line 79', stderr.getvalue())
+			self.assertIn('full log:', stderr.getvalue())
+			self.assertIn('line 0\n', (run.output / '00-tail.log').read_text())
+
+	def test_toolchain_shims_are_run_without_automatic_installation(self):
+		with tempfile.TemporaryDirectory() as directory:
+			run = self.create_run(directory)
+			popen = subprocess.Popen
+			def fixture(command, **options):
+				return popen([sys.executable, '-c', "print('fixture')"], **options)
+			with patch.object(runner, 'require', return_value='rustup'), \
+				patch.object(runner.subprocess, 'Popen', side_effect=fixture) as child, \
+				redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+				run.command('toolchain', ['cargo', '+stable', '--version'], timeout=10)
+			self.assertEqual(child.call_args.args[0], ['rustup', 'run', 'stable', 'cargo', '--version'])
+			self.assertNotIn('--install', child.call_args.args[0])
 
 	def test_both_streams_are_mirrored_and_retained(self):
 		with tempfile.TemporaryDirectory() as directory:

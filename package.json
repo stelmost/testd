@@ -9,7 +9,7 @@
 		"build:docs": "vitepress build sites/docs",
 		"preview": "vite preview sites/product",
 		"check": "tsc -p . && tsc -p sites/product && tsc -p sites/docs",
-		"check:links": "bun scripts/check-links.ts"
+		"check:links": "bun tests/check-links.ts"
 	},
 	"dependencies": {
 		"@fontsource-variable/archivo": "^5.3.0",

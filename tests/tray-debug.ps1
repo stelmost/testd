@@ -1,5 +1,5 @@
 # Windows tray diagnostics: which build is built, installed, and running.
-# Usage: powershell -ExecutionPolicy Bypass -File scripts\tray-debug.ps1
+# Usage: powershell -ExecutionPolicy Bypass -File tests\tray-debug.ps1
 
 $ErrorActionPreference = 'Continue'
 $root = Split-Path $PSScriptRoot -Parent

@@ -7,7 +7,7 @@
 #
 # Resolver and trust checks need a clean disposable host and a snapshot. They
 # only run through the runner, which restores the integration afterwards:
-#   sudo -v && python3 tests/release/run.py host --system
+#   sudo -v && python3 tests/run.py host --system
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -92,7 +92,7 @@ check_launch_at_login
 
 section 'cleanup'
 if [ -n "${TESTD_HOST_SNAPSHOT:-}" ]; then
-	printf 'integration: restored from %s by tests/release/run.py after this script\n' \
+	printf 'integration: restored from %s by tests/run.py after this script\n' \
 		"$TESTD_HOST_SNAPSHOT"
 fi
 printf 'config:      %s\n' "$TEST_HOME"

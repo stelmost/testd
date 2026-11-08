@@ -21,14 +21,14 @@ def load(name, path):
 
 
 checks = load('testd_all_checks', ROOT / 'tests/release/all_checks.py')
-doctest_output = load('testd_doctest_output', ROOT / 'tests/release/doctest_output.py')
-runner = load('testd_all_runner', ROOT / 'tests/release/run.py')
+runner = load('testd_all_runner', ROOT / 'tests/run.py')
 
 
 def arguments(**overrides):
 	values = dict(suite='all', report=None, bin=None, app=None, artifacts=None, previous_bin=None,
-		no_previous_release=False, interactive=False, system=False, plan=False, gui=False, strict=False,
-		host=False, service=False, require_checksums=False, port=19080, edge_port=443, intake_port=7737)
+		no_previous_release=False, interactive=False, system=False, plan=False, gui=False,
+		host=False, service=False, require_checksums=False, port=19080, edge_port=443, intake_port=7737,
+		browser_engine=None, verbose=False)
 	values.update(overrides)
 	return SimpleNamespace(**values)
 
@@ -66,12 +66,10 @@ def fixture(directory, *, args=None, system='Linux', failures=(), outputs=None):
 	outputs = {'release-script-fixtures': 'Ran 1 test in 0.1s\n\nOK\n',
 		'system-restore-self-test': 'ok       scoped fixture state was restored and verified\n', **(outputs or {})}
 	parent = FakeRun(args, root / 'report', commands, failures, outputs)
-	def child(child_args):
+	def child(child_args, **options):
 		return FakeRun(child_args, child_args.report, commands, failures, outputs)
 	api = SimpleNamespace(Run=child, SYSTEM=system, HOST_TLD='testdcheck', DESKTOP_TLD='test',
-		NEXTEST_OUTPUT_OPTIONS=runner.NEXTEST_OUTPUT_OPTIONS,
-		prepare_doctests=Mock(side_effect=lambda project, report, env: (dict(env), None, None)),
-		replay_doctests=Mock(), binary=Mock(return_value=root / 'candidate'), file_digest=Mock(return_value='a' * 64),
+		require_toolchain=Mock(), binary=Mock(return_value=root / 'candidate'), file_digest=Mock(return_value='a' * 64),
 		host=Mock(), service=Mock(), artifacts=Mock(), desktop=Mock(), browser=Mock(),
 		system_snapshot=Mock(return_value=root / 'snapshot'), system_restore=Mock(),
 		check_ports=Mock(), checklist_items=runner.checklist_items)
@@ -93,7 +91,7 @@ class AllChecksTests(unittest.TestCase):
 						patch('builtins.input', side_effect=AssertionError('ci must not prompt')), \
 						contextlib.redirect_stdout(io.StringIO()):
 					checks.execute(parent, api)
-				self.assertEqual(len(parent.metadata['stages']), 20)
+				self.assertEqual(len(parent.metadata['stages']), 11)
 				self.assertTrue(all(stage['status'] == 'pass' for stage in parent.metadata['stages']))
 				self.assertFalse(parent.metadata.get('incomplete', False))
 				api.host.assert_called_once()
@@ -103,20 +101,22 @@ class AllChecksTests(unittest.TestCase):
 				summary = json.loads((parent.output / 'ci-summary.json').read_text(encoding='utf-8'))
 				self.assertEqual(summary['suite'], 'ci')
 				self.assertEqual(summary['os'], system)
-				self.assertEqual(set(summary), {'os', 'python', 'commit', 'dirty', 'suite', 'stages'})
+				self.assertEqual(set(summary), {'os', 'python', 'commit', 'dirty', 'suite', 'scope', 'stages'})
+				self.assertTrue(summary['scope']['gui'])
+				self.assertFalse(summary['scope']['site'])
 				self.assertTrue(all(set(stage) == {'name', 'status', 'seconds'} for stage in summary['stages']))
 
 	def test_ci_keeps_failures_and_unexpected_skips_visible(self):
 		with tempfile.TemporaryDirectory() as temporary:
-			parent, api, _ = fixture(temporary, args=arguments(suite='ci'), failures=('contracts-msrv',))
+			parent, api, _ = fixture(temporary, args=arguments(suite='ci'), failures=('rust-tests',))
 			api.host.side_effect = lambda child, **options: child.record('coverage', 'skip', 'missing fixture')
 			with patch.object(checks.shutil, 'which', return_value='installed'), \
 					contextlib.redirect_stdout(io.StringIO()):
 				checks.execute(parent, api)
-			self.assertEqual(outcome(parent, 'contracts-msrv')['status'], 'fail')
+			self.assertEqual(outcome(parent, 'rust-tests')['status'], 'fail')
 			self.assertEqual(outcome(parent, 'host-unprivileged')['status'], 'blocked')
 			summary = json.loads((parent.output / 'ci-summary.json').read_text(encoding='utf-8'))
-			self.assertEqual(next(stage for stage in summary['stages'] if stage['name'] == 'contracts-msrv')['status'],
+			self.assertEqual(next(stage for stage in summary['stages'] if stage['name'] == 'rust-tests')['status'],
 				'fail')
 			self.assertNotIn('detail', summary['stages'][0])
 			self.assertTrue(parent.metadata['incomplete'])
@@ -133,52 +133,44 @@ class AllChecksTests(unittest.TestCase):
 		output = io.StringIO()
 		with contextlib.redirect_stdout(output):
 			checks.print_plan(arguments(suite='ci'))
-		self.assertIn('20. host-unprivileged', output.getvalue())
+		self.assertIn('11. host-unprivileged', output.getvalue())
 		self.assertNotIn('[disposable host]', output.getvalue())
 		self.assertNotIn('[interactive]', output.getvalue())
 
-	def test_all_stages_have_boundaries_and_continue_after_a_failure(self):
+	def test_default_all_runs_each_automated_check_once_and_continues_after_failure(self):
 		with tempfile.TemporaryDirectory() as temporary:
-			parent, api, commands = fixture(temporary, failures=('contracts-msrv',))
+			parent, api, commands = fixture(temporary, failures=('rust-tests',))
 			output = io.StringIO()
 			with patch.object(checks.shutil, 'which', return_value='installed'), contextlib.redirect_stdout(output):
 				checks.execute(parent, api)
 			stages = parent.metadata['stages']
-			self.assertEqual(len(stages), 31)
-			self.assertEqual(outcome(parent, 'contracts-msrv')['status'], 'fail')
-			self.assertEqual(outcome(parent, 'site-links')['status'], 'pass')
-			self.assertEqual(outcome(parent, 'host-system')['status'], 'blocked')
-			self.assertTrue(parent.metadata['incomplete'])
+			self.assertEqual(len(stages), 12)
+			self.assertEqual(outcome(parent, 'rust-tests')['status'], 'fail')
+			self.assertEqual(outcome(parent, 'site')['status'], 'pass')
+			self.assertFalse(any(stage['name'] == 'host-system' for stage in stages))
 			for index, stage in enumerate(stages, 1):
-				start = f'BEGIN [{index:02d}/{len(stages):02d}] {stage["name"]}'
-				end = f'END [{index:02d}/{len(stages):02d}] {stage["name"]}: {stage["status"].upper()}'
-				self.assertIn(start, output.getvalue())
-				self.assertIn(end, output.getvalue())
-			self.assertIn('ALL TESTS: SUMMARY', (parent.output / 'boundaries.log').read_text())
-			self.assertLess(output.getvalue().index('END [06/31] contracts-msrv: FAIL'),
-				output.getvalue().index('BEGIN [07/31] cli-stable'))
+				self.assertIn(f'BEGIN [{index:02d}/{len(stages):02d}] {stage["name"]}', output.getvalue())
+				self.assertIn(f'END [{index:02d}/{len(stages):02d}] {stage["name"]}: '
+					f'{stage["status"].upper()}', output.getvalue())
+			self.assertIn('ALL TESTS: SUMMARY', output.getvalue())
+			self.assertFalse((parent.output / 'boundaries.log').exists())
+			self.assertLess(output.getvalue().index('END [04/12] rust-tests: FAIL'),
+				output.getvalue().index('BEGIN [05/12] doctests'))
 			api.host.assert_called_once()
 			self.assertFalse(api.host.call_args.args[0].args.system)
-			api.service.assert_not_called()
-			api.browser.assert_not_called()
-			api.desktop.assert_not_called()
-			by_name = {name: command for name, command, _, _, _ in commands}
-			for name in ('contracts-msrv', 'cli-stable', 'workspace-stable'):
-				command = by_name[name]
-				self.assertEqual(command[command.index('--success-output') + 1], 'immediate')
-				self.assertEqual(command[command.index('--failure-output') + 1], 'immediate')
-				self.assertEqual(command[command.index('--status-level') + 1], 'all')
-			self.assertIn('--run-ignored', by_name['contracts-msrv'])
-			self.assertIn('--no-fail-fast', by_name['contracts-msrv'])
-			self.assertIn('--all-features', by_name['cli-stable'])
-			self.assertIn('--all-features', by_name['workspace-stable'])
-			for name in ('rustdoc-msrv', 'rustdoc-cli-stable', 'rustdoc-workspace'):
+			for operation in (api.service, api.artifacts, api.browser, api.desktop):
+				operation.assert_not_called()
+			by_name = {name: command for name, command, *_ in commands}
+			self.assertEqual(len(by_name), len(commands))
+			for name in ('rust-tests', 'doctests'):
 				self.assertIn('--include-ignored', by_name[name])
 				self.assertIn('--show-output', by_name[name])
-			self.assertEqual(api.prepare_doctests.call_count, 3)
-			self.assertIn('testd-gui', by_name['msrv-gui'])
+				self.assertIn('--all-features', by_name[name])
+			self.assertIn('--no-fail-fast', by_name['rust-tests'])
+			self.assertIn('--exclude', by_name['msrv'])
 			self.assertIn('deny', by_name['dependency-audit'])
-			self.assertEqual(by_name['browser-server-fixtures'][-1], str(ROOT / 'tests/release/browser.test.ts'))
+			self.assertEqual(by_name['browser-server-fixtures'][-2:],
+				[str(ROOT / f'tests/release/{name}.test.ts') for name in ('browser', 'dashboard')])
 			site_env = next(env for name, _, _, env, _ in commands if name == 'site-build')
 			self.assertEqual(site_env['TESTD_SITE_OUT_DIR'], str(parent.output / 'site-dist'))
 			self.assertEqual(site_env['TESTD_DOCS_CACHE_DIR'], str(parent.output / 'site-cache'))
@@ -190,11 +182,25 @@ class AllChecksTests(unittest.TestCase):
 				return None if name == 'bun' else 'installed'
 			with patch.object(checks.shutil, 'which', side_effect=which), contextlib.redirect_stdout(io.StringIO()):
 				checks.execute(parent, api)
-			for name in ('browser-server-fixtures', 'site-check', 'site-build', 'site-links'):
+			for name in ('browser-server-fixtures', 'site'):
 				self.assertEqual(outcome(parent, name)['status'], 'blocked')
-			self.assertEqual(outcome(parent, 'rustdoc-msrv')['status'], 'pass')
+			self.assertEqual(outcome(parent, 'doctests')['status'], 'pass')
 			api.host.assert_called_once()
 			self.assertNotIn('site-build', [name for name, *_ in commands])
+
+	def test_missing_msrv_toolchain_blocks_its_stage_without_an_automatic_install(self):
+		with tempfile.TemporaryDirectory() as temporary:
+			parent, api, _ = fixture(temporary)
+			def toolchain(name):
+				if name == '1.90.0':
+					raise RuntimeError('install 1.90.0 first')
+			api.require_toolchain.side_effect = toolchain
+			with patch.object(checks.shutil, 'which', return_value='installed'), \
+				contextlib.redirect_stdout(io.StringIO()):
+				checks.execute(parent, api)
+			self.assertEqual(outcome(parent, 'msrv')['status'], 'blocked')
+			self.assertEqual(outcome(parent, 'rust-tests')['status'], 'pass')
+			self.assertTrue(parent.metadata['incomplete'])
 
 	def test_missing_site_dependencies_are_reported_without_installing_them(self):
 		with tempfile.TemporaryDirectory() as temporary:
@@ -203,9 +209,8 @@ class AllChecksTests(unittest.TestCase):
 				return None if path and name == 'vite' else 'installed'
 			with patch.object(checks.shutil, 'which', side_effect=which), contextlib.redirect_stdout(io.StringIO()):
 				checks.execute(parent, api)
-			self.assertEqual(outcome(parent, 'site-check')['status'], 'blocked')
-			self.assertEqual(outcome(parent, 'site-build')['status'], 'blocked')
-			self.assertIn('bun install --frozen-lockfile', outcome(parent, 'site-build')['detail'])
+			self.assertEqual(outcome(parent, 'site')['status'], 'blocked')
+			self.assertIn('bun install --frozen-lockfile', outcome(parent, 'site')['detail'])
 			self.assertEqual(outcome(parent, 'browser-server-fixtures')['status'], 'pass')
 			self.assertFalse(any('install' == argument for _, command, *_ in commands for argument in command))
 
@@ -214,8 +219,7 @@ class AllChecksTests(unittest.TestCase):
 			parent, api, commands = fixture(temporary, failures=('site-build',))
 			with patch.object(checks.shutil, 'which', return_value='installed'), contextlib.redirect_stdout(io.StringIO()):
 				checks.execute(parent, api)
-			self.assertEqual(outcome(parent, 'site-build')['status'], 'fail')
-			self.assertEqual(outcome(parent, 'site-links')['status'], 'blocked')
+			self.assertEqual(outcome(parent, 'site')['status'], 'fail')
 			self.assertNotIn('site-links', [name for name, *_ in commands])
 			api.host.assert_called_once()
 
@@ -228,7 +232,7 @@ class AllChecksTests(unittest.TestCase):
 				checks.execute(parent, api)
 			self.assertEqual(outcome(parent, 'cli-candidate')['status'], 'fail')
 			self.assertEqual(outcome(parent, 'host-unprivileged')['status'], 'blocked')
-			self.assertEqual(outcome(parent, 'platform-resolver-probe')['status'], 'not-applicable')
+			self.assertFalse(any(stage.system for stage in checks.AllChecks(parent, api, parent.args).stages()))
 			api.host.assert_not_called()
 
 	def test_interruption_marks_remaining_stages_blocked_with_boundaries(self):
@@ -249,31 +253,27 @@ class AllChecksTests(unittest.TestCase):
 			self.assertIn('END [02/02] second: BLOCKED', output.getvalue())
 			later.assert_not_called()
 
-	def test_doctest_logging_conflict_is_incomplete_but_does_not_skip_the_tests(self):
+	def test_native_doctest_failure_is_not_a_pass(self):
 		with tempfile.TemporaryDirectory() as temporary:
-			parent, api, commands = fixture(temporary)
-			api.prepare_doctests.side_effect = lambda project, report, env: (dict(env), None, 'custom runtool')
+			parent, api, _ = fixture(temporary, failures=('doctests',))
 			run = checks.AllChecks(parent, api, parent.args)
-			run.boundary_log = io.StringIO()
-			stage = next(item for item in run.stages() if item.name == 'rustdoc-msrv')
+			stage = next(item for item in run.stages() if item.name == 'doctests')
 			with patch.object(checks.shutil, 'which', return_value='installed'), contextlib.redirect_stdout(io.StringIO()):
 				run.stage(1, 1, stage)
-			self.assertEqual(outcome(parent, 'rustdoc-msrv')['status'], 'blocked')
-			self.assertIn('rustdoc-msrv', [name for name, *_ in commands])
-			api.replay_doctests.assert_not_called()
+			self.assertEqual(outcome(parent, 'doctests')['status'], 'fail')
+			self.assertEqual(outcome(parent, 'doctests')['checks'][0]['status'], 'fail')
 
-	def test_doctest_output_is_replayed_after_a_failed_command(self):
-		with tempfile.TemporaryDirectory() as temporary:
-			parent, api, _ = fixture(temporary, failures=('rustdoc-msrv',))
-			directory = pathlib.Path(temporary) / 'doctest-output'
-			api.prepare_doctests.side_effect = lambda project, report, env: (dict(env), directory, None)
-			run = checks.AllChecks(parent, api, parent.args)
-			run.boundary_log = io.StringIO()
-			stage = next(item for item in run.stages() if item.name == 'rustdoc-msrv')
-			with patch.object(checks.shutil, 'which', return_value='installed'), contextlib.redirect_stdout(io.StringIO()):
-				run.stage(1, 1, stage)
-			self.assertEqual(outcome(parent, 'rustdoc-msrv')['status'], 'fail')
-			api.replay_doctests.assert_called_once_with(directory)
+	def test_ignored_rust_tests_are_reported_as_incomplete(self):
+		for name in ('rust-tests', 'doctests'):
+			with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+				parent, api, _ = fixture(temporary, outputs={name:
+					'test result: ok. 1 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0s\n'})
+				run = checks.AllChecks(parent, api, parent.args)
+				stage = next(item for item in run.stages() if item.name == name)
+				with patch.object(checks.shutil, 'which', return_value='installed'), \
+					contextlib.redirect_stdout(io.StringIO()):
+					run.stage(1, 1, stage)
+				self.assertEqual(outcome(parent, name)['status'], 'blocked')
 
 	def test_fixture_skips_are_incomplete_not_a_pass(self):
 		with tempfile.TemporaryDirectory() as temporary:
@@ -311,7 +311,6 @@ class AllChecksTests(unittest.TestCase):
 					text = output.replace('\n', newline)
 					parent, api, _ = fixture(temporary, outputs={'release-script-fixtures': text})
 					run = checks.AllChecks(parent, api, parent.args)
-					run.boundary_log = io.StringIO()
 					stage = next(item for item in run.stages() if item.name == 'release-script-fixtures')
 					with contextlib.redirect_stdout(io.StringIO()):
 						run.stage(1, 1, stage)
@@ -324,7 +323,6 @@ class AllChecksTests(unittest.TestCase):
 				parent, api, _ = fixture(temporary, args=args)
 				run = checks.AllChecks(parent, api, args)
 				run.system_confirmed = True
-				run.boundary_log = io.StringIO()
 				stage = next(item for item in run.stages() if item.name == 'artifacts')
 				with patch.object(run, 'confirm', return_value=True), contextlib.redirect_stdout(io.StringIO()):
 					run.stage(1, 1, stage)
@@ -340,7 +338,6 @@ class AllChecksTests(unittest.TestCase):
 			api.artifacts.side_effect = lambda child: child.record('uninstall', 'skip', 'blocked: real cleanup not run')
 			run = checks.AllChecks(parent, api, args)
 			run.system_confirmed = True
-			run.boundary_log = io.StringIO()
 			artifact = next(item for item in run.stages() if item.name == 'artifacts')
 			later = next(item for item in run.stages() if item.name == 'system-restore-self-test')
 			with patch.object(run, 'confirm', return_value=True), contextlib.redirect_stdout(io.StringIO()):
@@ -355,7 +352,6 @@ class AllChecksTests(unittest.TestCase):
 			args = arguments(artifacts=pathlib.Path(temporary))
 			parent, api, _ = fixture(temporary, args=args)
 			run = checks.AllChecks(parent, api, args)
-			run.boundary_log = io.StringIO()
 			stage = next(item for item in run.stages() if item.name == 'artifacts')
 			with contextlib.redirect_stdout(io.StringIO()):
 				run.stage(1, 1, stage)
@@ -376,6 +372,16 @@ class AllChecksTests(unittest.TestCase):
 			api.service.assert_not_called()
 			api.desktop.assert_not_called()
 			api.browser.assert_not_called()
+
+	def test_sensitive_run_asks_for_disposable_host_confirmation_only_once(self):
+		with tempfile.TemporaryDirectory() as temporary:
+			parent, api, _ = fixture(temporary, args=arguments(system=True))
+			run = checks.AllChecks(parent, api, parent.args)
+			with patch.object(run, 'confirm', return_value=True) as confirm, patch.object(run, 'authorize'), \
+				patch.object(checks.shutil, 'which', return_value='installed'), \
+				contextlib.redirect_stdout(io.StringIO()):
+				run.execute()
+			confirm.assert_called_once()
 
 	def test_failed_system_stage_blocks_later_system_changes(self):
 		with tempfile.TemporaryDirectory() as temporary:
@@ -418,7 +424,6 @@ class AllChecksTests(unittest.TestCase):
 				outputs={'system-restore-self-test': 'usage: invalid arguments\n'})
 			run = checks.AllChecks(parent, api, args)
 			run.system_confirmed = True
-			run.boundary_log = io.StringIO()
 			stage = next(item for item in run.stages() if item.name == 'system-restore-self-test')
 			with patch.object(run, 'confirm', return_value=True), patch.object(run, 'authorize'), \
 					contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -446,7 +451,6 @@ class AllChecksTests(unittest.TestCase):
 			run = checks.AllChecks(parent, api, args)
 			run.cli = pathlib.Path('candidate')
 			run.system_confirmed = True
-			run.boundary_log = io.StringIO()
 			def host(child):
 				child.record('host-checks', 'pass', 'fixture checks')
 				child.record('host-coverage', 'skip', 'blocked: login not tested')
@@ -467,7 +471,6 @@ class AllChecksTests(unittest.TestCase):
 			run = checks.AllChecks(parent, api, args)
 			run.cli = pathlib.Path('candidate')
 			run.system_confirmed = True
-			run.boundary_log = io.StringIO()
 			def desktop(child):
 				child.record('GUI-01', 'fail', 'fixture observation')
 				child.record('fixture-shutdown', 'pass', 'fixture stopped')
@@ -489,7 +492,6 @@ class AllChecksTests(unittest.TestCase):
 				run = checks.AllChecks(parent, api, args)
 				run.cli = pathlib.Path('candidate')
 				run.system_confirmed = True
-				run.boundary_log = io.StringIO()
 				def action(child):
 					child.record('host-checks', 'pass', 'fixture checks')
 					child.record('system-restore', 'pass', 'scoped fixture restore')
@@ -513,7 +515,6 @@ class AllChecksTests(unittest.TestCase):
 			run = checks.AllChecks(parent, api, args)
 			run.cli = pathlib.Path('candidate')
 			run.system_confirmed = True
-			run.boundary_log = io.StringIO()
 			api.check_ports.side_effect = RuntimeError('fixture port is in use')
 			stage = next(item for item in run.stages() if item.name == 'browser')
 			with patch.object(run, 'confirm', return_value=True), contextlib.redirect_stdout(io.StringIO()), \
@@ -524,14 +525,13 @@ class AllChecksTests(unittest.TestCase):
 
 	def test_unowned_platform_integration_is_blocked_before_any_side_effect(self):
 		for system in ('Darwin', 'Windows'):
-			for name in ('host-system', 'desktop', 'platform-resolver-probe'):
+			for name in ('host-system', 'desktop'):
 				with self.subTest(system=system, stage=name), tempfile.TemporaryDirectory() as temporary:
 					args = arguments(system=True, interactive=True, app=pathlib.Path('app'))
 					parent, api, commands = fixture(temporary, args=args, system=system)
 					run = checks.AllChecks(parent, api, args)
 					run.cli = pathlib.Path('candidate')
 					run.system_confirmed = True
-					run.boundary_log = io.StringIO()
 					stage = next(item for item in run.stages() if item.name == name)
 					with patch.object(run, 'confirm', return_value=True), patch.object(run, 'authorize') as authorize, \
 							contextlib.redirect_stdout(io.StringIO()):
@@ -549,7 +549,6 @@ class AllChecksTests(unittest.TestCase):
 			parent, api, commands = fixture(temporary, args=args, system='Windows')
 			run = checks.AllChecks(parent, api, args)
 			run.system_confirmed = True
-			run.boundary_log = io.StringIO()
 			stage = next(item for item in run.stages() if item.name == 'system-restore-self-test')
 			with patch.object(run, 'authorize') as authorize, contextlib.redirect_stdout(io.StringIO()):
 				run.stage(1, 1, stage)
@@ -564,7 +563,6 @@ class AllChecksTests(unittest.TestCase):
 			run = checks.AllChecks(parent, api, args)
 			run.cli = pathlib.Path('candidate')
 			run.system_confirmed = True
-			run.boundary_log = io.StringIO()
 			def browser(child):
 				child.record('browser-fixture', 'pass', 'stopped')
 				child.record('host-fixture', 'pass', 'stopped')
@@ -576,14 +574,15 @@ class AllChecksTests(unittest.TestCase):
 			self.assertEqual(outcome(parent, 'browser')['status'], 'fail')
 			self.assertFalse(run.system_unsafe)
 
-	def test_windows_service_is_inapplicable_and_unsafe_probe_is_blocked(self):
+	def test_windows_service_is_inapplicable_before_any_side_effect(self):
 		with tempfile.TemporaryDirectory() as temporary:
-			parent, api, _ = fixture(temporary, system='Windows')
-			with patch.object(checks.shutil, 'which', return_value='installed'), contextlib.redirect_stdout(io.StringIO()):
-				checks.execute(parent, api)
+			parent, api, _ = fixture(temporary, args=arguments(system=True), system='Windows')
+			run = checks.AllChecks(parent, api, parent.args)
+			run.system_confirmed = True
+			stage = next(item for item in run.stages() if item.name == 'service-supervision')
+			with contextlib.redirect_stdout(io.StringIO()):
+				run.stage(1, 1, stage)
 			self.assertEqual(outcome(parent, 'service-supervision')['status'], 'not-applicable')
-			self.assertEqual(outcome(parent, 'platform-resolver-probe')['status'], 'blocked')
-			self.assertIn('unrelated matching rules', outcome(parent, 'platform-resolver-probe')['detail'])
 			api.service.assert_not_called()
 
 	def test_manual_checklist_requires_evidence_and_preserves_blocked_status(self):
@@ -617,12 +616,12 @@ class AllChecksTests(unittest.TestCase):
 				checks.Stage('blocked', blocked),
 				checks.Stage('later', command('later', "print('later output')")),
 			]
-			modules = {'all_checks': checks, 'doctest_output': doctest_output}
+			modules = {'all_checks': checks}
 			with patch.object(runner, 'helper', side_effect=lambda name: modules[name]), \
 				patch.object(checks, 'is_ephemeral', return_value=False), \
 				patch.object(checks.AllChecks, 'stages', return_value=stages), patch.object(runner.signal, 'signal'), \
 				contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-				self.assertEqual(runner.main(['all', '--report', str(report)]), 1)
+				self.assertEqual(runner.main(['all', '--report', str(report), '--verbose']), 1)
 			text = (report / 'run.log').read_text(encoding='utf-8')
 			for value in ('BEGIN [01/04] passing', 'passed output', 'END [01/04] passing: PASS',
 				'BEGIN [02/04] failing', 'failure output', 'END [02/04] failing: FAIL',
@@ -630,6 +629,10 @@ class AllChecksTests(unittest.TestCase):
 				self.assertIn(value, text)
 			self.assertEqual((report / '01-passing/00-passing.log').read_text(), 'passed output\n')
 			self.assertIn('failure output', (report / '02-failing/00-failing.log').read_text())
+			document = json.loads((report / 'report.json').read_text(encoding='utf-8'))
+			self.assertEqual(document['stages'][0]['checks'][0]['returncode'], 0)
+			self.assertEqual(document['stages'][1]['checks'][0]['returncode'], 7)
+			self.assertFalse(any(report.glob('*/report.json')))
 
 	def test_main_returns_failure_before_incomplete_and_never_treats_incomplete_as_success(self):
 		for suite in ('all', 'ci'):
@@ -644,14 +647,15 @@ class AllChecksTests(unittest.TestCase):
 							patch.object(runner.signal, 'signal'), patch.object(runner, 'match_redirected_encoding'):
 						self.assertEqual(runner.main([suite]), expected)
 
-	def test_plan_lists_all_stages_without_executing_them(self):
-		output = io.StringIO()
-		with contextlib.redirect_stdout(output):
-			checks.print_plan(arguments())
-		self.assertIn('01. format', output.getvalue())
-		self.assertIn('contracts-msrv', output.getvalue())
-		self.assertIn('desktop [disposable host] [interactive]', output.getvalue())
-		self.assertIn('platform-resolver-probe', output.getvalue())
+	def test_plan_lists_only_selected_stages_without_executing_them(self):
+		for optional in (False, True):
+			output = io.StringIO()
+			with self.subTest(optional=optional), contextlib.redirect_stdout(output):
+				checks.print_plan(arguments(system=optional, interactive=optional))
+			self.assertIn('01. format', output.getvalue())
+			self.assertIn('rust-tests', output.getvalue())
+			self.assertEqual('desktop [disposable host] [interactive]' in output.getvalue(), optional)
+			self.assertNotIn('platform-resolver-probe', output.getvalue())
 
 	def test_validation_never_reuses_a_report_and_resolves_candidate_paths(self):
 		with tempfile.TemporaryDirectory() as temporary:

@@ -11,7 +11,7 @@ Initialize the candidate and establish the OS resolver and trust path using the 
 Run the suite from the same revision as the candidate. The report path must not exist yet. If the suite attaches to an existing daemon, separately verify that it is the intended candidate; the runner does not prove that association. A non-default edge port must match the running host.
 
 ```sh
-python3 tests/release/run.py browser --bin /path/to/candidate-testd --report /path/to/new-persisted-report
+python3 tests/run.py browser --bin /path/to/candidate-testd --report /path/to/new-persisted-report
 # Add --edge-port 8443 when the candidate is configured to listen there
 ```
 

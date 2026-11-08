@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-spec = importlib.util.spec_from_file_location('provenance_runner', ROOT / 'tests/release/run.py')
+spec = importlib.util.spec_from_file_location('provenance_runner', ROOT / 'tests/run.py')
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 

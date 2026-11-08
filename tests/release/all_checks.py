@@ -48,7 +48,7 @@ def is_ephemeral(path):
 
 def validate(parser, args):
 	if platform.system() not in ('Linux', 'Darwin', 'Windows'):
-		parser.error('all and ci support Linux, macOS, and Windows')
+		parser.error('test profiles support Linux, macOS, and Windows')
 	if args.suite == 'ci' and (args.system or args.interactive or args.app or args.artifacts or
 			args.previous_bin or args.no_previous_release or getattr(args, 'browser_engine', None) or
 			getattr(args, 'service', False) or getattr(args, 'host', False)):
@@ -71,7 +71,7 @@ def validate(parser, args):
 		parser.error('all --system requires an interactive terminal and a new persisted --report')
 	base = args.report or pathlib.Path(os.environ.get('LOCALAPPDATA', pathlib.Path.home() / '.local/share'))
 	if is_ephemeral(base):
-		parser.error('all and ci need a persisted report outside temporary directories')
+		parser.error('test profiles need a persisted report outside temporary directories')
 	if args.report:
 		args.report = args.report.expanduser().absolute()
 		if args.report.exists() or args.report.is_symlink():
@@ -113,79 +113,78 @@ class AllChecks:
 		self.system_unsafe = False
 		self.interrupted = False
 		self.outcomes = []
-		self.boundary_log = None
 
 	def stages(self):
+		stages = self.automated_stages()
+		focused = {'contracts': 'rust-tests', 'audit': 'dependency-audit', 'site': 'site'}
+		if self.args.suite in focused:
+			return [stage for stage in stages if stage.name == focused[self.args.suite]]
+		if self.args.suite == 'ci':
+			# The dedicated CI site job runs the same website checks once, not per OS.
+			return [stage for stage in stages if stage.name != 'site']
+		return stages + (self.system_stages() if self.args.suite == 'all' else [])
+
+	def automated_stages(self):
 		cargo = ('cargo', 'rustup')
-		nextest = (*cargo, 'cargo-nextest')
-		output = self.api.NEXTEST_OUTPUT_OPTIONS if self.api else ()
-		stages = [
+		packages = ['--workspace', '--all-features', '--locked']
+		if not (getattr(self.args, 'gui', False) or self.args.suite == 'ci'):
+			packages += ['--exclude', 'testd-gui']
+		tests_toolchain = '+1.90.0' if self.args.suite == 'contracts' else '+stable'
+		ignored = r'(?m)^test result: .*?; (\d+) ignored;'
+		return [
 			Stage('format', self.command('format', ['cargo', '+stable', 'fmt', '--all', '--', '--check'], cargo)),
-			Stage('clippy-cli', self.command('clippy-cli', ['cargo', '+stable', 'clippy', '--workspace',
-				'--all-targets', '--exclude', 'testd-gui', '--locked', '--', '-D', 'warnings'], cargo)),
-			Stage('clippy-workspace', self.command('clippy-workspace', ['cargo', '+stable', 'clippy', '--workspace',
-				'--all-targets', '--all-features', '--locked', '--', '-D', 'warnings'], cargo)),
-			Stage('msrv-cli', self.command('msrv-cli', ['cargo', '+1.90.0', 'check', '--workspace', '--exclude',
-				'testd-gui', '--locked'], cargo)),
-			Stage('msrv-gui', self.command('msrv-gui', ['cargo', '+1.90.0', 'check', '-p', 'testd-gui', '--locked'], cargo)),
-			Stage('contracts-msrv', self.command('contracts-msrv', ['cargo', '+1.90.0', 'nextest', 'run',
-				'--workspace', '--exclude', 'testd-gui', '--locked', '--run-ignored', 'all', '--no-fail-fast', *output],
-				nextest, skip_pattern=r'\b(\d+) skipped\b')),
-			Stage('cli-stable', self.command('cli-stable', ['cargo', '+stable', 'nextest', 'run', '--workspace',
-				'--exclude', 'testd-gui', '--all-features', '--locked', '--run-ignored', 'all', '--no-fail-fast', *output],
-				nextest, skip_pattern=r'\b(\d+) skipped\b')),
-			Stage('workspace-stable', self.command('workspace-stable', ['cargo', '+stable', 'nextest', 'run',
-				'--workspace', '--all-features', '--locked', '--run-ignored', 'all', '--no-fail-fast', *output], nextest,
-				skip_pattern=r'\b(\d+) skipped\b')),
-			Stage('rustdoc-msrv', self.doctests('rustdoc-msrv', ['cargo', '+1.90.0', 'test', '--workspace',
-				'--exclude', 'testd-gui', '--doc', '--locked', '--', '--include-ignored', '--show-output'], cargo)),
-			Stage('rustdoc-cli-stable', self.doctests('rustdoc-cli-stable', ['cargo', '+stable', 'test', '--workspace',
-				'--exclude', 'testd-gui', '--all-features', '--doc', '--locked', '--', '--include-ignored', '--show-output'],
-				cargo)),
-			Stage('rustdoc-workspace', self.doctests('rustdoc-workspace', ['cargo', '+stable', 'test', '--workspace',
-				'--all-features', '--doc', '--locked', '--', '--include-ignored', '--show-output'], cargo)),
+			Stage('clippy', self.command('clippy', ['cargo', '+stable', 'clippy', *packages,
+				'--all-targets', '--', '-D', 'warnings'], cargo)),
+			Stage('msrv', self.command('msrv', ['cargo', '+1.90.0', 'check', *packages, '--all-targets'], cargo)),
+			Stage('rust-tests', self.command('rust-tests', ['cargo', tests_toolchain, 'test', *packages,
+				'--all-targets', '--no-fail-fast', '--', '--include-ignored', '--show-output'], cargo,
+				skip_pattern=ignored)),
+			Stage('doctests', self.command('doctests', ['cargo', '+stable', 'test', *packages,
+				'--doc', '--', '--include-ignored', '--show-output'], cargo, skip_pattern=ignored)),
 			Stage('release-script-fixtures', self.release_script_fixtures),
 			Stage('browser-server-fixtures', self.command('browser-server-fixtures', ['bun', '--no-install', 'test',
-				str(ROOT / 'tests/release/browser.test.ts')], ('bun',), 300, skip_pattern=r'(?m)^\s*(\d+) skip\b')),
+				str(ROOT / 'tests/release/browser.test.ts'), str(ROOT / 'tests/release/dashboard.test.ts')],
+				('bun',), 300, skip_pattern=r'(?m)^\s*(\d+) skip\b')),
 			Stage('dependency-audit', self.command('dependency-audit', ['cargo', '+stable', 'deny', '--workspace',
 				'--locked', 'check'], (*cargo, 'cargo-deny'))),
 			Stage('release-version', self.command('release-version', [sys.executable, 'scripts/release.py',
 				'verify-version'], (), 300)),
-			Stage('site-check', self.site_check),
-			Stage('site-build', self.site_build),
-			Stage('site-links', self.site_links),
+			Stage('site', self.site),
 			Stage('cli-candidate', self.candidate),
 			Stage('host-unprivileged', self.host),
-			Stage('artifacts', self.artifacts, system=True, precondition=self.artifacts_available,
-				checkpoint='Use a disposable host; this executes candidate binaries and extracted artifacts.'),
-			Stage('system-restore-self-test', self.system_self_test, system=True, precondition=self.self_test_available,
-				checkpoint='Use a clean disposable host. This writes real resolver and trust fixtures.'),
-			Stage('host-system', self.host_system, system=True, precondition=self.host_system_available,
-				checkpoint='Use a clean disposable host with no existing testd integration.'),
-			Stage('service-supervision', self.service, system=True, precondition=self.service_available,
-				checkpoint='Use a disposable user session; this starts and stops a test service.'),
-			Stage('desktop', self.desktop, system=True, interactive=True, precondition=self.desktop_available,
-				checkpoint='Use a fresh disposable user and the actual candidate app.'),
-			Stage('browser', self.browser, system=True, interactive=True, precondition=self.require_candidate,
-				checkpoint='Configure the candidate OS DNS and trust on a disposable host before continuing.'),
-			Stage('manual-browser', self.manual('tests/manual/browser.md'), system=True, interactive=True,
-				stop_on_failure=False, checkpoint='Complete the real-browser checks on the selected browser and host.'),
-			Stage('manual-system', self.manual('tests/manual/system-integration.md'), system=True, interactive=True,
-				stop_on_failure=False, checkpoint='Use the separately restored, synthetic system states required by the checklist.'),
-			Stage('manual-installation', self.manual('tests/manual/installation.md'), system=True, interactive=True,
-				stop_on_failure=False, checkpoint='Use disposable snapshots for the actual package and upgrade paths.'),
-			Stage('manual-network-sharing', self.manual('tests/manual/network-and-sharing.md'),
-				system=True, interactive=True, stop_on_failure=False,
-				checkpoint='Do not expose a listener or use a real provider without approval.'),
-			Stage('platform-resolver-probe', self.platform_probe, system=True, interactive=True,
-				precondition=self.probe_available,
-				checkpoint='Use a separate, clean disposable host; the macOS probe changes resolver and trust state.'),
 		]
-		return [stage for stage in stages if self.args.suite != 'ci' or not (stage.system or stage.interactive)]
+
+	def system_stages(self):
+		stages = []
+		if self.args.artifacts:
+			stages.append(Stage('artifacts', self.artifacts, system=True, precondition=self.artifacts_available,
+				checkpoint='This executes candidate binaries and extracted artifacts on the confirmed disposable host.'))
+		if self.args.system:
+			stages += [
+				Stage('system-restore-self-test', self.system_self_test, system=True,
+					precondition=self.self_test_available, checkpoint='This writes real resolver and trust fixtures.'),
+				Stage('host-system', self.host_system, system=True, precondition=self.host_system_available),
+				Stage('service-supervision', self.service, system=True, precondition=self.service_available),
+			]
+		if self.args.interactive:
+			stages += [
+				Stage('desktop', self.desktop, system=True, interactive=True, precondition=self.desktop_available),
+				Stage('browser', self.browser, system=True, interactive=True, precondition=self.require_candidate),
+			]
+			for name, path in [('manual-browser', 'browser.md'), ('manual-system', 'system-integration.md'),
+				('manual-installation', 'installation.md'), ('manual-network-sharing', 'network-and-sharing.md')]:
+				stages.append(Stage(name, self.manual(f'tests/manual/{path}'), system=True, interactive=True,
+					stop_on_failure=False, checkpoint='Use the separately restored hosts required by this checklist.'))
+		return stages
 
 	def command(self, name, argv, tools, timeout=1200, environment=None, skip_pattern=None):
 		def action(child):
 			self.require(*tools)
+			if self.api is not None and len(argv) > 1 and argv[1].startswith('+'):
+				try:
+					self.api.require_toolchain(argv[1][1:])
+				except RuntimeError as error:
+					raise Blocked(str(error)) from error
 			env = environment() if environment else None
 			output = child.command(name, argv, timeout, env=env)
 			if skip_pattern and any(int(value) for value in re.findall(skip_pattern, output)):
@@ -219,21 +218,6 @@ class AllChecks:
 		if missing:
 			raise Blocked(f'please install: {", ".join(missing)}')
 
-	def doctests(self, name, argv, tools):
-		def action(child):
-			self.require(*tools)
-			env, directory, reason = self.api.prepare_doctests(ROOT, child.output, os.environ)
-			if reason:
-				child.record('doctest-output', 'skip', f'blocked: {reason}')
-			try:
-				output = child.command(name, argv, 1200, env=env)
-			finally:
-				if directory is not None:
-					self.api.replay_doctests(directory)
-			if any(int(value) for value in re.findall(r'\b(\d+) ignored\b', output)):
-				child.record('coverage', 'skip', 'blocked: doctests were ignored; inspect the command log')
-		return action
-
 	def site_environment(self):
 		return {**os.environ, 'TESTD_SITE_OUT_DIR': str(self.run.output / 'site-dist'),
 			'TESTD_DOCS_CACHE_DIR': str(self.run.output / 'site-cache')}
@@ -243,6 +227,11 @@ class AllChecks:
 		bin_dir = str(ROOT / 'node_modules/.bin')
 		if any(not shutil.which(tool, path=bin_dir) for tool in ('tsc', 'vite', 'vitepress')):
 			raise Blocked('website dependencies are missing; run bun install --frozen-lockfile first')
+
+	def site(self, child):
+		self.site_check(child)
+		self.site_build(child)
+		self.site_links(child)
 
 	def site_check(self, child):
 		self.require_site_dependencies()
@@ -262,6 +251,10 @@ class AllChecks:
 	def candidate(self, child):
 		if self.args.bin is None:
 			self.require('cargo', 'rustup')
+			try:
+				self.api.require_toolchain('stable')
+			except RuntimeError as error:
+				raise Blocked(str(error)) from error
 		self.cli = self.api.binary(child)
 		self.run.metadata['candidate'] = {'path': str(self.cli), 'sha256': self.api.file_digest(self.cli)}
 		self.run.save()
@@ -275,10 +268,7 @@ class AllChecks:
 		child.args.bin = self.require_candidate()
 		child.args.system = False
 		child.args.service = False
-		if self.args.suite == 'ci':
-			self.api.host(child, scope='ci')
-		else:
-			self.api.host(child)
+		self.api.host(child, scope='ci')
 
 	def artifacts_available(self):
 		if not self.args.artifacts:
@@ -390,17 +380,6 @@ class AllChecks:
 				child.record(item, status, prefix + evidence)
 		return action
 
-	def probe_available(self):
-		if self.api.SYSTEM == 'Linux':
-			raise NotApplicable('the additional resolver probes are macOS- and Windows-specific')
-		if self.api.SYSTEM == 'Windows':
-			raise Blocked('the local NRPT probe is not tracked and can remove unrelated matching rules; '
-				'review its cleanup before running it')
-		raise Blocked('the macOS probe is disabled until resolver and trust ownership can be proven')
-
-	def platform_probe(self, child):
-		raise Blocked('resolver probes are unavailable until their cleanup proves ownership')
-
 	def confirm(self, message):
 		print(message, flush=True)
 		try:
@@ -420,15 +399,15 @@ class AllChecks:
 				raise Blocked('an earlier system stage failed or was incomplete; inspect recovery before continuing')
 		if stage.interactive and not self.args.interactive:
 			raise Blocked('requires --interactive and actual operator observations')
-		if stage.checkpoint and not self.confirm(stage.checkpoint):
-			raise Blocked('operator did not confirm this stage')
+		if stage.checkpoint:
+			print(stage.checkpoint, flush=True)
 
 	def child_run(self, index, stage):
 		args = copy.copy(self.args)
 		args.suite = stage.name
 		args.report = self.run.output / f'{index:02d}-{stage.name}'
 		args.include_git_diff = False
-		return self.api.Run(args)
+		return self.api.Run(args, parent=self.run)
 
 	def classify(self, child):
 		if any(item['status'] == 'fail' for item in child.results):
@@ -440,8 +419,6 @@ class AllChecks:
 
 	def boundary(self, text):
 		print(text, flush=True)
-		self.boundary_log.write(text + '\n')
-		self.boundary_log.flush()
 
 	def cleanup_verified(self, stage, child):
 		passed = {item['name'] for item in child.results if item['status'] == 'pass'}
@@ -455,8 +432,6 @@ class AllChecks:
 			cleanup = {'fixture-shutdown', 'system-owned-cleanup', 'system-restore'}
 			return {'fixture-shutdown', 'system-restore'}.issubset(passed) and not any(
 				item['name'] in cleanup and item['status'] != 'pass' for item in child.results)
-		if stage.name == 'platform-resolver-probe':
-			return 'system-restore' in passed
 		if stage.name == 'browser':
 			fixtures = [item for item in child.results if item['name'].startswith('host-fixture')]
 			return bool(fixtures) and all(item['status'] == 'pass' for item in fixtures) and 'browser-fixture' in passed
@@ -470,6 +445,9 @@ class AllChecks:
 		try:
 			self.check_stage(stage)
 			child = self.child_run(index, stage)
+			self.run.metadata['stages'] = [*self.outcomes,
+				{'name': stage.name, 'status': 'running', 'checks': child.results, 'metadata': child.metadata}]
+			self.run.save()
 			stage.action(child)
 			status, detail = self.classify(child)
 		except NotApplicable as error:
@@ -488,12 +466,14 @@ class AllChecks:
 				child.save()
 			except Exception as error:
 				status, detail = 'fail', f'could not save stage report: {error}'
-			detail = '; '.join(filter(None, [detail, f'report: {child.output / "report.json"}']))
+			detail = '; '.join(filter(None, [detail, f'logs: {child.output}']))
 		if stage.system and stage.stop_on_failure and child is not None and status in ('fail', 'blocked'):
 			if not self.cleanup_verified(stage, child):
 				self.system_unsafe = True
 		elapsed = time.monotonic() - started
-		self.outcomes.append({'name': stage.name, 'status': status, 'detail': detail, 'seconds': round(elapsed, 2)})
+		self.outcomes.append({'name': stage.name, 'status': status, 'detail': detail, 'seconds': round(elapsed, 2),
+			'checks': child.results if child is not None else [],
+			'metadata': child.metadata if child is not None else {}})
 		self.run.metadata['stages'] = self.outcomes
 		if status == 'blocked':
 			self.run.metadata['incomplete'] = True
@@ -504,7 +484,7 @@ class AllChecks:
 			self.boundary(f'========== END [{index:02d}/{total:02d}] {stage.name}: {status.upper()} ==========')
 
 	def summary(self):
-		label = 'CI' if self.args.suite == 'ci' else 'ALL'
+		label = self.args.suite.upper()
 		self.boundary(f'\n========== {label} TESTS: SUMMARY ==========')
 		for outcome in self.outcomes:
 			self.boundary(f'{outcome["status"].upper():14} {outcome["name"]}: {outcome["detail"]}')
@@ -514,7 +494,7 @@ class AllChecks:
 
 	def write_ci_summary(self):
 		# Full reports can contain fixture credentials and keys; publish only allowlisted status metadata.
-		summary = {name: self.run.metadata.get(name) for name in ('os', 'python', 'commit', 'dirty')}
+		summary = {name: self.run.metadata.get(name) for name in ('os', 'python', 'commit', 'dirty', 'scope')}
 		summary['suite'] = 'ci'
 		summary['stages'] = [{name: outcome[name] for name in ('name', 'status', 'seconds')}
 			for outcome in self.outcomes]
@@ -522,14 +502,18 @@ class AllChecks:
 		path.write_text(json.dumps(summary, indent=2) + '\n', encoding='utf-8')
 
 	def execute(self):
-		with (self.run.output / 'boundaries.log').open('x', encoding='utf-8') as self.boundary_log:
-			if self.args.system:
-				try:
-					self.system_confirmed = self.confirm('Confirm a disposable host with a persisted full-system snapshot. '
-						'Scoped runner snapshots do not replace the full backup.')
-				except KeyboardInterrupt:
-					self.interrupted = True
-			stages = self.stages()
-			for index, stage in enumerate(stages, 1):
-				self.stage(index, len(stages), stage)
-			self.summary()
+		stages = self.stages()
+		self.run.metadata['scope'] = {
+			'gui': getattr(self.args, 'gui', False) or self.args.suite == 'ci',
+			'system': self.args.system, 'interactive': self.args.interactive,
+			'artifacts': bool(self.args.artifacts), 'site': any(stage.name == 'site' for stage in stages),
+		}
+		if self.args.system:
+			try:
+				self.system_confirmed = self.confirm('Confirm a disposable host with a persisted full-system snapshot. '
+					'Scoped runner snapshots do not replace the full backup.')
+			except KeyboardInterrupt:
+				self.interrupted = True
+		for index, stage in enumerate(stages, 1):
+			self.stage(index, len(stages), stage)
+		self.summary()
