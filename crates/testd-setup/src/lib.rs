@@ -807,8 +807,8 @@ mod tests {
 	#[test]
 	fn macos_root_selection_leaves_other_installations_alone() {
 		let roots = vec![
-			MacRoot { hash: "ours".into(), pem: "our certificate\n".into() },
-			MacRoot { hash: "theirs".into(), pem: "another certificate\n".into() },
+			MacRoot { hash: "ours".into(), pem: "our certificate".into() },
+			MacRoot { hash: "theirs".into(), pem: "another certificate".into() },
 		];
 		let matched = matching_macos_roots(roots, "our certificate\r\n");
 		assert_eq!(matched.len(), 1);
