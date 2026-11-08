@@ -511,17 +511,6 @@ pub async fn register(entries: &[Entry], force: bool, config: ClientConfig) -> R
 	Ok(())
 }
 
-/// Deregister domains by name (one-shot, no reconnect).
-pub async fn deregister(domains: &[String], mut config: ClientConfig) -> Result<()> {
-	let (mut reader, mut writer) = connect(&mut config, &[]).await?;
-
-	for domain in domains {
-		request(&mut reader, &mut writer, &Request::Deregister { domain: domain.clone() }).await?;
-		eprintln!("[testd] [dereg] {domain}");
-	}
-	Ok(())
-}
-
 /// A name to register and the target it should proxy to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {

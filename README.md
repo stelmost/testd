@@ -231,7 +231,7 @@ Credentials live in `~/.config/testd/credentials/<profile>`, mode `0600`, or in 
 
 Issued tokens live on the node in `~/.config/testd/tokens.json`, mode `0600`, and cover only the names the operator approved. The file holds the token secrets and their labels; neither `testd tokens` nor the dashboard prints a secret.
 
-On the node itself no credential file is needed: when the `default` profile has no credential and every target is a loopback endpoint, leaf actions (`testd run`, `testd deregister`) use `[host] secret` from the host config. A named profile or a non-loopback target asks for a token instead, so the operator secret is never sent to another machine.
+On the node itself no credential file is needed: when the `default` profile has no credential and every target is a loopback endpoint, `testd run` uses `[host] secret` from the host config. A named profile or a non-loopback target asks for a token instead, so the operator secret is never sent to another machine.
 
 The managed Caddyfile is optional. `testd export-caddyfile` writes one and prints the import line for users who want to provide their own front end; the built-in edge does not need it.
 

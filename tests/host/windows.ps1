@@ -481,7 +481,7 @@ try {
 $AccessOut = Join-Path $TestHome 'access-request.out'
 $AccessErr = Join-Path $TestHome 'access-request.err'
 $AccessProc = Start-Process -FilePath $TestdBin -PassThru -NoNewWindow `
-	-ArgumentList 'deregister', 'app.testdproj', '--host', '127.0.0.1:7737', '--token-profile', 'access-test' `
+	-ArgumentList 'run', "access.testdproj:$AppPort", '--host', '127.0.0.1:7737', '--token-profile', 'access-test' `
 	-RedirectStandardOutput $AccessOut -RedirectStandardError $AccessErr
 if (Wait-Log 'requested access' $AccessErr 10) {
 	Pass 'a leaf with no credential requests a token'
@@ -504,7 +504,11 @@ if ($approve.ExitCode -eq 0) {
 } else {
 	Fail "testd approve delivers the token: $($approve.Text)"
 }
-for ($i = 0; $i -lt 50 -and $AccessProc -and -not $AccessProc.HasExited; $i++) { Start-Sleep -Milliseconds 200 }
+if (Wait-Log '\[reg\]' $AccessErr 10) {
+	Pass 'approved leaf registers its requested name'
+} else {
+	Fail 'approved leaf registers its requested name'
+}
 Stop-FixtureProcess $AccessProc
 $AccessProc = $null
 $credential = Join-Path $AppData 'testd\credentials\access-test'

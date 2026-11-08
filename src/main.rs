@@ -65,24 +65,6 @@ enum Command {
 		#[arg(last = true)]
 		command: Vec<String>,
 	},
-	/// Deregister one or more domains.
-	Deregister {
-		/// Domain names (without the TLD).
-		#[arg(required = true)]
-		domains: Vec<String>,
-		/// Single node address. Overrides the node profile.
-		#[arg(long, env = "TESTD_HOST")]
-		host: Option<String>,
-		/// Comma-separated node addresses. Overrides the node profile.
-		#[arg(long, env = "TESTD_HOSTS")]
-		hosts: Option<String>,
-		/// Credential profile. Overrides the project config.
-		#[arg(long)]
-		token_profile: Option<String>,
-		/// Node profile from `~/.config/testd/leaf.toml`.
-		#[arg(long, env = "TESTD_PROFILE")]
-		node_profile: Option<String>,
-	},
 	/// Run the host daemon in headless mode.
 	Host,
 	/// Print the authenticated URL for the local dashboard.
@@ -209,10 +191,6 @@ async fn main() -> anyhow::Result<()> {
 			} else {
 				testd_client::run(&entries, &command, force, config).await
 			}
-		},
-		Command::Deregister { domains, host, hosts, token_profile, node_profile } => {
-			let config = leaf_config(host, hosts, token_profile, node_profile)?;
-			testd_client::deregister(&domains, config).await
 		},
 		Command::Host => host::run().await,
 		Command::Dashboard => dashboard(),
@@ -900,7 +878,7 @@ fn explicit_hosts(host: Option<String>, hosts: Option<String>) -> Option<Vec<Str
 	(!hosts.is_empty()).then_some(hosts)
 }
 
-/// Load the leaf settings used by `run` and `deregister`.
+/// Load the leaf settings used by `run`.
 fn leaf_config(
 	host: Option<String>,
 	hosts: Option<String>,

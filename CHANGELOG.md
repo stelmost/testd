@@ -22,6 +22,7 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 
 ### Removed
 
+- The redundant `testd deregister` CLI command; registrations still end with their owning connection, and protocol-level deregistration remains available to that owner
 - Unused Caddy-trust and prefix-scope helpers, and the unused second product-site implementation
 
 ## [0.1.0-alpha] - 2026-11-03

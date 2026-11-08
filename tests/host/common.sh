@@ -237,7 +237,7 @@ check_registration() {
 	# A named profile with no credential asks for a token. The loopback address
 	# alone must not make the node's operator secret available to that profile.
 	local access_log="$TEST_HOME/access-request.log"
-	HOME="$TEST_HOME" "$TESTD_BIN" deregister app.testdproj --host 127.0.0.1:7737 \
+	HOME="$TEST_HOME" "$TESTD_BIN" run "access.testdproj:$APP_PORT" --host 127.0.0.1:7737 \
 		--token-profile access-test >"$access_log" 2>&1 &
 	local access_pid=$!
 	if wait_for_log 'requested access' "$access_log" 10; then
@@ -258,10 +258,11 @@ check_registration() {
 	else
 		fail 'testd approve delivers the token'
 	fi
-	for _ in $(seq 1 50); do
-		kill -0 "$access_pid" 2>/dev/null || break
-		sleep 0.2
-	done
+	if wait_for_log '\[reg\]' "$access_log" 10; then
+		pass 'approved leaf registers its requested name'
+	else
+		fail 'approved leaf registers its requested name'
+	fi
 	kill "$access_pid" 2>/dev/null || true
 	wait "$access_pid" 2>/dev/null || true
 	if [ -s "$TEST_HOME/.config/testd/credentials/access-test" ]; then

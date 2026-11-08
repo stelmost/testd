@@ -64,14 +64,6 @@ Operator actions differ:
 
 Stop and Delete are dashboard actions. Revoke is `testd tokens --revoke <id>` or the dashboard's token card.
 
-To remove registrations without stopping a process, use a one-shot command:
-
-```sh
-testd deregister app.example api.example
-```
-
-This releases the names from the host but leaves the token and grants in place.
-
 To take names owned by another connection, use `--force`:
 
 ```sh

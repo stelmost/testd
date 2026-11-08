@@ -327,39 +327,58 @@ fn run_warns_about_single_label_names_before_connecting() {
 }
 
 #[test]
-fn a_leaf_without_a_credential_requests_one_and_saves_it() {
-	use std::io::{BufRead, BufReader, Write};
-	use std::net::TcpListener;
+fn deregister_is_not_a_cli_command() {
+	let home = TempDir::new().unwrap();
+	let help = testd(home.path(), &["--help"]);
+	assert!(help.status.success());
+	assert!(
+		!String::from_utf8_lossy(&help.stdout)
+			.lines()
+			.any(|line| line.split_whitespace().next() == Some("deregister"))
+	);
+	let removed = testd(home.path(), &["deregister", "app"]);
+	assert_eq!(removed.status.code(), Some(2));
+	assert!(String::from_utf8_lossy(&removed.stderr).contains("unrecognized subcommand"));
+}
+
+#[tokio::test]
+async fn a_leaf_without_a_credential_requests_one_and_saves_it() {
+	use testd_core::protocol::{Auth, Request, Response, recv, send};
+	use tokio::io::BufReader;
+	use tokio::net::TcpListener;
 
 	let home = TempDir::new().unwrap();
-	let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+	let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
 	let addr = listener.local_addr().unwrap();
-	let host = std::thread::spawn(move || {
-		let (mut stream, _) = listener.accept().unwrap();
-		let mut reader = BufReader::new(stream.try_clone().unwrap());
-
-		let mut line = String::new();
-		reader.read_line(&mut line).unwrap();
-		let auth: serde_json::Value = serde_json::from_str(&line).unwrap();
-		assert_eq!(auth["token"].as_str().unwrap_or_default(), "");
-		assert!(auth["request_token"]["label"].as_str().is_some_and(|label| !label.is_empty()));
-		assert_eq!(auth["request_token"]["names"], serde_json::json!([]));
-
-		stream.write_all(b"{\"type\":\"Pending\",\"id\":\"req-1\"}\n").unwrap();
-		stream.write_all(b"{\"type\":\"Token\",\"token\":\"issued-token\"}\n").unwrap();
-
-		line.clear();
-		reader.read_line(&mut line).unwrap();
-		let request: serde_json::Value = serde_json::from_str(&line).unwrap();
-		assert_eq!(request["type"], "Deregister");
-		assert_eq!(request["domain"], "app");
-		stream.write_all(b"{\"type\":\"Ok\"}\n").unwrap();
+	let host = tokio::spawn(async move {
+		let (stream, _) = listener.accept().await.unwrap();
+		let (reader, mut writer) = stream.into_split();
+		let mut reader = BufReader::new(reader);
+		let auth: Auth = recv(&mut reader).await.unwrap().unwrap();
+		assert!(auth.token.is_empty());
+		let request = auth.request_token.unwrap();
+		assert!(!request.label.is_empty());
+		assert_eq!(request.names, ["app"]);
+		send(&mut writer, &Response::Pending { id: "req-1".into() }).await.unwrap();
+		send(&mut writer, &Response::Token { token: "issued-token".into() })
+			.await
+			.unwrap();
+		let request: Request = recv(&mut reader).await.unwrap().unwrap();
+		assert!(matches!(request, Request::Register { domain, target, .. } if domain == "app" && target == "3000"));
+		send(&mut writer, &Response::Ok).await.unwrap();
+		send(&mut writer, &Response::Stopped { domain: "app.test".into() })
+			.await
+			.unwrap();
 	});
-
-	let out = testd(home.path(), &["deregister", "app", "--host", &addr.to_string()]);
+	let mut command =
+		tokio::process::Command::from(testd_command(home.path(), &["run", "app:3000", "--host", &addr.to_string()]));
+	command.kill_on_drop(true);
+	let out = tokio::time::timeout(std::time::Duration::from_secs(5), command.output())
+		.await
+		.expect("leaf did not stop after the host stopped it")
+		.unwrap();
 	assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-	host.join().expect("fake host completed");
-
+	host.await.expect("fake host completed");
 	let credential = config_dir(home.path()).join("credentials/default");
 	assert_eq!(std::fs::read_to_string(&credential).unwrap().trim(), "issued-token");
 }

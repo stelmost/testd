@@ -31,7 +31,6 @@ testd <command> [options]
 |---|---|
 | `init` | Prepare this machine as a host; idempotent |
 | `run` | Register names, optionally wrap a command, deregister on exit |
-| `deregister` | Release names without stopping a process |
 | `host` | Run the host daemon in the foreground |
 | `dashboard` | Print the authenticated local dashboard URL |
 | `url` | Handle a `testd://` action |
@@ -79,15 +78,6 @@ Entries are `:port`, `name:port`, or `host:name:port`. A trailing `.test` on a n
 | `--node-profile <name>` | Node profile from `leaf.toml`. Env: `TESTD_PROFILE` |
 
 `--host` and `--hosts` entries without a port get `:7737`. Addresses from the environment or `leaf.toml` must include a port.
-
-### deregister
-
-```text
-testd deregister <domain>... [--host <addr>] [--hosts <list>]
-                             [--token-profile <name>] [--node-profile <name>]
-```
-
-Connects to the host and releases the named registrations. The token and its grants remain. Accepts the same host and profile options as `run`.
 
 ### host
 
@@ -184,11 +174,11 @@ Uninstall is blocked on macOS and Windows until resolver and trust ownership can
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `TESTD_HOST` | `run`, `deregister`, tray | One host endpoint, `host:port` |
-| `TESTD_HOSTS` | `run`, `deregister`, tray | Comma-separated `host:port` endpoints |
-| `TESTD_PROFILE` | `run`, `deregister` | Node profile name |
-| `TESTD_TOKEN` | `run`, `deregister` | Credential override; skips the credential file |
-| `TESTD_TOKEN_PROFILE` | `run`, `deregister` | Token profile name |
+| `TESTD_HOST` | `run`, tray | One host endpoint, `host:port` |
+| `TESTD_HOSTS` | `run`, tray | Comma-separated `host:port` endpoints |
+| `TESTD_PROFILE` | `run` | Node profile name |
+| `TESTD_TOKEN` | `run` | Credential override; skips the credential file |
+| `TESTD_TOKEN_PROFILE` | `run` | Token profile name |
 | `TESTD_CADDYFILE` | `init` | Global Caddyfile path |
 | `TESTD_YES` | `init` | Same as `--yes` |
 | `TESTD_TUNNEL_PROVIDER` | `host` | Default tunnel provider |
