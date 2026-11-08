@@ -167,6 +167,11 @@ class ReleaseTests(unittest.TestCase):
 					self.assertIn(f'{root}/tests:/src/tests:ro{suffix}', result.stdout.splitlines())
 					self.assertIn('/src/sites/bin/entrypoint.sh', result.stdout.splitlines())
 
+	def test_root_typescript_config_checks_the_relocated_link_checker(self):
+		config = json.loads((ROOT / 'tsconfig.json').read_text(encoding='utf-8'))
+		self.assertIn('tests/check-links.ts', config['include'])
+		self.assertTrue((ROOT / 'tests/check-links.ts').is_file())
+
 	@unittest.skipUnless(shutil.which('bun'), 'Bun is not installed')
 	def test_link_checker_uses_the_isolated_site_output(self):
 		with tempfile.TemporaryDirectory() as temporary:
@@ -2616,6 +2621,16 @@ class TranscriptTests(unittest.TestCase):
 		args = SimpleNamespace(report=pathlib.Path(directory) / 'report', suite='fixture', verbose=True)
 		with redirect_stdout(io.StringIO()):
 			return runner.Run(args)
+
+	def test_transcript_announces_the_report_path_once(self):
+		with tempfile.TemporaryDirectory() as directory:
+			run = self.create_run(directory)
+			stdout = io.StringIO()
+			with redirect_stdout(stdout):
+				with runner.run_transcript(run):
+					pass
+			self.assertEqual(stdout.getvalue(), f'Report: {run.output}\n')
+			self.assertEqual((run.output / 'run.log').read_text().count('Report:'), 1)
 
 	def test_report_updates_leave_no_pending_file(self):
 		with tempfile.TemporaryDirectory() as directory:

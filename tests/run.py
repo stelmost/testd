@@ -166,14 +166,13 @@ def run_transcript(run):
 	"""Capture runner output without redirecting the operator's stdin."""
 	path = run.output / 'run.log'
 	with path.open('x', encoding=ENCODING, errors='backslashreplace', newline='') as transcript:
-		transcript.write(f'Report: {run.output}\n')
-		transcript.flush()
 		original_stdout, original_stderr = sys.stdout, sys.stderr
 		lock = threading.RLock()
 		stdout = LoggedStream(original_stdout, transcript, lock)
 		stderr = LoggedStream(original_stderr, transcript, lock)
 		try:
 			sys.stdout, sys.stderr = stdout, stderr
+			print(f'Report: {run.output}', flush=True)
 			run.metadata['transcript'] = str(path)
 			run.save()
 			yield
@@ -546,7 +545,7 @@ def record_host_coverage(run, text, *, scope='host'):
 			'launch-at-login entry not validated against the candidate ('))]
 		uncovered = [reason for reason in uncovered if reason not in desktop]
 		if desktop:
-			run.record('host-desktop-coverage', 'skip', 'not applicable: ci excludes actual tray and login validation')
+			run.record('host-desktop-coverage', 'skip', 'not applicable: automated checks exclude actual tray and login validation')
 	if uncovered:
 		run.metadata['incomplete'] = True
 		run.record('host-coverage', 'skip', 'blocked: ' + '; '.join(uncovered))
