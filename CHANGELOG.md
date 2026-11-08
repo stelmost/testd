@@ -12,6 +12,11 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 
 ### Fixed
 
+- Quick launches save the project directory and show captured output, failed probes, and unsuccessful command exits
+- Process cleanup includes descendants after their parent exits; service termination stops wrapped commands, and daemon shutdown stops owned shares
+- Busy registration reads no longer refuse live HTTPS names, and trusted external fronts preserve the browser's HTTPS scheme
+- Specific network intake binds keep a loopback dashboard and local launches; certificate status refreshes while the dashboard stays open
+- macOS resolver setup leaves conflicting files untouched, tray startup failures show recovery instructions, and setup repair buttons keep their labels
 - Name-grant deletion and registration share a lock, preventing a waiting registration from restoring withdrawn access
 - Private state is replaced atomically; failed quick-launch edits preserve live definitions, and unreadable launch files stop startup rather than being overwritten
 - macOS certificate actions preserve other installations' roots, and Windows resolver setup refuses conflicting unowned rules

@@ -382,9 +382,9 @@ fn startup_error_script(error: &str) -> String {
 	))
 	.unwrap();
 	format!(
-		"document.documentElement.lang = 'en'; document.title = 'testd: startup failed';\n\
+		"(() => {{ document.documentElement.lang = 'en'; document.title = 'testd: startup failed';\n\
 		const style = document.createElement('style'); style.textContent = {css}; document.head.append(style);\n\
-		document.body.innerHTML = {page}; document.getElementById('startup-error').textContent = {message};"
+		document.body.innerHTML = {page}; document.getElementById('startup-error').textContent = {message}; }})();"
 	)
 }
 

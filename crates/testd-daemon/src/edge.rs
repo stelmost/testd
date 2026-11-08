@@ -187,12 +187,6 @@ struct CertStore {
 	cache: Mutex<HashMap<String, (Arc<rustls::sign::CertifiedKey>, Instant)>>,
 }
 
-impl std::fmt::Debug for CertStore {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.debug_struct("CertStore").field("tld", &self.tld).finish_non_exhaustive()
-	}
-}
-
 impl CertStore {
 	fn new(ca: Arc<Ca>, tld: String, registrations: Registrations) -> Self {
 		Self::with_cache_duration(ca, tld, leaf_renewal_after(), registrations)
