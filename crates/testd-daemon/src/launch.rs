@@ -116,31 +116,24 @@ pub struct LaunchBook {
 }
 
 impl LaunchBook {
-	pub fn load() -> Self {
+	pub fn load() -> std::io::Result<Self> {
 		Self::load_from(path())
 	}
 
-	fn load_from(path: PathBuf) -> Self {
+	fn load_from(path: PathBuf) -> std::io::Result<Self> {
 		let definitions = match std::fs::read(&path) {
-			Ok(data) => match serde_json::from_slice::<Vec<LaunchDefinition>>(&data) {
-				Ok(definitions) => definitions,
-				Err(e) => {
-					eprintln!("[warn]   could not parse {}: {e}", path.display());
-					Vec::new()
-				},
-			},
-			Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-			Err(e) => {
-				eprintln!("[warn]   could not read {}: {e}", path.display());
-				Vec::new()
-			},
+			Ok(data) => serde_json::from_slice::<Vec<LaunchDefinition>>(&data).map_err(|error| {
+				std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{}: {error}", path.display()))
+			})?,
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+			Err(error) => return Err(error),
 		};
-		Self {
+		Ok(Self {
 			definitions: Mutex::new(definitions),
 			running: Mutex::new(HashMap::new()),
 			path,
 			revision: watch::channel(0).0,
-		}
+		})
 	}
 
 	/// Any change to launch definitions or live state, for live frontends.
@@ -152,20 +145,13 @@ impl LaunchBook {
 		self.revision.send_modify(|revision| *revision = revision.wrapping_add(1));
 	}
 
-	fn save(&self) -> Result<(), String> {
-		let definitions = self.definitions.lock().expect("launch definitions poisoned").clone();
-		let data = serde_json::to_vec_pretty(&definitions).map_err(|e| e.to_string())?;
+	fn save(&self, definitions: &[LaunchDefinition]) -> Result<(), String> {
+		let data = serde_json::to_vec_pretty(definitions).map_err(|e| e.to_string())?;
 		let path = &self.path;
 		if let Some(parent) = path.parent() {
 			std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
 		}
-		let tmp = path.with_extension("json.tmp");
-		write_private(&tmp, &data).map_err(|e| e.to_string())?;
-		#[cfg(windows)]
-		if path.exists() {
-			std::fs::remove_file(path).map_err(|e| e.to_string())?;
-		}
-		std::fs::rename(tmp, path).map_err(|e| e.to_string())
+		write_private(path, &data).map_err(|e| e.to_string())
 	}
 
 	pub fn upsert(&self, mut definition: LaunchDefinition) -> Result<LaunchDefinition, String> {
@@ -192,12 +178,14 @@ impl LaunchBook {
 		}
 
 		let mut definitions = self.definitions.lock().expect("launch definitions poisoned");
-		match definitions.iter_mut().find(|saved| saved.id == definition.id) {
+		let mut replacement = definitions.clone();
+		match replacement.iter_mut().find(|saved| saved.id == definition.id) {
 			Some(saved) => *saved = definition.clone(),
-			None => definitions.push(definition.clone()),
+			None => replacement.push(definition.clone()),
 		}
+		self.save(&replacement)?;
+		*definitions = replacement;
 		drop(definitions);
-		self.save()?;
 		self.bump();
 		Ok(definition)
 	}
@@ -210,13 +198,13 @@ impl LaunchBook {
 		{
 			return Err("stop the launch before deleting it".into());
 		}
-		self.definitions
-			.lock()
-			.expect("launch definitions poisoned")
-			.retain(|saved| saved.id != id);
+		let mut definitions = self.definitions.lock().expect("launch definitions poisoned");
+		let replacement: Vec<_> = definitions.iter().filter(|saved| saved.id != id).cloned().collect();
+		self.save(&replacement)?;
+		*definitions = replacement;
 		running.remove(id);
+		drop(definitions);
 		drop(running);
-		self.save()?;
 		self.bump();
 		Ok(())
 	}
@@ -503,6 +491,43 @@ mod tests {
 		let mut duplicate = definition("one");
 		duplicate.entries.push(duplicate.entries[0].clone());
 		assert!(book.upsert(duplicate).is_err());
+	}
+
+	#[test]
+	fn failed_saves_and_deletes_keep_live_definitions() {
+		let dir = tempfile::tempdir().unwrap();
+		let book = book(dir.path().join("missing").join("launches.json"));
+		book.definitions.lock().unwrap().push(definition("one"));
+		std::fs::write(dir.path().join("missing"), b"not a directory").unwrap();
+		let mut replacement = definition("one");
+		replacement.label = "unsaved".into();
+		assert!(book.upsert(replacement).is_err());
+		assert_eq!(book.list()[0].definition.label, "app");
+		assert!(book.delete("one").is_err());
+		assert_eq!(book.list().len(), 1);
+	}
+
+	#[test]
+	fn corrupt_launch_files_are_not_replaced_with_empty_books() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("launches.json");
+		std::fs::write(&path, b"invalid JSON").unwrap();
+		assert!(LaunchBook::load_from(path.clone()).is_err());
+		assert_eq!(std::fs::read(path).unwrap(), b"invalid JSON");
+	}
+
+	#[test]
+	fn concurrent_saves_keep_every_definition() {
+		let dir = tempfile::tempdir().unwrap();
+		let book = Arc::new(book(dir.path().join("launches.json")));
+		std::thread::scope(|scope| {
+			for index in 0..16 {
+				let book = Arc::clone(&book);
+				scope.spawn(move || book.upsert(definition(&index.to_string())).unwrap());
+			}
+		});
+		assert_eq!(book.list().len(), 16);
+		assert_eq!(LaunchBook::load_from(book.path.clone()).unwrap().list().len(), 16);
 	}
 
 	fn reserve_run(book: &LaunchBook, phase: RunPhase) -> (Arc<Mutex<RunState>>, mpsc::Receiver<()>) {

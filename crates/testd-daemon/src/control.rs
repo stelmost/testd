@@ -433,11 +433,7 @@ fn write_control_file(path: &Path, addr: SocketAddr, client_addr: SocketAddr, to
 		ControlFile { addr: addr.to_string(), token: token.to_owned(), client_addr: Some(client_addr.to_string()) };
 	let data = serde_json::to_vec(&control).map_err(invalid_data)?;
 
-	// Write then rename so a handler never reads a partial file. The temp file
-	// carries the token and must be private from the moment it is created.
-	let tmp = path.with_extension("tmp");
-	write_private(&tmp, &data)?;
-	std::fs::rename(&tmp, path)
+	write_private(path, &data)
 }
 
 async fn accept_loop(

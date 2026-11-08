@@ -73,7 +73,7 @@ impl Daemon {
 
 		let access = Arc::new(Access::load_default()?);
 		let mut engine = HostEngine::new(config.clone(), Arc::clone(&resolver), Arc::clone(&access));
-		let launches = Arc::new(LaunchBook::load());
+		let launches = Arc::new(LaunchBook::load()?);
 		engine.set_launches(Arc::clone(&launches));
 
 		let root = config

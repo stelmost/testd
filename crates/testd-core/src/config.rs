@@ -327,6 +327,34 @@ mod tests {
 	}
 
 	#[test]
+	fn failed_private_writes_preserve_the_previous_file() {
+		use std::io::Write;
+
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("config.toml");
+		write_private(&path, b"previous").unwrap();
+		let result = write_private_with(&path, |file| {
+			file.write_all(b"partial")?;
+			Err(io::Error::other("fixture write failure"))
+		});
+		assert!(result.is_err());
+		assert_eq!(std::fs::read(&path).unwrap(), b"previous");
+		assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn private_writes_refuse_symlinks() {
+		let dir = tempfile::tempdir().unwrap();
+		let target = dir.path().join("target");
+		let link = dir.path().join("link");
+		std::fs::write(&target, b"previous").unwrap();
+		std::os::unix::fs::symlink(&target, &link).unwrap();
+		assert!(write_private(&link, b"replacement").is_err());
+		assert_eq!(std::fs::read(target).unwrap(), b"previous");
+	}
+
+	#[test]
 	fn config_template_escapes_windows_paths() {
 		let caddyfile = r"C:\Users\me\AppData\Roaming\caddy\Caddyfile";
 		let rendered = render_config(caddyfile, Some("s3cret"));
@@ -489,27 +517,36 @@ pub fn validate_profile_name(profile: &str) -> Result<(), ConfigError> {
 /// Write a file readable only by the current user. The config contains the
 /// secret, so it must not be world-readable on a multi-user machine.
 pub fn write_private(path: &Path, content: &[u8]) -> io::Result<()> {
+	write_private_with(path, |file| {
+		use std::io::Write;
+		file.write_all(content)
+	})
+}
+
+fn write_private_with(path: &Path, write: impl FnOnce(&mut std::fs::File) -> io::Result<()>) -> io::Result<()> {
+	match std::fs::symlink_metadata(path) {
+		Ok(metadata) if !metadata.is_file() => {
+			return Err(io::Error::new(io::ErrorKind::InvalidInput, "private file must be a regular file"));
+		},
+		Ok(_) => {},
+		Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+		Err(error) => return Err(error),
+	}
+	let parent = path
+		.parent()
+		.filter(|parent| !parent.as_os_str().is_empty())
+		.unwrap_or(Path::new("."));
+	let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
 	#[cfg(unix)]
 	{
-		use std::io::Write;
-		use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-
-		let mut file = std::fs::OpenOptions::new()
-			.write(true)
-			.create(true)
-			.truncate(true)
-			.mode(0o600)
-			.custom_flags(libc::O_NOFOLLOW)
-			.open(path)?;
-		// `mode` applies only when the file is created; repair older files too.
-		file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-		file.write_all(content)?;
-		file.sync_all()?;
+		use std::os::unix::fs::PermissionsExt;
+		temporary.as_file().set_permissions(std::fs::Permissions::from_mode(0o600))?;
 	}
-	#[cfg(not(unix))]
-	{
-		std::fs::write(path, content)?;
-	}
+	write(temporary.as_file_mut())?;
+	temporary.as_file().sync_all()?;
+	temporary.persist(path).map_err(|error| error.error)?;
+	#[cfg(unix)]
+	std::fs::File::open(parent)?.sync_all()?;
 	Ok(())
 }
 

@@ -452,10 +452,7 @@ impl Access {
 		let mut data = serde_json::to_vec_pretty(&file).map_err(io::Error::other)?;
 		data.push(b'\n');
 
-		// Write then rename so a crash never leaves a half-written token store.
-		let tmp = self.path.with_extension("json.tmp");
-		write_private(&tmp, &data)?;
-		std::fs::rename(&tmp, &self.path)
+		write_private(&self.path, &data)
 	}
 
 	/// Path of the token store, for diagnostics and tests.
