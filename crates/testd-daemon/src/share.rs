@@ -119,15 +119,6 @@ impl Provider {
 		}
 	}
 
-	/// Arguments that remove the share again. `None` means killing the child.
-	fn stop_args(self) -> Option<Vec<String>> {
-		match self {
-			Provider::Cloudflared | Provider::Ngrok => None,
-			// Scoped to this serve port, so other serve entries are left alone.
-			Provider::Tailscale => Some(vec!["serve".into(), "--https=443".into(), "off".into()]),
-		}
-	}
-
 	/// The public URL in a provider log line.
 	fn url_from_line(self, line: &str) -> Option<String> {
 		// Stop at whitespace, a quote, a pipe, or the first path segment; providers
@@ -189,8 +180,7 @@ pub struct Shares {
 
 #[derive(Default)]
 struct ShareState {
-	active: BTreeMap<String, Active>,
-	pending: BTreeMap<String, Pending>,
+	entries: BTreeMap<String, ShareLifecycle>,
 	claim_changes: BTreeMap<String, Vec<Arc<()>>>,
 	is_shutting_down: bool,
 }
@@ -227,9 +217,48 @@ struct Pending {
 	finished: watch::Sender<PendingResult>,
 }
 
+enum ShareLifecycle {
+	Starting(Pending),
+	Active(Active),
+	/* Resources remain owned by startup or cleanup tasks until they confirm release. */
+	Stopping(Pending),
+	/* Keep the name and provider reserved when external cleanup cannot be verified. */
+	CleanupUnverified(Pending),
+}
+
+impl ShareLifecycle {
+	fn pending(&self) -> Option<&Pending> {
+		match self {
+			Self::Starting(pending) | Self::Stopping(pending) | Self::CleanupUnverified(pending) => Some(pending),
+			Self::Active(_) => None,
+		}
+	}
+
+	fn into_pending(self) -> Option<Pending> {
+		match self {
+			Self::Starting(pending) | Self::Stopping(pending) | Self::CleanupUnverified(pending) => Some(pending),
+			Self::Active(_) => None,
+		}
+	}
+
+	fn binding(&self) -> &ClaimBinding {
+		match self {
+			Self::Active(share) => &share.binding,
+			Self::Starting(pending) | Self::Stopping(pending) | Self::CleanupUnverified(pending) => &pending.binding,
+		}
+	}
+
+	fn provider(&self) -> Provider {
+		match self {
+			Self::Active(share) => share.provider,
+			Self::Starting(pending) | Self::Stopping(pending) | Self::CleanupUnverified(pending) => pending.provider,
+		}
+	}
+}
+
 #[derive(Default)]
 struct StopBatch {
-	active: Vec<(String, Active)>,
+	stopping: Vec<(String, StoppingShare)>,
 	waiting: Vec<watch::Receiver<PendingResult>>,
 	errors: Vec<String>,
 }
@@ -298,9 +327,9 @@ impl ClaimTransition<'_> {
 			.push(Arc::clone(&identity));
 		let names: Vec<String> = self
 			.state
-			.pending
+			.entries
 			.iter()
-			.filter(|(_, pending)| pending.binding.domain == domain)
+			.filter(|(_, entry)| entry.pending().is_some() && entry.binding().domain == domain)
 			.map(|(name, _)| name.clone())
 			.collect();
 		let mut batch = StopBatch::default();
@@ -339,17 +368,10 @@ impl ClaimTransition<'_> {
 	fn detach_matching(&mut self, registry: &mut Registry, matches: impl Fn(&ClaimBinding) -> bool) -> DetachedShares {
 		let names: Vec<String> = self
 			.state
-			.active
+			.entries
 			.iter()
-			.filter(|(_, share)| matches(&share.binding))
+			.filter(|(_, entry)| matches(entry.binding()))
 			.map(|(name, _)| name.clone())
-			.chain(
-				self.state
-					.pending
-					.iter()
-					.filter(|(_, pending)| matches(&pending.binding))
-					.map(|(name, _)| name.clone()),
-			)
 			.collect();
 		let mut batch = StopBatch::default();
 		for name in names {
@@ -389,12 +411,33 @@ struct Active {
 	binding: ClaimBinding,
 	provider: Provider,
 	url: String,
-	/// Present for providers that stay running.
-	child: Option<Child>,
-	/// Cleanup command for providers that configure and return.
-	stop_args: Option<Vec<String>>,
-	/// Name the edge answers on the provider's behalf.
-	alias: Option<String>,
+	resource: ProviderResource,
+}
+
+enum ProviderResource {
+	Process(Child),
+	Tailscale { alias: String },
+}
+
+impl ProviderResource {
+	fn alias(&self) -> Option<&str> {
+		match self {
+			Self::Process(_) => None,
+			Self::Tailscale { alias } => Some(alias),
+		}
+	}
+}
+
+struct StoppingShare {
+	identity: Arc<()>,
+	provider: Provider,
+	resource: ProviderResource,
+}
+
+impl Active {
+	fn into_stopping(self) -> StoppingShare {
+		StoppingShare { identity: self.identity, provider: self.provider, resource: self.resource }
+	}
 }
 
 impl Shares {
@@ -449,11 +492,9 @@ impl Shares {
 		let claim = registry
 			.claim(domain)
 			.ok_or_else(|| anyhow!("{name} is not registered on this host"))?;
-		let binding = ClaimBinding::from_claim(claim);
-		let (identity, cancellation) = self.reserve(name, provider, binding.clone()).await?;
+		let start = self.reserve(name, provider, ClaimBinding::from_claim(claim)).await?;
 		drop(registry);
-		self.run_start(ShareStart { name: name.to_owned(), provider, owner: binding, identity, cancellation })
-			.await
+		self.run_start(start).await
 	}
 
 	fn checked_provider(&self, provider: Option<Provider>) -> Result<Provider> {
@@ -468,12 +509,7 @@ impl Shares {
 		Ok(provider)
 	}
 
-	async fn reserve(
-		&self,
-		name: &str,
-		provider: Provider,
-		binding: ClaimBinding,
-	) -> Result<(Arc<()>, watch::Receiver<bool>)> {
+	async fn reserve(&self, name: &str, provider: Provider, binding: ClaimBinding) -> Result<ShareStart> {
 		let mut state = self.state.lock().await;
 		if state.is_shutting_down {
 			bail!("the share manager is shutting down");
@@ -481,30 +517,33 @@ impl Shares {
 		if state.claim_changes.contains_key(&binding.domain) {
 			bail!("{} is being registered; wait for its result before sharing", binding.domain);
 		}
-		if let Some(existing) = state.active.get(name) {
-			bail!("{name} is already shared at {} ({})", existing.url, existing.provider.name());
+		match state.entries.get(name) {
+			Some(ShareLifecycle::Active(existing)) => {
+				bail!("{name} is already shared at {} ({})", existing.url, existing.provider.name());
+			},
+			Some(_) => bail!("{name} is already starting or stopping a share"),
+			None => {},
 		}
-		if state.pending.contains_key(name) {
-			bail!("{name} is already starting or stopping a share");
-		}
-		if state.active.values().any(|share| share.binding.domain == binding.domain)
-			|| state.pending.values().any(|share| share.binding.domain == binding.domain)
-		{
+		if state.entries.values().any(|entry| entry.binding().domain == binding.domain) {
 			bail!("{} already has a share starting, running, or stopping", binding.domain);
 		}
-		if provider == Provider::Tailscale
-			&& (state.active.values().any(|share| share.provider == provider)
-				|| state.pending.values().any(|share| share.provider == provider))
-		{
+		if provider == Provider::Tailscale && state.entries.values().any(|entry| entry.provider() == provider) {
 			bail!("tailscale serve is already owned by another share");
 		}
 		let identity = Arc::new(());
 		let (cancel, cancellation) = watch::channel(false);
 		let (finished, _) = watch::channel(PendingResult::Running);
-		state
-			.pending
-			.insert(name.to_owned(), Pending { identity: Arc::clone(&identity), binding, provider, cancel, finished });
-		Ok((identity, cancellation))
+		state.entries.insert(
+			name.to_owned(),
+			ShareLifecycle::Starting(Pending {
+				identity: Arc::clone(&identity),
+				binding: binding.clone(),
+				provider,
+				cancel,
+				finished,
+			}),
+		);
+		Ok(ShareStart { name: name.to_owned(), provider, owner: binding, identity, cancellation })
 	}
 
 	async fn run_start(&self, start: ShareStart) -> Result<String> {
@@ -543,9 +582,9 @@ impl Shares {
 				return Err(error);
 			},
 		};
-		let startup = match share.child.as_mut() {
-			Some(child) => child.try_wait().context("check the provider after startup"),
-			None => Ok(None),
+		let startup = match &mut share.resource {
+			ProviderResource::Process(child) => child.try_wait().context("check the provider after startup"),
+			ProviderResource::Tailscale { .. } => Ok(None),
 		};
 		match startup {
 			Ok(Some(status)) => {
@@ -553,29 +592,22 @@ impl Shares {
 				bail!("{} exited during startup with {status}", start.provider.name());
 			},
 			Err(error) => {
-				self.finish_release(&start.name, share).await?;
+				self.finish_release(&start.name, share.into_stopping()).await?;
 				return Err(error);
 			},
 			Ok(None) => {},
 		}
 
-		let binding = &start.owner;
 		let mut registry = self.registrations.lock().await;
-		let valid = registry
-			.claim(&binding.domain)
-			.is_some_and(|claim| ClaimBinding::from_claim(claim) == *binding);
-		let mut share = Some(share);
-		let published = self
-			.publish(&start.name, &start.identity, &mut share, &mut registry, valid)
-			.await;
+		let published = self.publish(&start.name, share, &mut registry).await;
 		drop(registry);
 		match published {
 			Ok(url) => Ok(url),
-			Err(PublishFailure::ClaimChanged) => {
-				self.finish_release(&start.name, share.expect("unpublished share")).await?;
+			Err((PublishFailure::ClaimChanged, share)) => {
+				self.finish_release(&start.name, share.into_stopping()).await?;
 				bail!("the claim or pending share for {} changed during startup", start.name);
 			},
-			Err(PublishFailure::AliasConflict) => {
+			Err((PublishFailure::AliasConflict, _share)) => {
 				let error = "the provider alias changed during startup; inspect the provider state";
 				self.abandon_pending(&start.name, &start.identity, error).await;
 				Err(CleanupUnverified(error.to_owned()).into())
@@ -586,31 +618,31 @@ impl Shares {
 	async fn publish(
 		&self,
 		name: &str,
-		identity: &Arc<()>,
-		share: &mut Option<Active>,
+		share: Active,
 		registry: &mut Registry,
-		valid: bool,
-	) -> std::result::Result<String, PublishFailure> {
+	) -> std::result::Result<String, (PublishFailure, Box<Active>)> {
+		let valid = registry
+			.claim(&share.binding.domain)
+			.is_some_and(|claim| ClaimBinding::from_claim(claim) == share.binding);
 		let mut state = self.state.lock().await;
-		let may_publish = state
-			.pending
-			.get(name)
-			.is_some_and(|pending| Arc::ptr_eq(&pending.identity, identity) && !*pending.cancel.borrow());
-		if !valid || !may_publish || state.is_shutting_down || state.active.contains_key(name) {
-			return Err(PublishFailure::ClaimChanged);
+		let may_publish = matches!(state.entries.get(name), Some(ShareLifecycle::Starting(pending))
+			if Arc::ptr_eq(&pending.identity, &share.identity) && !*pending.cancel.borrow());
+		if !valid || !may_publish || state.is_shutting_down {
+			return Err((PublishFailure::ClaimChanged, Box::new(share)));
 		}
-		let candidate = share.as_ref().expect("share can only be published once");
-		if let Some(alias) = &candidate.alias {
+		if let Some(alias) = share.resource.alias() {
 			if registry.contains(alias) {
-				return Err(PublishFailure::AliasConflict);
+				return Err((PublishFailure::AliasConflict, Box::new(share)));
 			}
-			registry.set_alias(alias, &candidate.binding.target);
+			registry.set_alias(alias, &share.binding.target);
 		}
-		let pending = state.pending.remove(name).expect("checked above");
-		let share = share.take().expect("share can only be published once");
 		let url = share.url.clone();
-		let child_identity = share.child.as_ref().map(|_| Arc::clone(&share.identity));
-		state.active.insert(name.to_owned(), share);
+		let child_identity = match &share.resource {
+			ProviderResource::Process(_) => Some(Arc::clone(&share.identity)),
+			ProviderResource::Tailscale { .. } => None,
+		};
+		let previous = state.entries.insert(name.to_owned(), ShareLifecycle::Active(share));
+		let Some(ShareLifecycle::Starting(pending)) = previous else { unreachable!("checked above") };
 		pending.finished.send_replace(PendingResult::Cleaned);
 		drop(state);
 		self.bump();
@@ -623,26 +655,42 @@ impl Shares {
 	async fn finish_pending(&self, name: &str, identity: &Arc<()>) {
 		let mut state = self.state.lock().await;
 		if state
-			.pending
+			.entries
 			.get(name)
+			.and_then(ShareLifecycle::pending)
 			.is_some_and(|pending| Arc::ptr_eq(&pending.identity, identity))
 		{
-			let pending = state.pending.remove(name).expect("checked above");
+			let pending = state
+				.entries
+				.remove(name)
+				.and_then(ShareLifecycle::into_pending)
+				.expect("checked above");
 			pending.finished.send_replace(PendingResult::Cleaned);
 		}
 	}
 
 	async fn abandon_pending(&self, name: &str, identity: &Arc<()>, error: &str) {
-		let state = self.state.lock().await;
-		if let Some(pending) = state.pending.get(name)
-			&& Arc::ptr_eq(&pending.identity, identity)
+		let mut state = self.state.lock().await;
+		if state
+			.entries
+			.get(name)
+			.and_then(ShareLifecycle::pending)
+			.is_some_and(|pending| Arc::ptr_eq(&pending.identity, identity))
 		{
+			let pending = state
+				.entries
+				.remove(name)
+				.and_then(ShareLifecycle::into_pending)
+				.expect("checked above");
 			pending.cancel.send_replace(true);
 			pending.finished.send_replace(PendingResult::Unverified(error.to_owned()));
+			state
+				.entries
+				.insert(name.to_owned(), ShareLifecycle::CleanupUnverified(pending));
 		}
 	}
 
-	async fn finish_release(&self, name: &str, share: Active) -> Result<()> {
+	async fn finish_release(&self, name: &str, share: StoppingShare) -> Result<()> {
 		let identity = Arc::clone(&share.identity);
 		match self.release(share).await {
 			Ok(()) => {
@@ -666,16 +714,16 @@ impl Shares {
 				tokio::time::sleep(PROVIDER_EXIT_CHECK_INTERVAL).await;
 				let Some(state) = state.upgrade() else { return };
 				let mut shares = state.lock().await;
-				let Some(share) = shares.active.get_mut(&name) else { return };
+				let Some(ShareLifecycle::Active(share)) = shares.entries.get_mut(&name) else { return };
 				if !Arc::ptr_eq(&share.identity, &identity) {
 					return;
 				}
-				let Some(child) = share.child.as_mut() else { return };
+				let ProviderResource::Process(child) = &mut share.resource else { return };
 				match child.try_wait() {
 					Ok(None) => reported_failure = false,
 					Ok(Some(status)) => {
 						let provider = share.provider.name();
-						shares.active.remove(&name);
+						shares.entries.remove(&name);
 						drop(shares);
 						eprintln!("[share]  {name} closed: {provider} exited with {status}");
 						revision.send_modify(|value| *value = value.wrapping_add(1));
@@ -700,7 +748,7 @@ impl Shares {
 		Self::detach_name(&mut state, &mut registry, name, &mut batch);
 		drop(state);
 		drop(registry);
-		let found = !batch.active.is_empty() || !batch.waiting.is_empty() || !batch.errors.is_empty();
+		let found = !batch.stopping.is_empty() || !batch.waiting.is_empty() || !batch.errors.is_empty();
 		let detached = self.queue_cleanup(batch);
 		self.finish_detached(detached).await?;
 		Ok(found)
@@ -710,8 +758,12 @@ impl Shares {
 		self.state
 			.lock()
 			.await
-			.active
+			.entries
 			.iter()
+			.filter_map(|(name, entry)| match entry {
+				ShareLifecycle::Active(share) => Some((name, share)),
+				_ => None,
+			})
 			.map(|(name, share)| ShareView {
 				name: name.clone(),
 				provider: share.provider.name().to_owned(),
@@ -723,42 +775,54 @@ impl Shares {
 	}
 
 	fn detach_name(state: &mut ShareState, registry: &mut Registry, name: &str, detached: &mut StopBatch) {
-		if let Some(share) = state.active.remove(name) {
-			let (cancel, _) = watch::channel(true);
-			let (finished, _) = watch::channel(PendingResult::Running);
-			let alias_error = share.alias.as_ref().and_then(|alias| {
-				if registry
-					.aliases()
-					.iter()
-					.any(|entry| entry.domain == *alias && entry.target == share.binding.target)
-				{
-					registry.remove_alias(alias);
-					None
-				} else {
-					Some(format!("provider alias {alias} changed; leaving provider state untouched"))
-				}
-			});
-			if let Some(error) = &alias_error {
-				finished.send_replace(PendingResult::Unverified(error.clone()));
-				detached.errors.push(error.clone());
-			}
-			state.pending.insert(
-				name.to_owned(),
-				Pending {
+		let Some(entry) = state.entries.remove(name) else { return };
+		let next = match entry {
+			ShareLifecycle::Active(share) => {
+				let (cancel, _) = watch::channel(true);
+				let (finished, _) = watch::channel(PendingResult::Running);
+				let alias_error = share.resource.alias().and_then(|alias| {
+					if registry
+						.aliases()
+						.iter()
+						.any(|entry| entry.domain == alias && entry.target == share.binding.target)
+					{
+						registry.remove_alias(alias);
+						None
+					} else {
+						Some(format!("provider alias {alias} changed; leaving provider state untouched"))
+					}
+				});
+				let pending = Pending {
 					identity: Arc::clone(&share.identity),
 					binding: share.binding.clone(),
 					provider: share.provider,
 					cancel,
 					finished,
-				},
-			);
-			if alias_error.is_none() {
-				detached.active.push((name.to_owned(), share));
-			}
-		} else if let Some(pending) = state.pending.get(name) {
-			pending.cancel.send_replace(true);
-			detached.waiting.push(pending.finished.subscribe());
-		}
+				};
+				match alias_error {
+					Some(error) => {
+						pending.finished.send_replace(PendingResult::Unverified(error.clone()));
+						detached.errors.push(error);
+						ShareLifecycle::CleanupUnverified(pending)
+					},
+					None => {
+						detached.stopping.push((name.to_owned(), share.into_stopping()));
+						ShareLifecycle::Stopping(pending)
+					},
+				}
+			},
+			ShareLifecycle::Starting(pending) => {
+				pending.cancel.send_replace(true);
+				detached.waiting.push(pending.finished.subscribe());
+				ShareLifecycle::Stopping(pending)
+			},
+			entry @ (ShareLifecycle::Stopping(_) | ShareLifecycle::CleanupUnverified(_)) => {
+				let pending = entry.pending().expect("pending lifecycle");
+				detached.waiting.push(pending.finished.subscribe());
+				entry
+			},
+		};
+		state.entries.insert(name.to_owned(), next);
 	}
 
 	/// Acquire after the registry lock and before changing any claim.
@@ -767,7 +831,7 @@ impl Shares {
 	}
 
 	fn queue_cleanup(&self, batch: StopBatch) -> DetachedShares {
-		if batch.active.is_empty() && batch.waiting.is_empty() && batch.errors.is_empty() {
+		if batch.stopping.is_empty() && batch.waiting.is_empty() && batch.errors.is_empty() {
 			return DetachedShares::default();
 		}
 		let shares = self.clone();
@@ -790,11 +854,11 @@ impl Shares {
 	}
 
 	async fn finish_stop_batch(&self, detached: StopBatch) -> Result<()> {
-		if !detached.active.is_empty() || !detached.errors.is_empty() {
+		if !detached.stopping.is_empty() || !detached.errors.is_empty() {
 			self.bump();
 		}
 		let mut errors = detached.errors;
-		for (name, share) in detached.active {
+		for (name, share) in detached.stopping {
 			if let Err(error) = self.finish_release(&name, share).await {
 				errors.push(error.to_string());
 			}
@@ -839,19 +903,10 @@ impl Shares {
 		if !state.claim_changes.contains_key(domain) {
 			let current = registry.claim(domain).map(ClaimBinding::from_claim);
 			let names: Vec<String> = state
-				.active
+				.entries
 				.iter()
-				.filter(|(_, share)| share.binding.domain == domain && Some(&share.binding) != current.as_ref())
+				.filter(|(_, entry)| entry.binding().domain == domain && Some(entry.binding()) != current.as_ref())
 				.map(|(name, _)| name.clone())
-				.chain(
-					state
-						.pending
-						.iter()
-						.filter(|(_, pending)| {
-							pending.binding.domain == domain && Some(&pending.binding) != current.as_ref()
-						})
-						.map(|(name, _)| name.clone()),
-				)
 				.collect();
 			for name in names {
 				Self::detach_name(&mut state, &mut registry, &name, &mut batch);
@@ -873,19 +928,10 @@ impl Shares {
 		};
 		let mut state = self.state.lock().await;
 		let stale: Vec<String> = state
-			.active
+			.entries
 			.iter()
-			.filter(|(_, share)| !state.claim_changes.contains_key(&share.binding.domain) && !valid(&share.binding))
+			.filter(|(_, entry)| !state.claim_changes.contains_key(&entry.binding().domain) && !valid(entry.binding()))
 			.map(|(name, _)| name.clone())
-			.chain(
-				state
-					.pending
-					.iter()
-					.filter(|(_, pending)| {
-						!state.claim_changes.contains_key(&pending.binding.domain) && !valid(&pending.binding)
-					})
-					.map(|(name, _)| name.clone()),
-			)
 			.collect();
 		let mut batch = StopBatch::default();
 		for name in stale {
@@ -911,7 +957,7 @@ impl Shares {
 		// for the sweep, so the two cannot interleave.
 		{
 			let state = self.state.lock().await;
-			if !state.active.is_empty() || !state.pending.is_empty() {
+			if !state.entries.is_empty() {
 				return;
 			}
 		}
@@ -945,7 +991,7 @@ impl Shares {
 		let mut registry = self.registrations.lock().await;
 		let mut state = self.state.lock().await;
 		state.is_shutting_down = true;
-		let names: Vec<String> = state.active.keys().chain(state.pending.keys()).cloned().collect();
+		let names: Vec<String> = state.entries.keys().cloned().collect();
 		let mut batch = StopBatch::default();
 		for name in names {
 			Self::detach_name(&mut state, &mut registry, &name, &mut batch);
@@ -997,9 +1043,7 @@ impl Shares {
 			binding: start.owner.clone(),
 			provider: *provider,
 			url,
-			child: Some(child),
-			stop_args: None,
-			alias: None,
+			resource: ProviderResource::Process(child),
 		})
 	}
 
@@ -1082,9 +1126,7 @@ impl Shares {
 			binding: start.owner.clone(),
 			provider: Provider::Tailscale,
 			url: format!("https://{host}"),
-			child: None,
-			stop_args: Provider::Tailscale.stop_args(),
-			alias: Some(host),
+			resource: ProviderResource::Tailscale { alias: host },
 		})
 	}
 
@@ -1144,36 +1186,32 @@ impl Shares {
 	}
 
 	/// Kill a child, or run the provider's cleanup command.
-	async fn release(&self, share: Active) -> Result<()> {
-		let _sweep = if share.provider == Provider::Tailscale { Some(self.reclaim.lock().await) } else { None };
-		if let Some(mut child) = share.child {
-			return stop_child(&mut child).await.context("stop provider process");
+	async fn release(&self, share: StoppingShare) -> Result<()> {
+		match share.resource {
+			ProviderResource::Process(mut child) => {
+				return stop_child(&mut child).await.context("stop provider process");
+			},
+			ProviderResource::Tailscale { .. } => {},
 		}
-		if share.stop_args.is_none() {
-			return Ok(());
-		}
+		let _sweep = self.reclaim.lock().await;
 		let binary = self.binary_for(share.provider);
-		if share.provider == Provider::Tailscale {
-			let front = self.front.as_ref().context("the tailscale front is missing during cleanup")?;
-			let upstream = format!("http://{}", front.plain_addr);
-			let status = match run_briefly(
-				&binary,
-				&["serve".to_owned(), "status".to_owned(), "--json".to_owned()],
-				SWEEP_TIMEOUT,
-			)
-			.await
+		let front = self.front.as_ref().context("the tailscale front is missing during cleanup")?;
+		let upstream = format!("http://{}", front.plain_addr);
+		let status =
+			match run_briefly(&binary, &["serve".to_owned(), "status".to_owned(), "--json".to_owned()], SWEEP_TIMEOUT)
+				.await
 			{
 				Ok(Some(output)) if output.status.success() => String::from_utf8_lossy(&output.stdout).into_owned(),
 				_ => bail!("could not inspect tailscale serve; leaving :443 alone"),
 			};
-			if serde_json::from_str::<serde_json::Value>(&status).is_err() {
-				bail!("tailscale serve returned malformed status; leaving :443 alone");
-			}
-			if !leftover_serves(&status, &upstream).contains(&443) {
-				bail!("tailscale serve :443 changed; leaving it in place");
-			}
+		if serde_json::from_str::<serde_json::Value>(&status).is_err() {
+			bail!("tailscale serve returned malformed status; leaving :443 alone");
 		}
-		let args = share.stop_args.unwrap_or_default();
+		if !leftover_serves(&status, &upstream).contains(&443) {
+			bail!("tailscale serve :443 changed; leaving it in place");
+		}
+		/* Scope cleanup to this serve port, leaving unrelated entries alone. */
+		let args = ["serve".to_owned(), "--https=443".to_owned(), "off".to_owned()];
 		let output = run_with_retry(&binary, &args).await?;
 		if !output.status.success() {
 			bail!("{} {} exited with {}; inspect the provider state", binary.display(), args.join(" "), output.status);
@@ -1303,6 +1341,124 @@ async fn run_with_retry(binary: &Path, args: &[String]) -> Result<std::process::
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	fn manager() -> Shares {
+		Shares::new(
+			Provider::Tailscale,
+			None,
+			Some(Front { plain_addr: "127.0.0.1:7740".parse().unwrap() }),
+			Arc::new(Mutex::new(Registry::default())),
+		)
+	}
+
+	async fn candidate(shares: &Shares) -> Active {
+		let mut registry = shares.registrations.lock().await;
+		let connection = registry.connection_id();
+		registry
+			.register(
+				connection,
+				testd_core::Registration { domain: "app.test".into(), target: "127.0.0.1:3000".into() },
+				true,
+				&[],
+			)
+			.unwrap();
+		let binding = ClaimBinding::from_claim(registry.claim("app.test").unwrap());
+		let start = shares.reserve("app", Provider::Tailscale, binding).await.unwrap();
+		Active {
+			identity: start.identity,
+			binding: start.owner,
+			provider: start.provider,
+			url: "https://node.tailnet.ts.net".into(),
+			resource: ProviderResource::Tailscale { alias: "node.tailnet.ts.net".into() },
+		}
+	}
+
+	#[tokio::test]
+	async fn a_share_transfers_from_starting_to_active_to_stopping() {
+		let shares = manager();
+		let share = candidate(&shares).await;
+		let identity = Arc::clone(&share.identity);
+		assert!(matches!(shares.state.lock().await.entries.get("app"), Some(ShareLifecycle::Starting(_))));
+		assert!(shares.list().await.is_empty());
+
+		let mut registry = shares.registrations.lock().await;
+		assert!(shares.publish("app", share, &mut registry).await.is_ok());
+		assert!(registry.contains("node.tailnet.ts.net"));
+		assert!(matches!(shares.state.lock().await.entries.get("app"), Some(ShareLifecycle::Active(_))));
+		let view = shares.list().await.remove(0);
+		assert_eq!(view.url, "https://node.tailnet.ts.net");
+
+		let mut state = shares.state.lock().await;
+		let mut batch = StopBatch::default();
+		Shares::detach_name(&mut state, &mut registry, "app", &mut batch);
+		assert!(matches!(state.entries.get("app"), Some(ShareLifecycle::Stopping(_))));
+		assert!(!registry.contains("node.tailnet.ts.net"));
+		let (_, stopping) = batch.stopping.pop().unwrap();
+		assert!(Arc::ptr_eq(&stopping.identity, &identity));
+		assert_eq!(stopping.resource.alias(), Some("node.tailnet.ts.net"));
+		Shares::detach_name(&mut state, &mut registry, "app", &mut batch);
+		assert!(batch.stopping.is_empty(), "only one task owns provider cleanup");
+		drop(state);
+		drop(registry);
+		assert!(shares.list().await.is_empty());
+
+		/* Simulate confirmed provider release without executing a real provider. */
+		shares.finish_pending("app", &identity).await;
+		assert!(shares.state.lock().await.entries.is_empty());
+		assert!(matches!(*batch.waiting[0].borrow(), PendingResult::Cleaned));
+	}
+
+	#[tokio::test]
+	async fn a_cancelled_start_cannot_publish_and_returns_its_owned_resource() {
+		let shares = manager();
+		let share = candidate(&shares).await;
+		let identity = Arc::clone(&share.identity);
+		let mut registry = shares.registrations.lock().await;
+		let mut batch = StopBatch::default();
+		Shares::detach_name(&mut *shares.state.lock().await, &mut registry, "app", &mut batch);
+		let Err((PublishFailure::ClaimChanged, unpublished)) = shares.publish("app", share, &mut registry).await else {
+			panic!("a stopping share must not publish");
+		};
+		assert!(Arc::ptr_eq(&unpublished.identity, &identity));
+		assert!(!registry.contains("node.tailnet.ts.net"));
+		drop(registry);
+		shares.finish_pending("app", &unpublished.into_stopping().identity).await;
+		assert!(matches!(*batch.waiting[0].borrow(), PendingResult::Cleaned));
+	}
+
+	#[tokio::test]
+	async fn unverified_cleanup_stays_quarantined_and_cannot_publish() {
+		let shares = manager();
+		let share = candidate(&shares).await;
+		shares.abandon_pending("app", &share.identity, "cleanup failed").await;
+		let mut registry = shares.registrations.lock().await;
+		let mut batch = StopBatch::default();
+		Shares::detach_name(&mut *shares.state.lock().await, &mut registry, "app", &mut batch);
+		assert!(matches!(shares.state.lock().await.entries.get("app"), Some(ShareLifecycle::CleanupUnverified(_))));
+		assert!(matches!(&*batch.waiting[0].borrow(), PendingResult::Unverified(error) if error == "cleanup failed"));
+		let binding = share.binding.clone();
+		assert!(matches!(shares.publish("app", share, &mut registry).await, Err((PublishFailure::ClaimChanged, _))));
+		drop(registry);
+		assert!(shares.reserve("app", Provider::Tailscale, binding.clone()).await.is_err());
+		let other = ClaimBinding { domain: "other.test".into(), ..binding };
+		assert!(shares.reserve("other", Provider::Tailscale, other).await.is_err());
+	}
+
+	#[tokio::test]
+	async fn stale_completion_and_failure_cannot_change_a_replacement() {
+		let shares = manager();
+		let old = candidate(&shares).await;
+		shares.finish_pending("app", &old.identity).await;
+		let replacement = candidate(&shares).await;
+		shares.finish_pending("app", &old.identity).await;
+		shares.abandon_pending("app", &old.identity, "stale failure").await;
+		let state = shares.state.lock().await;
+		let Some(ShareLifecycle::Starting(pending)) = state.entries.get("app") else {
+			panic!("the replacement must remain starting");
+		};
+		assert!(Arc::ptr_eq(&pending.identity, &replacement.identity));
+		assert!(!*pending.cancel.borrow());
+	}
 
 	#[test]
 	fn reads_the_cloudflared_tunnel_url() {
