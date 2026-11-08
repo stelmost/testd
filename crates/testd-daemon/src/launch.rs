@@ -122,7 +122,7 @@ impl LaunchBook {
 		Self::load_from(path())
 	}
 
-	fn load_from(path: PathBuf) -> std::io::Result<Self> {
+	pub(crate) fn load_from(path: PathBuf) -> std::io::Result<Self> {
 		let definitions = match std::fs::read(&path) {
 			Ok(data) => serde_json::from_slice::<Vec<LaunchDefinition>>(&data).map_err(|error| {
 				std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{}: {error}", path.display()))

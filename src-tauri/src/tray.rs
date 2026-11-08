@@ -368,6 +368,50 @@ pub fn open_dashboard(app: &AppHandle, url: &str) -> Result<(), Box<dyn std::err
 	Ok(())
 }
 
+fn startup_error_script(error: &str) -> String {
+	let message =
+		serde_json::to_string(&format!("{error}\n\nConfiguration: {}", testd_core::config::config_path().display()))
+			.unwrap();
+	let css = serde_json::to_string(include_str!("../../crates/testd-daemon/dashboard.css")).unwrap();
+	let page = serde_json::to_string(concat!(
+		"<main class='page'><h1>testd could not start</h1>",
+		"<pre id='startup-error' role='alert'></pre>",
+		"<p>Fix the reported problem, then exit and restart Testd.</p>",
+		"<p>If a port is busy, stop the other daemon. On Linux, grant the executable ",
+		"CAP_NET_BIND_SERVICE or set [host] edge_addr to '127.0.0.1:8443' in the configuration.</p></main>"
+	))
+	.unwrap();
+	format!(
+		"document.documentElement.lang = 'en'; document.title = 'testd: startup failed';\n\
+		const style = document.createElement('style'); style.textContent = {css}; document.head.append(style);\n\
+		document.body.innerHTML = {page}; document.getElementById('startup-error').textContent = {message};"
+	)
+}
+
+/// Keep startup failures visible even in a release build with no console.
+pub fn show_startup_error(app: &AppHandle, error: &str) -> Result<(), Box<dyn std::error::Error>> {
+	trace(&format!("startup failed: {error}"));
+	let script = startup_error_script(error);
+	if let Some(window) = app.get_webview_window("startup-error") {
+		window.eval(script)?;
+		window.show()?;
+		window.set_focus()?;
+		return Ok(());
+	}
+	WebviewWindowBuilder::new(app, "startup-error", tauri::WebviewUrl::External("about:blank".parse()?))
+		.title("testd: startup failed")
+		.inner_size(760.0, 520.0)
+		.on_page_load(move |window, payload| {
+			if payload.event() == tauri::webview::PageLoadEvent::Finished
+				&& let Err(error) = window.eval(&script)
+			{
+				trace(&format!("could not display startup failure: {error}"));
+			}
+		})
+		.build()?;
+	Ok(())
+}
+
 /// Initialize the daemon, build the system tray, and spawn the engine.
 pub fn start_daemon(
 	app: &AppHandle,
@@ -471,7 +515,13 @@ pub fn start_daemon(
 			// eprintln! goes nowhere in a GUI build without a console.
 			trace(&format!("engine error: {e}"));
 			eprintln!("engine error: {e}");
-			engine_app.exit(1);
+			let message = e.to_string();
+			let error_app = engine_app.clone();
+			let _ = engine_app.run_on_main_thread(move || {
+				if let Err(error) = show_startup_error(&error_app, &message) {
+					trace(&format!("startup error window failed: {error}"));
+				}
+			});
 		}
 	});
 
@@ -684,4 +734,23 @@ pub fn start_daemon(
 	});
 
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn startup_failures_include_recovery_and_keep_error_text_out_of_html() {
+		let error = "port busy: <script>unsafe()</script> \"quoted\"";
+		let script = startup_error_script(error);
+		let message = serde_json::to_string(&format!(
+			"{error}\n\nConfiguration: {}",
+			testd_core::config::config_path().display()
+		))
+		.unwrap();
+		assert!(script.contains(&format!("document.getElementById('startup-error').textContent = {message};")));
+		assert!(script.contains("exit and restart Testd"));
+		assert!(script.contains("CAP_NET_BIND_SERVICE"));
+	}
 }

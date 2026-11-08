@@ -10,12 +10,13 @@ pub async fn run() -> Result<()> {
 	// Run engine until interrupted.
 	tokio::select! {
 		result = daemon.run() => result?,
-		_ = tokio::signal::ctrl_c() => {
+		signal = testd_client::shutdown_signal() => {
+			signal?;
 			eprintln!("\n[stop]   shutting down");
 		}
 	}
 
-	daemon.shutdown().await;
+	daemon.shutdown().await.map_err(|error| anyhow!(error))?;
 
 	// Daemon::drop clears registrations and the managed Caddyfile; the OS
 	// resolver setup is one-time and intentionally left in place.

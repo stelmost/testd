@@ -64,8 +64,10 @@ fn main() {
 				#[cfg(target_os = "macos")]
 				app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-				tray::start_daemon(&app.handle().clone(), Arc::clone(&rt)).expect("failed to start daemon");
-				tray::handle_current_url(&app.handle().clone());
+				match tray::start_daemon(&app.handle().clone(), Arc::clone(&rt)) {
+					Ok(()) => tray::handle_current_url(&app.handle().clone()),
+					Err(error) => tray::show_startup_error(app.handle(), &error.to_string())?,
+				}
 			}
 
 			Ok(())
@@ -84,7 +86,10 @@ fn main() {
 			tauri::RunEvent::Exit => {
 				if let Some(daemon) = app.try_state::<Arc<Daemon>>() {
 					let rt = app.state::<Arc<tokio::runtime::Runtime>>();
-					rt.block_on(daemon.shutdown());
+					if let Err(error) = rt.block_on(daemon.shutdown()) {
+						tray::trace(&error);
+						eprintln!("[error] {error}");
+					}
 				}
 				tray::trace("exited");
 			},

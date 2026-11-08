@@ -231,9 +231,12 @@ impl Daemon {
 		crate::control::client_config()
 	}
 
-	/// Stop supervised launches before the process exits.
-	pub async fn shutdown(&self) {
+	/// Stop owned launches and provider configuration before the process exits.
+	pub async fn shutdown(&self) -> Result<(), String> {
+		/* Stop providers first so no public route outlives its local launch. */
+		let shares = self.shares.shutdown().await;
 		self.launches.shutdown().await;
+		shares.map_err(|error| format!("share cleanup failed; inspect provider state before restarting: {error:#}"))
 	}
 
 	/// Repair a prerequisite. Runs the privileged helper off the runtime.
@@ -344,6 +347,59 @@ mod tests {
 		Target,
 		Takeover,
 		Reconnect,
+	}
+
+	struct FixtureResolver;
+
+	impl Resolver for FixtureResolver {
+		fn apply(&self, _names: &[crate::resolver::ResolvedName]) -> io::Result<()> {
+			Ok(())
+		}
+		fn cleanup(&self) -> io::Result<()> {
+			Ok(())
+		}
+	}
+
+	#[tokio::test]
+	async fn daemon_shutdown_stops_its_owned_provider() {
+		let dir = tempfile::tempdir().unwrap();
+		let provider = dir.path().join("provider");
+		std::fs::write(&provider, "#!/bin/sh\necho 'https://fixture.trycloudflare.com' >&2\nexec sleep 30\n").unwrap();
+		std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).unwrap();
+		let resolver: Arc<dyn Resolver> = Arc::new(FixtureResolver);
+		let access = Arc::new(Access::load(dir.path().join("tokens.json")).unwrap());
+		let config = serde_json::from_str("{}").unwrap();
+		let engine = Arc::new(HostEngine::new(config, Arc::clone(&resolver), Arc::clone(&access)));
+		let shares = Arc::new(Shares::new(Provider::Cloudflared, Some(provider), None, engine.registrations()));
+		let launches = Arc::new(LaunchBook::load_from(dir.path().join("launches.json")).unwrap());
+		let health = Arc::new(HealthMonitor::new("test".into(), Arc::clone(&resolver), None, Elevation::Sudo));
+		let daemon = Daemon {
+			engine,
+			resolver,
+			tld: "test".into(),
+			edge: None,
+			health,
+			shares: Arc::clone(&shares),
+			access,
+			_control: None,
+			launches,
+			_tasks: Vec::new(),
+			_instance_lock: std::fs::File::create(dir.path().join("daemon.lock")).unwrap(),
+		};
+		{
+			let registrations = daemon.engine.registrations();
+			let mut registry = registrations.lock().await;
+			let owner = registry.connection_id();
+			registry.register(owner, claim("127.0.0.1:3000"), false, &[]).unwrap();
+		}
+		shares.start("app", "app.test", None).await.unwrap();
+		assert_eq!(shares.list().await.len(), 1);
+		daemon.shutdown().await.unwrap();
+		let stopped = shares.list().await.is_empty();
+		if !stopped {
+			shares.shutdown().await.unwrap();
+		}
+		assert!(stopped, "daemon shutdown must invoke provider cleanup");
 	}
 
 	#[derive(Debug, PartialEq, Eq)]
