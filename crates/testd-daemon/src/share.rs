@@ -415,7 +415,7 @@ struct Active {
 }
 
 enum ProviderResource {
-	Process(Child),
+	Process(Box<Child>),
 	Tailscale { alias: String },
 }
 
@@ -1043,7 +1043,7 @@ impl Shares {
 			binding: start.owner.clone(),
 			provider: *provider,
 			url,
-			resource: ProviderResource::Process(child),
+			resource: ProviderResource::Process(Box::new(child)),
 		})
 	}
 
