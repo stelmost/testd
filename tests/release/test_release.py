@@ -2617,6 +2617,29 @@ class TranscriptTests(unittest.TestCase):
 		with redirect_stdout(io.StringIO()):
 			return runner.Run(args)
 
+	def test_report_updates_leave_no_pending_file(self):
+		with tempfile.TemporaryDirectory() as directory:
+			run = self.create_run(directory)
+			with redirect_stdout(io.StringIO()):
+				run.record('complete', 'pass')
+			document = json.loads((run.output / 'report.json').read_text())
+			self.assertEqual(document['checks'][0]['name'], 'complete')
+			self.assertFalse((run.output / 'report.next.json').exists())
+
+	def test_interrupted_report_write_preserves_the_last_complete_report(self):
+		with tempfile.TemporaryDirectory() as directory:
+			run = self.create_run(directory)
+			previous = (run.output / 'report.json').read_bytes()
+			write = pathlib.Path.write_text
+			def interrupt(path, text, **options):
+				write(path, 'partial write', **options)
+				raise KeyboardInterrupt()
+			with patch.object(pathlib.Path, 'write_text', autospec=True, side_effect=interrupt), \
+				self.assertRaises(KeyboardInterrupt):
+				run.record('interrupted', 'pass')
+			self.assertEqual((run.output / 'report.json').read_bytes(), previous)
+			self.assertEqual((run.output / 'report.next.json').read_text(), 'partial write')
+
 	def test_transcript_retains_runner_messages_and_both_child_streams(self):
 		with tempfile.TemporaryDirectory() as directory:
 			run = self.create_run(directory)

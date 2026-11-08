@@ -284,8 +284,10 @@ class Run:
 			self.parent.save()
 			return
 		with self.lock:
-			(self.output / 'report.json').write_text(
-				json.dumps({**self.metadata, 'checks': self.results}, indent=2) + '\n', encoding=ENCODING)
+			# Keep the last complete report readable if a write is interrupted.
+			pending = self.output / 'report.next.json'
+			pending.write_text(json.dumps({**self.metadata, 'checks': self.results}, indent=2) + '\n', encoding=ENCODING)
+			pending.replace(self.output / 'report.json')
 
 	def record(self, name, status, detail='', **evidence):
 		with self.lock:
