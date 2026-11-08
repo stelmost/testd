@@ -192,6 +192,8 @@ impl HostEngine {
 			allow_remote_targets: self.config.allow_remote_targets,
 			local_token: self.local_token.clone(),
 			connections,
+			#[cfg(test)]
+			registration_checked: StdMutex::new(None),
 		});
 
 		loop {
@@ -487,6 +489,8 @@ struct Shared {
 	local_token: Option<String>,
 	/// Authenticated connections the operator can act on.
 	connections: Arc<Connections>,
+	#[cfg(test)]
+	registration_checked: StdMutex<Option<oneshot::Sender<()>>>,
 }
 
 /// Closure is independent of the bounded reply queue and preempts stalled I/O.
@@ -785,6 +789,10 @@ async fn handle_connection(stream: PeekedStream, addr: SocketAddr, shared: Arc<S
 
 					let reserved: Vec<&str> = reserved.iter().map(String::as_str).collect();
 					let (result, change, detached) = {
+						#[cfg(test)]
+						if let Some(checked) = shared.registration_checked.lock().unwrap().take() {
+							checked.send(()).unwrap();
+						}
 						let mut regs = shared.registrations.lock().await;
 						/* Approval may have been withdrawn while this request waited for the registry. */
 						if grant.as_ref().is_some_and(|grant| !shared.access.allows(grant, &fqdn)) {
@@ -1321,6 +1329,88 @@ async fn apply_snapshot(context: ApplyContext) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	struct NoopResolver;
+
+	impl Resolver for NoopResolver {
+		fn apply(&self, _names: &[crate::resolver::ResolvedName]) -> io::Result<()> {
+			Ok(())
+		}
+
+		fn cleanup(&self) -> io::Result<()> {
+			Ok(())
+		}
+	}
+
+	#[tokio::test]
+	async fn registration_rechecks_grants_after_waiting_for_the_registry() {
+		use testd_core::protocol::{recv, send};
+		use tokio::io::{AsyncReadExt, BufReader};
+
+		tokio::time::timeout(Duration::from_secs(5), async {
+			let dir = tempfile::tempdir().unwrap();
+			let access = Arc::new(Access::load(dir.path().join("tokens.json")).unwrap());
+			let (request, _decision) = access
+				.request("fixture", "127.0.0.1:1", vec!["app.test".into(), "ready.test".into()])
+				.unwrap();
+			let crate::access::Approved::Token(token) = access.approve(&request).unwrap() else {
+				panic!("expected a token")
+			};
+			let shared = Arc::new(Shared {
+				tld: "test".into(),
+				registrations: Arc::new(Mutex::new(Registry::default())),
+				resolver: Arc::new(NoopResolver),
+				apply_lock: Arc::new(Mutex::new(())),
+				access: Arc::clone(&access),
+				shares: None,
+				event_tx: broadcast::channel(16).0,
+				resolver_checked: AtomicBool::new(true),
+				answer_addr: std::net::Ipv4Addr::LOCALHOST,
+				secret: String::new(),
+				allow_remote_targets: false,
+				local_token: None,
+				connections: Arc::new(Connections::default()),
+				registration_checked: StdMutex::new(None),
+			});
+			let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+			let address = listener.local_addr().unwrap();
+			let serving = Arc::clone(&shared);
+			let _server = crate::task::BackgroundTask(tokio::spawn(async move {
+				let (mut stream, peer) = listener.accept().await.unwrap();
+				let mut first = [0];
+				stream.read_exact(&mut first).await.unwrap();
+				handle_connection(PeekedStream::new(first[0], stream), peer, serving)
+					.await
+					.unwrap();
+			}));
+			let (reader, mut writer) = TcpStream::connect(address).await.unwrap().into_split();
+			let mut reader = BufReader::new(reader);
+			send(&mut writer, &Auth { token: token.token, request_token: None })
+				.await
+				.unwrap();
+			assert!(matches!(recv::<_, Response>(&mut reader).await.unwrap(), Some(Response::Ok)));
+			let register =
+				|domain: &str| Request::Register { domain: domain.into(), target: "3000".into(), force: false };
+			/* Complete connection setup before holding the registry lock. */
+			send(&mut writer, &register("ready")).await.unwrap();
+			assert!(matches!(recv::<_, Response>(&mut reader).await.unwrap(), Some(Response::Ok)));
+			let registry = shared.registrations.lock().await;
+			let (checked, waiting) = oneshot::channel();
+			*shared.registration_checked.lock().unwrap() = Some(checked);
+			send(&mut writer, &register("app")).await.unwrap();
+			waiting.await.unwrap();
+			access.remove_name(&token.id, "app.test", &[]).unwrap();
+			drop(registry);
+			let response = recv::<_, Response>(&mut reader).await.unwrap();
+			assert!(matches!(
+				response,
+				Some(Response::Error { disposition: Some(testd_core::protocol::ErrorDisposition::Terminal), .. })
+			));
+			assert!(!shared.registrations.lock().await.contains("app.test"));
+		})
+		.await
+		.expect("registration grant race timed out");
+	}
 
 	#[test]
 	fn remote_targets_must_match_the_leaf_address() {

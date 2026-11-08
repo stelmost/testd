@@ -205,25 +205,6 @@ async fn ipv6_clients_get_bracketed_inferred_targets() {
 	wait_for_target(&harness, "app.test", Some("[::1]:3000")).await;
 }
 
-#[tokio::test]
-async fn registration_rechecks_grants_after_waiting_for_the_registry() {
-	let harness = start().await;
-	let (mut client, token) = approved_leaf(&harness, &["app"]).await;
-	let registry = harness.registrations.lock().await;
-	send(&mut client.writer, &register("app", "3000", false)).await.unwrap();
-	/* Let the handler reach the held registry lock with its original permission. */
-	tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-	harness.access.remove_name(&token.id, "app.test", &[]).unwrap();
-	drop(registry);
-	let response: Response = tokio::time::timeout(std::time::Duration::from_secs(3), recv(&mut client.reader))
-		.await
-		.unwrap()
-		.unwrap()
-		.unwrap();
-	assert!(matches!(response, Response::Error { disposition: Some(ErrorDisposition::Terminal), .. }));
-	assert!(!harness.registrations.lock().await.contains("app.test"));
-}
-
 async fn wait_for_target(harness: &Harness, domain: &str, target: Option<&str>) {
 	tokio::time::timeout(std::time::Duration::from_secs(5), async {
 		loop {

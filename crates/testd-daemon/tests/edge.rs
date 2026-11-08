@@ -152,8 +152,12 @@ async fn upstream_service(
 			Ok(Response::new(StreamBody::new(frames).boxed()))
 		},
 		"/upload-stream" => {
-			let first = request.body_mut().frame().await.unwrap().unwrap().into_data().unwrap();
-			assert_eq!(first, "first");
+			let mut first = Vec::new();
+			while first.len() < b"first".len() {
+				let frame = request.body_mut().frame().await.unwrap().unwrap().into_data().unwrap();
+				first.extend_from_slice(&frame);
+			}
+			assert_eq!(first, b"first");
 			signals.upload_received.notify_one();
 			let rest = request.into_body().collect().await.unwrap().to_bytes();
 			assert_eq!(rest, "last");
