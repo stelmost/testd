@@ -575,6 +575,36 @@ mod tests {
 		}
 	}
 
+	#[tokio::test]
+	async fn a_running_launch_forwards_rebind_and_returns_its_result() {
+		let dir = tempfile::tempdir().unwrap();
+		let book = book(dir.path().join("launches.json"));
+		let (_state, _stop) = reserve_run(&book, RunPhase::Running);
+		let (sender, mut requests) = mpsc::channel(1);
+		book.running.lock().unwrap().get_mut("one").unwrap().rebind = sender;
+		let (result, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+			tokio::join!(book.rebind("one", "app.example".into(), "127.0.0.1:3001".into()), async {
+				let request = requests.recv().await.unwrap();
+				assert_eq!(request.domain, "app.example");
+				assert_eq!(request.target, "127.0.0.1:3001");
+				request.respond.send(Err("probe failed".into())).unwrap();
+			})
+		})
+		.await
+		.expect("rebind must receive a response");
+		assert_eq!(result, Err("probe failed".into()));
+	}
+
+	#[test]
+	fn a_failed_launch_retains_its_error_after_completion() {
+		let state = Arc::new(Mutex::new(RunState { phase: RunPhase::Starting, ..RunState::default() }));
+		record(&state, &LaunchEvent::Failed { message: "host unavailable".into() });
+		record(&state, &LaunchEvent::Exited { code: None });
+		let state = state.lock().unwrap();
+		assert_eq!(state.phase, RunPhase::Finished);
+		assert_eq!(state.error.as_deref(), Some("host unavailable"));
+	}
+
 	#[test]
 	fn omitting_the_id_assigns_one() {
 		let dir = tempfile::tempdir().unwrap();
