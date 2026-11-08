@@ -266,10 +266,12 @@ async fn tls_accept_loop(
 		let acceptor = acceptor.clone();
 		let ctx = ctx.clone();
 		tokio::spawn(async move {
-			let _permit = permit;
+			let permit = Arc::new(permit);
 			match tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await {
 				Ok(Ok(tls)) => {
-					if let Err(e) = serve_connection(tls, Handler { ctx, scheme: "https", plain: false, peer }).await {
+					if let Err(e) =
+						serve_connection(tls, Handler { ctx, scheme: "https", plain: false, peer, permit }).await
+					{
 						eprintln!("[warn]   tls {}: {e}", peer.ip());
 					}
 				},
@@ -289,8 +291,7 @@ async fn accept_loop(listener: TcpListener, handler: PlainHandler, limiter: Arc<
 		};
 		let handler = handler.clone();
 		tokio::spawn(async move {
-			let _permit = permit;
-			if let Err(e) = serve_connection(stream, handler.into_handler(peer)).await {
+			if let Err(e) = serve_connection(stream, handler.into_handler(peer, permit)).await {
 				eprintln!("[warn]   http {}: {e}", peer.ip());
 			}
 		});
@@ -303,8 +304,8 @@ struct PlainHandler {
 }
 
 impl PlainHandler {
-	fn into_handler(self, peer: SocketAddr) -> Handler {
-		Handler { ctx: self.ctx, scheme: "http", plain: true, peer }
+	fn into_handler(self, peer: SocketAddr, permit: ConnectionPermit) -> Handler {
+		Handler { ctx: self.ctx, scheme: "http", plain: true, peer, permit: Arc::new(permit) }
 	}
 }
 
@@ -314,6 +315,7 @@ struct Handler {
 	scheme: &'static str,
 	plain: bool,
 	peer: SocketAddr,
+	permit: Arc<ConnectionPermit>,
 }
 
 async fn serve_connection<I>(io: I, handler: Handler) -> Result<()>
@@ -464,7 +466,7 @@ async fn proxy(handler: Handler, request: Request<Incoming>, target: &str) -> Re
 	};
 
 	if response.status() == StatusCode::SWITCHING_PROTOCOLS {
-		return upgrade_response(response, client_upgrade);
+		return upgrade_response(response, client_upgrade, handler.permit);
 	}
 
 	let (parts, body) = response.into_parts();
@@ -504,6 +506,7 @@ async fn connect_upstream(
 fn upgrade_response(
 	mut response: Response<Incoming>,
 	client_upgrade: Option<hyper::upgrade::OnUpgrade>,
+	permit: Arc<ConnectionPermit>,
 ) -> Response<Body> {
 	let upstream_upgrade = hyper::upgrade::on(&mut response);
 	let status = response.status();
@@ -517,6 +520,7 @@ fn upgrade_response(
 
 	if let Some(client_upgrade) = client_upgrade {
 		tokio::spawn(async move {
+			let _permit = permit;
 			match tokio::try_join!(client_upgrade, upstream_upgrade) {
 				Ok((client, upstream)) => {
 					let mut client = TokioIo::new(client);
@@ -756,7 +760,9 @@ mod tests {
 	#[test]
 	fn dashboard_requests_are_local_only() {
 		let context = Arc::new(EdgeContext::new("test", Registrations::default()));
+		let limiter = Arc::new(ConnectionLimiter::new(64, 64));
 		let handler = |peer: &str| Handler {
+			permit: Arc::new(limiter.acquire(peer.parse::<SocketAddr>().unwrap().ip()).unwrap()),
 			ctx: Arc::clone(&context),
 			scheme: "https",
 			plain: false,
@@ -778,6 +784,7 @@ mod tests {
 		let mut headers = HeaderMap::new();
 		headers.insert("x-forwarded-for", HeaderValue::from_static("192.168.1.5"));
 		let backend = Handler {
+			permit: Arc::new(limiter.acquire("127.0.0.1".parse().unwrap()).unwrap()),
 			ctx: Arc::clone(&fronted),
 			scheme: "https",
 			plain: false,

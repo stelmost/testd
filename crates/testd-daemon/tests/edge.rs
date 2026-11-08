@@ -455,6 +455,51 @@ async fn websocket_upgrade_is_spliced() {
 }
 
 #[tokio::test]
+async fn open_upgrades_count_toward_the_connection_limit() {
+	let harness = start_plain().await;
+	let mut streams = Vec::new();
+	for _ in 0..64 {
+		let mut stream = TcpStream::connect(harness.edge.http_addr).await.unwrap();
+		stream
+			.write_all(b"GET /ws HTTP/1.1\r\nHost: app.test\r\nConnection: upgrade\r\nUpgrade: websocket\r\n\r\n")
+			.await
+			.unwrap();
+		let mut head = Vec::new();
+		tokio::time::timeout(Duration::from_secs(5), async {
+			let mut byte = [0u8];
+			while !head.ends_with(b"\r\n\r\n") {
+				stream.read_exact(&mut byte).await.unwrap();
+				head.push(byte[0]);
+			}
+		})
+		.await
+		.unwrap();
+		assert!(head.starts_with(b"HTTP/1.1 101"));
+		streams.push(stream);
+	}
+	let mut rejected = TcpStream::connect(harness.edge.http_addr).await.unwrap();
+	let result = tokio::time::timeout(Duration::from_secs(5), rejected.read(&mut [0u8]))
+		.await
+		.unwrap();
+	assert!(matches!(result, Ok(0) | Err(_)), "the 65th connection must be refused: {result:?}");
+	drop(streams);
+	tokio::time::timeout(Duration::from_secs(5), async {
+		loop {
+			let mut stream = TcpStream::connect(harness.edge.http_addr).await.unwrap();
+			if stream.write_all(get("app.test", "/").as_bytes()).await.is_ok() {
+				let mut response = Vec::new();
+				if stream.read_to_end(&mut response).await.is_ok() && response.starts_with(b"HTTP/1.1 200") {
+					break;
+				}
+			}
+			tokio::task::yield_now().await;
+		}
+	})
+	.await
+	.expect("closing upgrades must return their permits");
+}
+
+#[tokio::test]
 async fn tls_serves_a_minted_leaf_from_the_local_root() {
 	let harness = start().await;
 	let ca = Ca::load_or_init(&harness.dir.path().join("pki")).unwrap();
