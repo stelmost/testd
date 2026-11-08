@@ -82,7 +82,11 @@ async fn start() -> Harness {
 }
 
 async fn start_with_shares(provider: Option<std::path::PathBuf>) -> Harness {
-	let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+	start_on("127.0.0.1:0", provider).await
+}
+
+async fn start_on(bind: &str, provider: Option<std::path::PathBuf>) -> Harness {
+	let listener = TcpListener::bind(bind).await.unwrap();
 	let addr = listener.local_addr().unwrap();
 
 	let dir = tempfile::tempdir().unwrap();
@@ -191,6 +195,33 @@ impl Client {
 
 fn register(domain: &str, target: &str, force: bool) -> Request {
 	Request::Register { domain: domain.into(), target: target.into(), force }
+}
+
+#[tokio::test]
+async fn ipv6_clients_get_bracketed_inferred_targets() {
+	let harness = start_on("[::1]:0", None).await;
+	let mut client = Client::connect(harness.addr, SECRET).await;
+	assert!(matches!(client.request(register("app", "3000", false)).await, Response::Ok));
+	wait_for_target(&harness, "app.test", Some("[::1]:3000")).await;
+}
+
+#[tokio::test]
+async fn registration_rechecks_grants_after_waiting_for_the_registry() {
+	let harness = start().await;
+	let (mut client, token) = approved_leaf(&harness, &["app"]).await;
+	let registry = harness.registrations.lock().await;
+	send(&mut client.writer, &register("app", "3000", false)).await.unwrap();
+	/* Let the handler reach the held registry lock with its original permission. */
+	tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+	harness.access.remove_name(&token.id, "app.test", &[]).unwrap();
+	drop(registry);
+	let response: Response = tokio::time::timeout(std::time::Duration::from_secs(3), recv(&mut client.reader))
+		.await
+		.unwrap()
+		.unwrap()
+		.unwrap();
+	assert!(matches!(response, Response::Error { disposition: Some(ErrorDisposition::Terminal), .. }));
+	assert!(!harness.registrations.lock().await.contains("app.test"));
 }
 
 async fn wait_for_target(harness: &Harness, domain: &str, target: Option<&str>) {

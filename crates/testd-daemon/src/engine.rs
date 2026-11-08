@@ -380,20 +380,16 @@ async fn stop_leaf(shared: &Shared, fqdn: &str) -> Result<(), String> {
 /// Delete the grant for one name. The leaf keeps its credential and every
 /// other granted name, and has to ask for this one again.
 async fn delete_grant(shared: &Shared, fqdn: &str) -> Result<(), String> {
-	let claim = {
-		let registrations = shared.registrations.lock().await;
-		registrations
+	let (claim, removed, detached) = {
+		let mut registrations = shared.registrations.lock().await;
+		let claim = registrations
 			.claim(fqdn)
 			.cloned()
-			.ok_or_else(|| format!("{fqdn} is not registered"))?
-	};
-	let Some(grant) = shared.connections.grant(claim.connection) else {
-		return Err(format!("{fqdn} has no issued grant to delete"));
-	};
-	// A token from before per-name grants has no list. Pin it to the names it
-	// publishes now, so deleting one name actually denies it.
-	let live = {
-		let registrations = shared.registrations.lock().await;
+			.ok_or_else(|| format!("{fqdn} is not registered"))?;
+		let Some(grant) = shared.connections.grant(claim.connection) else {
+			return Err(format!("{fqdn} has no issued grant to delete"));
+		};
+		/* Permission changes and claim writes share this lock. Legacy tokens are pinned to their live names. */
 		let owners: HashSet<u64> = shared.connections.with_token(&grant).into_iter().collect();
 		let mut names: Vec<String> = registrations
 			.claims()
@@ -403,21 +399,15 @@ async fn delete_grant(shared: &Shared, fqdn: &str) -> Result<(), String> {
 			.collect();
 		names.sort();
 		names.dedup();
-		names
-	};
-	shared
-		.access
-		.remove_name(&grant, fqdn, &live)
-		.map_err(|e| format!("could not delete the grant: {e}"))?;
-	// Unpublish only this name; the connection and its other names stay.
-	let (removed, detached) = {
-		let mut registrations = shared.registrations.lock().await;
-		let before = registrations.claim(fqdn).cloned();
 		let mut transition = claim_transition(shared).await;
+		shared
+			.access
+			.remove_name(&grant, fqdn, &names)
+			.map_err(|e| format!("could not delete the grant: {e}"))?;
 		let removed = withdraw_granted_claim(&mut registrations, &claim);
 		let after = registrations.claim(fqdn).cloned();
-		let detached = detach_changed_shares(transition.as_mut(), &mut registrations, before.as_ref(), after.as_ref());
-		(removed, detached)
+		let detached = detach_changed_shares(transition.as_mut(), &mut registrations, Some(&claim), after.as_ref());
+		(claim, removed, detached)
 	};
 	if removed && let Some(out) = shared.connections.outbox(claim.connection) {
 		let notice = Response::NameRevoked { domain: fqdn.to_owned() };
@@ -770,7 +760,11 @@ async fn handle_connection(stream: PeekedStream, addr: SocketAddr, shared: Arc<S
 						continue;
 					}
 					// Bare port → prepend client IP. Full host:port → use as-is.
-					let target = if target.contains(':') { target } else { format!("{}:{target}", addr.ip()) };
+					let target = if target.contains(':') {
+						target
+					} else {
+						SocketAddr::new(addr.ip(), target.parse().expect("validated port")).to_string()
+					};
 					if !shared.allow_remote_targets && !addr.ip().is_loopback() && !target_is_client(&target, addr.ip())
 					{
 						let message = format!(
@@ -787,6 +781,12 @@ async fn handle_connection(stream: PeekedStream, addr: SocketAddr, shared: Arc<S
 					let reserved: Vec<&str> = reserved.iter().map(String::as_str).collect();
 					let (result, change, detached) = {
 						let mut regs = shared.registrations.lock().await;
+						/* Approval may have been withdrawn while this request waited for the registry. */
+						if grant.as_ref().is_some_and(|grant| !shared.access.allows(grant, &fqdn)) {
+							drop(regs);
+							reply(&out, Response::terminal_error(format!("the grant for {fqdn} was deleted"))).await?;
+							continue;
+						}
 						let before = regs.claim(&fqdn).cloned();
 						let mut transition = claim_transition(&shared).await;
 						let result = regs.register(connection, registration.clone(), force, &reserved);
