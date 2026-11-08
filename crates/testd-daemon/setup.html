@@ -247,7 +247,8 @@
 	function setReady(id, ready) {
 		const button = document.getElementById(id);
 		button.disabled = ready;
-		button.textContent = ready ? 'Done' : button.textContent.replace('Done', '').trim();
+		button.textContent = ready ? 'Done'
+			: id === 'resolver-action' ? 'Set up resolver' : 'Install certificate';
 	}
 
 	function updateConnection() {

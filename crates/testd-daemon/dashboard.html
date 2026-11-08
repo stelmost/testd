@@ -126,6 +126,11 @@
 								spellcheck="false">
 						</div>
 						<div class="field field-wide">
+							<label for="launch-cwd">Project directory</label>
+							<input class="input" id="launch-cwd" placeholder="Full path to your project" required
+								spellcheck="false">
+						</div>
+						<div class="field field-wide">
 							<label for="launch-command">Command</label>
 							<input class="input" id="launch-command" placeholder="npm run dev" required
 								spellcheck="false">
@@ -570,6 +575,16 @@
 			main.append(line);
 		}
 
+		if (launch.logs && launch.logs.length) {
+			const details = document.createElement('details');
+			const summary = document.createElement('summary');
+			summary.textContent = 'Output';
+			const output = document.createElement('pre');
+			output.textContent = launch.logs.map((item) => item.line).join('\n');
+			details.append(summary, output);
+			main.append(details);
+		}
+
 		if (launch.error) {
 			const error = document.createElement('div');
 			error.className = 'row-error';
@@ -685,6 +700,7 @@
 			label: document.getElementById('launch-label').value.trim(),
 			program: argv[0],
 			args: argv.slice(1),
+			cwd: document.getElementById('launch-cwd').value.trim(),
 			entries: [{
 				domain: document.getElementById('launch-domain').value.trim(),
 				target: document.getElementById('launch-target').value.trim(),
@@ -910,7 +926,10 @@
 			const recovered = eventErrorShown;
 			eventErrorShown = false;
 			setConnection('live');
-			if (recovered) notice('Live updates resumed.', false);
+			if (recovered) {
+				notice('Live updates resumed.', false);
+				certificateState();
+			}
 			const reader = response.body.getReader();
 			const decoder = new TextDecoder();
 			let buffer = '';
@@ -943,6 +962,8 @@
 		document.getElementById('launches')?.scrollIntoView();
 	}
 
+	window.addEventListener('focus', certificateState);
+	setInterval(certificateState, 60000);
 	certificateState();
 	connectEvents();
 </script>

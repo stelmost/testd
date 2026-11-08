@@ -442,7 +442,9 @@ fn record(state: &Arc<Mutex<RunState>>, event: &LaunchEvent) {
 			if let Some(existing) = state.states.iter_mut().find(|item| item.domain == *domain) {
 				existing.target = target.clone();
 				existing.state = *entry;
-				existing.error = error.clone();
+				if error.is_some() || *entry != EntryState::Configured {
+					existing.error = error.clone();
+				}
 			} else {
 				state.states.push(EntryStateView {
 					domain: domain.clone(),
@@ -462,7 +464,15 @@ fn record(state: &Arc<Mutex<RunState>>, event: &LaunchEvent) {
 			state.phase = RunPhase::Finished;
 			state.error = Some(message.clone());
 		},
-		LaunchEvent::Exited { .. } => state.phase = RunPhase::Finished,
+		LaunchEvent::Exited { code } => {
+			state.phase = RunPhase::Finished;
+			if state.error.is_none() {
+				state.error = match code {
+					Some(code) if *code != 0 => Some(format!("command exited with status {code}")),
+					_ => state.states.iter().find_map(|entry| entry.error.clone()),
+				};
+			}
+		},
 		LaunchEvent::Started { .. } => {
 			if state.phase == RunPhase::Starting {
 				state.phase = RunPhase::Running;
@@ -645,6 +655,26 @@ mod tests {
 		let state = state.lock().unwrap();
 		assert_eq!(state.phase, RunPhase::Finished);
 		assert_eq!(state.error.as_deref(), Some("host unavailable"));
+	}
+
+	#[test]
+	fn failed_probes_and_command_exits_remain_visible() {
+		let state = Arc::new(Mutex::new(RunState::default()));
+		let event = |error| LaunchEvent::State {
+			domain: "app.example".into(),
+			target: "127.0.0.1:3000".into(),
+			state: EntryState::Configured,
+			error,
+		};
+		record(&state, &event(Some("name is already registered".into())));
+		record(&state, &event(None));
+		record(&state, &LaunchEvent::Exited { code: None });
+		assert_eq!(state.lock().unwrap().error.as_deref(), Some("name is already registered"));
+		assert!(state.lock().unwrap().states[0].error.is_some());
+
+		let state = Arc::new(Mutex::new(RunState::default()));
+		record(&state, &LaunchEvent::Exited { code: Some(7) });
+		assert_eq!(state.lock().unwrap().error.as_deref(), Some("command exited with status 7"));
 	}
 
 	#[test]
