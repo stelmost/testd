@@ -805,6 +805,17 @@ mod tests {
 	}
 
 	#[test]
+	fn macos_root_selection_leaves_other_installations_alone() {
+		let roots = vec![
+			MacRoot { hash: "ours".into(), pem: "our certificate\n".into() },
+			MacRoot { hash: "theirs".into(), pem: "another certificate\n".into() },
+		];
+		let matched = matching_macos_roots(roots, "our certificate\r\n");
+		assert_eq!(matched.len(), 1);
+		assert_eq!(matched[0].hash, "ours");
+	}
+
+	#[test]
 	fn sha1_hex_matches_a_known_digest() {
 		assert_eq!(sha1_hex(b"abc"), "a9993e364706816aba3e25717850c26c9cd0d89d");
 	}
@@ -1325,9 +1336,13 @@ fn macos_testd_roots() -> io::Result<Vec<MacRoot>> {
 #[cfg(target_os = "macos")]
 fn is_root_trusted_macos(cert_pem: &str) -> bool {
 	let Ok(roots) = macos_testd_roots() else { return false };
-	// More than one testd root is stale state from an earlier run. Treating it
-	// as untrusted makes init and doctor --fix replace the whole set.
-	roots.len() == 1 && roots[0].pem == normalize_pem(cert_pem)
+	!matching_macos_roots(roots, cert_pem).is_empty()
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn matching_macos_roots(roots: Vec<MacRoot>, cert_pem: &str) -> Vec<MacRoot> {
+	let expected = normalize_pem(cert_pem);
+	roots.into_iter().filter(|root| root.pem == expected).collect()
 }
 
 #[cfg(target_os = "macos")]
@@ -1396,15 +1411,13 @@ pub fn trust_root_gui(cert_pem: &str) -> io::Result<()> {
 		use base64::Engine;
 		use base64::engine::general_purpose::STANDARD;
 
-		let roots = macos_testd_roots()?;
 		// `do shell script` does not inherit stdin. Pass the public certificate
 		// as base64 and let the elevated shell create its own root-only file.
 		let encoded = STANDARD.encode(cert_pem.as_bytes());
 		let script = format!(
-			"{}tmp=$(mktemp /var/root/testd-root.XXXXXX) && trap 'rm -f $tmp' EXIT && \
+			"tmp=$(mktemp /var/root/testd-root.XXXXXX) && trap 'rm -f $tmp' EXIT && \
 			 printf '%s' '{encoded}' | base64 -D > $tmp && \
-			 security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain $tmp",
-			delete_macos_roots_script(&roots)
+			 security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain $tmp"
 		);
 		let status = silent_command("osascript")
 			.args(["-e", &format!("do shell script \"{script}\" with administrator privileges")])
@@ -1454,10 +1467,6 @@ fn trust_root_linux(cert_pem: &str, elevation: Elevation) -> io::Result<()> {
 
 #[cfg(target_os = "macos")]
 fn trust_root_macos(cert_pem: &str) -> io::Result<()> {
-	// Remove every old testd root first. The same CN can be present more than
-	// once after failed runs, and `add-trusted-cert` cannot reliably set trust
-	// on a duplicate item.
-	delete_macos_roots(&macos_testd_roots()?)?;
 	let script = "tmp=$(mktemp /var/root/testd-root.XXXXXX) && trap 'rm -f $tmp' EXIT && \
 		cat > $tmp && security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain $tmp";
 	let mut command = silent_command("sudo");
@@ -1504,7 +1513,7 @@ pub fn untrust_root(cert_pem: &str) -> io::Result<()> {
 	return untrust_root_linux(cert_pem, Elevation::Sudo);
 
 	#[cfg(target_os = "macos")]
-	return untrust_root_macos();
+	return untrust_root_macos(cert_pem);
 
 	#[cfg(target_os = "windows")]
 	return untrust_root_windows(cert_pem);
@@ -1523,7 +1532,7 @@ pub fn untrust_root_gui(cert_pem: &str) -> io::Result<()> {
 	}
 	#[cfg(target_os = "macos")]
 	{
-		let roots = macos_testd_roots()?;
+		let roots = matching_macos_roots(macos_testd_roots()?, cert_pem);
 		if roots.is_empty() {
 			return Ok(());
 		}
@@ -1574,10 +1583,8 @@ fn untrust_root_linux(cert_pem: &str, elevation: Elevation) -> io::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn untrust_root_macos() -> io::Result<()> {
-	// Uninstall removes every testd root, including duplicates left by earlier
-	// failed runs. Deleting by CN removes only one item and can leave the rest.
-	delete_macos_roots(&macos_testd_roots()?)
+fn untrust_root_macos(cert_pem: &str) -> io::Result<()> {
+	delete_macos_roots(&matching_macos_roots(macos_testd_roots()?, cert_pem))
 }
 
 #[cfg(target_os = "windows")]

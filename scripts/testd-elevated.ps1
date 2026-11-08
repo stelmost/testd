@@ -89,15 +89,15 @@ switch ($Action) {
 		Assert-Tld $Tld
 		Assert-IPv4 $NameServer
 		$namespace = "." + $Tld
-		$existing = @(Get-DnsClientNrptRule -ErrorAction SilentlyContinue |
-			Where-Object { $_.Namespace -eq $namespace })
-		$correct = $existing | Where-Object { $_.NameServers -contains $NameServer }
-		if (-not $correct) {
-			foreach ($rule in $existing) {
-				# Only the cmdlet's own -Force suppresses its confirmation. Let a
-				# failure stop the action: a stale rule must not survive.
-				Remove-DnsClientNrptRule -Name $rule.Name -Force -Confirm:$false
+		$existing = @(Get-DnsClientNrptRule |
+			Where-Object { $_.Namespace -contains $namespace })
+		foreach ($rule in $existing) {
+			if (@($rule.Namespace).Count -ne 1 -or @($rule.NameServers).Count -ne 1 -or
+				$rule.NameServers -notcontains $NameServer) {
+				throw 'existing NRPT rules conflict; unowned rules were left untouched'
 			}
+		}
+		if ($existing.Count -eq 0) {
 			Add-DnsClientNrptRule -Namespace $namespace -NameServers $NameServer | Out-Null
 		}
 	}

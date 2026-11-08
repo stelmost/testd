@@ -219,7 +219,9 @@ class ReleaseTests(unittest.TestCase):
 		script = (ROOT / 'scripts/testd-elevated.ps1').read_text()
 		self.assertIn("$ConfirmPreference = 'None'", script)
 		self.assertIn('certutil.exe -delstore -f Root', script)
-		self.assertIn('Remove-DnsClientNrptRule -Name $rule.Name -Force', script)
+		self.assertIn('Remove-DnsClientNrptRule -Name $_.Name -Force', script)
+		install = script.split("'InstallNrpt' {", 1)[1].split("'RemoveNrpt' {", 1)[0]
+		self.assertNotIn('Remove-DnsClientNrptRule', install)
 		self.assertNotIn('Remove-CimInstance', script)
 
 	def test_workspace_versions_match(self):
