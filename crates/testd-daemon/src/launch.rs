@@ -378,8 +378,15 @@ async fn run_launch(
 		return;
 	};
 
+	let mut rebinding: Option<futures_util::future::BoxFuture<'_, ()>> = None;
 	loop {
 		tokio::select! {
+			_ = async {
+				match rebinding.as_mut() {
+					Some(request) => request.await,
+					None => std::future::pending().await,
+				}
+			} => rebinding = None,
 			event = events.recv() => {
 				let Some(event) = event else { break };
 				record(&state, &event);
@@ -393,6 +400,7 @@ async fn run_launch(
 				}
 			},
 			Some(()) = stop.recv() => {
+				drop(rebinding.take());
 				state.lock().expect("launch state poisoned").phase = RunPhase::Stopping;
 				let _ = launch.stop().await;
 				while let Ok(event) = events.try_recv() {
@@ -402,8 +410,15 @@ async fn run_launch(
 				break;
 			},
 			Some(request) = rebind.recv() => {
-				let result = launch.rebind(&request.domain, &request.target).await;
-				let _ = request.respond.send(result);
+				if rebinding.is_some() {
+					let _ = request.respond.send(Err("launch is already rebinding".into()));
+				} else {
+					let launch = &launch;
+					rebinding = Some(Box::pin(async move {
+						let result = launch.rebind(&request.domain, &request.target).await;
+						let _ = request.respond.send(result);
+					}));
+				}
 			},
 		}
 	}

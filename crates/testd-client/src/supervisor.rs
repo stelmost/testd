@@ -13,7 +13,7 @@ use anyhow::{Context, Result, bail};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::process::{Child, Command as ProcessCommand};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use serde::Serialize;
 use testd_core::config::ClientConfig;
@@ -233,10 +233,11 @@ async fn run_launch(
 	let mut revoked: HashSet<String> = HashSet::new();
 	let mut started = false;
 	let mut notices_open = true;
+	let mut interrupted_notice = None;
 	let mut stop_responder: Option<oneshot::Sender<()>> = None;
 	let exit_code;
 
-	loop {
+	'running: loop {
 		tokio::select! {
 			status = child.wait() => {
 				exit_code = status.ok().and_then(|s| s.code());
@@ -263,7 +264,12 @@ async fn run_launch(
 					},
 				}
 			},
-			notice = notices.recv(), if notices_open => match notice {
+			notice = async {
+				match interrupted_notice.take() {
+					Some(notice) => Some(notice),
+					None => notices.recv().await,
+				}
+			}, if notices_open => match notice {
 				Some(SessionNotice::StoppedByHost(domain)) => {
 					// The operator stopped this leaf. The saved launch and its
 					// grants stay, so Start publishes the names again.
@@ -326,7 +332,35 @@ async fn run_launch(
 						let _ = respond.send(Err("launch is still starting".into()));
 						continue;
 					}
-					let result = rebind(&spec, &session, &mut confirmed, &events, &domain, &target).await;
+					let result = tokio::select! {
+						result = rebind(&spec, &session, &mut confirmed, &events, &domain, &target) => result,
+						status = child.wait() => {
+							let _ = respond.send(Err("launch exited during rebind".into()));
+							exit_code = status.ok().and_then(|status| status.code());
+							break 'running;
+						},
+						command = commands.recv() => match command {
+							Some(Command::Rebind { respond: next, .. }) => {
+								let _ = next.send(Err("launch is already rebinding".into()));
+								Err("rebind interrupted by another request".into())
+							},
+							command => {
+								let _ = respond.send(Err("launch stopped during rebind".into()));
+								if let Some(Command::Stop { respond }) = command { stop_responder = Some(respond); }
+								startup_abort.abort();
+								stop_child(&mut child).await;
+								exit_code = None;
+								break 'running;
+							},
+						},
+						notice = notices.recv(), if notices_open => {
+							match notice {
+								Some(notice) => interrupted_notice = Some(notice),
+								None => notices_open = false,
+							}
+							Err("rebind interrupted by the host".into())
+						},
+					};
 					let _ = respond.send(result);
 				},
 			},
@@ -620,6 +654,8 @@ impl Live {
 #[derive(Clone)]
 struct SessionHandle {
 	commands: mpsc::Sender<SessionCommand>,
+	cancel: watch::Sender<bool>,
+	finished: watch::Receiver<bool>,
 }
 
 impl SessionHandle {
@@ -630,8 +666,16 @@ impl SessionHandle {
 		notices: mpsc::UnboundedSender<SessionNotice>,
 	) -> Self {
 		let (commands, receiver) = mpsc::channel(16);
-		tokio::spawn(async move { session_loop(config, Some(live), receiver, events, notices).await });
-		Self { commands }
+		let (cancel, mut cancellation) = watch::channel(false);
+		let (done, finished) = watch::channel(false);
+		tokio::spawn(async move {
+			tokio::select! {
+				_ = cancellation.changed() => {},
+				_ = session_loop(config, Some(live), receiver, events, notices) => {},
+			}
+			done.send_replace(true);
+		});
+		Self { commands, cancel, finished }
 	}
 
 	async fn set_target(&self, domain: &str, target: &str, force: bool) -> Result<(), String> {
@@ -645,8 +689,20 @@ impl SessionHandle {
 
 	async fn stop(&self) {
 		let (respond, response) = oneshot::channel();
-		if self.commands.send(SessionCommand::Stop { respond }).await.is_ok() {
-			let _ = response.await;
+		let graceful = async {
+			if self.commands.send(SessionCommand::Stop { respond }).await.is_ok() {
+				let _ = response.await;
+			}
+		};
+		/* A pending grant or reconnect must not trap cleanup behind the request queue. */
+		if tokio::time::timeout(Duration::from_secs(1), graceful).await.is_err() {
+			self.cancel.send_replace(true);
+		}
+		let mut finished = self.finished.clone();
+		while !*finished.borrow_and_update() {
+			if finished.changed().await.is_err() {
+				break;
+			}
 		}
 	}
 }
@@ -1192,6 +1248,51 @@ mod tests {
 			_ => unreachable!(),
 		}
 		launch.stop().await.unwrap();
+	}
+
+	#[tokio::test]
+	async fn stop_interrupts_an_unfinished_rebind() {
+		let host = fake_host().await;
+		let (_listener, target) = target().await;
+		let (_reserved, dead) = unavailable_target();
+		let mut launch = launch(spec_with_args(&target), config(&host.addr)).await.unwrap();
+		let mut events = launch.take_events().unwrap();
+		next_state(&mut events, EntryState::Confirmed).await;
+		let (rebound, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+			tokio::join!(launch.rebind("app", &dead), async {
+				next_state(&mut events, EntryState::Probing).await;
+				launch.stop().await.unwrap();
+			})
+		})
+		.await
+		.expect("stop waited for the five-second probe");
+		assert!(rebound.is_err());
+	}
+
+	#[tokio::test]
+	async fn stop_interrupts_a_stalled_registration_request() {
+		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let address = listener.local_addr().unwrap().to_string();
+		let (received, request) = oneshot::channel();
+		let host = tokio::spawn(async move {
+			let (stream, _) = listener.accept().await.unwrap();
+			let (reader, mut writer) = stream.into_split();
+			let mut reader = BufReader::new(reader);
+			let _: Auth = protocol::recv(&mut reader).await.unwrap().unwrap();
+			protocol::send(&mut writer, &Response::Ok).await.unwrap();
+			let _: Request = protocol::recv(&mut reader).await.unwrap().unwrap();
+			received.send(()).unwrap();
+			assert!(protocol::recv::<_, Request>(&mut reader).await.unwrap().is_none());
+		});
+		let (_listener, target) = target().await;
+		let mut launch = launch(spec_with_args(&target), config(&address)).await.unwrap();
+		let _events = launch.take_events().unwrap();
+		tokio::time::timeout(Duration::from_secs(3), request).await.unwrap().unwrap();
+		tokio::time::timeout(Duration::from_secs(3), launch.stop())
+			.await
+			.unwrap()
+			.unwrap();
+		tokio::time::timeout(Duration::from_secs(3), host).await.unwrap().unwrap();
 	}
 
 	#[tokio::test]
