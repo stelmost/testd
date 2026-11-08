@@ -1539,7 +1539,8 @@ def prepare(args):
 		print(f'Missing: {requirement}')
 	print('Native GUI builds also require Xcode on macOS or Visual Studio C++ tools and WebView2 on Windows.'
 		if args.gui else 'GUI checks are opt-in with --gui; ci always includes them.')
-	print('No tools were installed. See tests/README.md for preparation commands.')
+	print('This command only checks prerequisites; it does not install tools. '
+		'See tests/README.md for setup commands.')
 	return 2 if missing else 0
 
 
