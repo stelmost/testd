@@ -4,7 +4,9 @@
 //! listener; the authenticated listener never exposes process control.
 
 use std::collections::{HashMap, VecDeque};
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -378,7 +380,7 @@ async fn run_launch(
 		return;
 	};
 
-	let mut rebinding: Option<futures_util::future::BoxFuture<'_, ()>> = None;
+	let mut rebinding: Option<Pin<Box<dyn Future<Output = ()> + Send>>> = None;
 	loop {
 		tokio::select! {
 			_ = async {
