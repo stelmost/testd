@@ -18,7 +18,7 @@ Never count an ignored, skipped, inapplicable, or unrun check as a pass. A succe
 | Contract | Automated coverage | Remaining evidence or blocker |
 |---|---|---|
 | Fresh configuration, private state, DNS-only setup, and local defaults | `tests/cli.rs`, `testd-core` config tests | Installed packages, OS permissions, and actual GUI setup |
-| Authentication, name validation, duplicate ownership, rollback, disconnect, and revocation | `crates/testd-daemon/tests/engine.rs`, core protocol and registry tests, `product_flow.rs` | The deferred grant-revocation race and platform workflow validation |
+| Authentication, name validation, duplicate ownership, rollback, disconnect, and revocation | `crates/testd-daemon/tests/engine.rs`, core protocol and registry tests, `product_flow.rs` | Platform workflow validation |
 | DNS A answers, case-insensitive names, unknown names, malformed input, and loopback listener | `resolver/dns.rs` unit tests and `product_flow.rs` over real UDP | Real OS resolver integration |
 | TLS name and root validation, proxy routing and failures | `crates/testd-daemon/tests/edge.rs`, `product_flow.rs`, `testd-pki` tests | Installed system and browser trust; real browser behavior |
 | Preserve unowned resolver and trust state, report conflicts, remove only proven owned state | Linux ownership, resolver, and trust script fixtures in `crates/testd-setup` | Shared trust-store effects and concurrent privileged changes; real disposable-host checks; macOS and Windows ownership safeguards are incomplete |
@@ -155,7 +155,7 @@ Use an absolute fixture path: Bun treats a relative path as a search pattern and
 
 The GUI requires its platform build prerequisites and Rust 1.90 checks. Run the full dependency policy against the selected release scope; a non-GUI or CI-scoped pass does not clear a GUI-only advisory. The cross-language browser-report fixture requires Bun. PowerShell parser and behavior fixtures are required on Windows; their absence on other platforms is inapplicable. A PowerShell fixture is not a Windows platform run.
 
-The release runner's `core` suite and stable version tags include ignored tests; prerelease tags and ordinary CI runs do not constitute release approval. Share-lifetime contracts use fake Unix providers and do not test the deferred grant-revocation race. Run the complete non-GUI suite including ignored cases and require no unexplained skips:
+The release runner's `core` suite and stable version tags include ignored tests; prerelease tags and ordinary CI runs do not constitute release approval. Share-lifetime contracts use fake Unix providers. The engine suite also checks permission withdrawal while a registration waits for the registry lock. Run the complete non-GUI suite including ignored cases and require no unexplained skips:
 
 ```sh
 cargo +1.90.0 nextest run --workspace --exclude testd-gui --locked --run-ignored all

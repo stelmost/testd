@@ -10,6 +10,20 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 - The tray app opens the dashboard in a window instead of the browser, and lists `testd.test → dashboard` as the last row of the name list
 - First-run setup is a local page served by the daemon on an ephemeral loopback port and shown in a dialog; it shares the dashboard stylesheet and talks HTTP instead of Tauri commands
 
+### Fixed
+
+- Name-grant deletion and registration share a lock, preventing a waiting registration from restoring withdrawn access
+- Private state is replaced atomically; failed quick-launch edits preserve live definitions, and unreadable launch files stop startup rather than being overwritten
+- macOS certificate actions preserve other installations' roots, and Windows resolver setup refuses conflicting unowned rules
+- Failed startup releases background listeners, and the setup dialog accepts another attempt after a start failure
+- Wrapped CLI commands stop their process trees; quick launches keep Stop responsive during rebinding and stalled host requests
+- WebSocket upgrades retain their connection-limit permits, IPv6 targets use brackets, and silent authentication peers no longer block failover
+- Dashboard and tray links include the configured HTTPS port, and quick-launch command parsing preserves Windows paths
+
+### Removed
+
+- Unused Caddy-trust and prefix-scope helpers, and the unused second product-site implementation
+
 ## [0.1.0-alpha] - 2026-11-03
 
 First public release. The CLI, daemon, and tray ship as one version; desktop bundles are unsigned and installed by hand.

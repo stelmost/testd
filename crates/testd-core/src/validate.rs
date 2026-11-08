@@ -50,15 +50,6 @@ pub fn is_single_label(domain: &str) -> bool {
 pub const SINGLE_LABEL_HINT: &str =
 	"Prefer <service>.<project>.<tld>, for example app.example.test. Single-label names collide across projects.";
 
-/// Whether a name is inside a token's prefix scope.
-/// A prefix `example` covers `example` and `app.example`, not `badexample`.
-pub fn name_in_scope(domain: &str, prefix: &str) -> bool {
-	if prefix.is_empty() {
-		return true;
-	}
-	domain == prefix || domain.ends_with(&format!(".{prefix}"))
-}
-
 /// Validate a target: a bare port, `host:port`, `ip:port`, or `[ipv6]:port`.
 pub fn validate_target(target: &str) -> Result<(), String> {
 	if target.is_empty() {
@@ -140,16 +131,6 @@ mod tests {
 		assert!(validate_domain("app\nfoo", "test").is_err());
 		assert!(validate_domain(&"a".repeat(64), "test").is_err());
 		assert!(validate_domain(&"a".repeat(250), "test").is_err());
-	}
-
-	#[test]
-	fn prefix_scope_respects_label_boundaries() {
-		assert!(name_in_scope("example", "example"));
-		assert!(name_in_scope("app.example", "example"));
-		assert!(name_in_scope("api.app.example", "example"));
-		assert!(!name_in_scope("badexample", "example"));
-		assert!(!name_in_scope("example.dev", "example"));
-		assert!(name_in_scope("anything.dev", ""));
 	}
 
 	#[test]
