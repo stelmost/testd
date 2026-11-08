@@ -1578,6 +1578,70 @@ class UnixHostContractTests(unittest.TestCase):
 			self.assertEqual(result.returncode, 0, result.stderr)
 			self.assertEqual(result.stdout, 'unset|unset|unset|testdcheck')
 
+	def test_name_removal_requires_router_nxdomain_and_live_dashboard_evidence(self):
+		script = '''
+source tests/host/lib.sh
+router_status() { printf '%s' "$ROUTER_STATUS"; }
+dns_query() {
+	if [ "$1" = "testd.$TLD" ]; then
+		[ "$DNS_ALIVE" = '1' ] && printf '127.0.0.1'
+	else
+		printf '%s' "$DNS_RCODE"
+	fi
+}
+dashboard_get() { [ "$DASHBOARD_ALIVE" = '1' ]; }
+if name_is_removed "app.$TLD"; then printf 'removed'; else printf 'not removed'; fi
+'''
+		cases = (
+			('404', '3', '1', '1', True),
+			('200', '3', '1', '1', False),
+			('502', '3', '1', '1', False),
+			('000', '3', '1', '1', False),
+			('404', '0', '1', '1', False),
+			('404', '2', '1', '1', False),
+			('404', '', '1', '1', False),
+			('404', '3', '0', '1', False),
+			('404', '3', '1', '0', False),
+		)
+		with tempfile.TemporaryDirectory() as temporary:
+			for router, rcode, dns, dashboard, expected in cases:
+				with self.subTest(router=router, rcode=rcode, dns=dns, dashboard=dashboard):
+					env = {**os.environ, 'TESTD_HOST_OUTPUT_DIR': temporary, 'ROUTER_STATUS': router,
+						'DNS_RCODE': rcode, 'DNS_ALIVE': dns, 'DASHBOARD_ALIVE': dashboard}
+					result = subprocess.run(['bash', '-c', script], cwd=ROOT, env=env,
+						capture_output=True, text=True, timeout=5, check=True)
+					self.assertEqual(result.stdout, 'removed' if expected else 'not removed')
+
+	def test_dns_response_codes_require_matching_complete_replies(self):
+		import struct
+		for rcode, has_matching_id, is_truncated in ((0, True, False), (3, True, False),
+				(3, False, False), (3, True, True)):
+			with self.subTest(rcode=rcode, matching=has_matching_id, truncated=is_truncated), \
+					tempfile.TemporaryDirectory() as temporary, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server:
+				server.bind(('127.0.0.1', 0))
+				server.settimeout(5)
+				def reply():
+					query, peer = server.recvfrom(2048)
+					query_id = int.from_bytes(query[:2], 'big')
+					response_id = query_id if has_matching_id else query_id ^ 1
+					flags = 0x8000 | rcode | (0x0200 if is_truncated else 0)
+					server.sendto(struct.pack('>HHHHHH', response_id, flags, 0, 0, 0, 0), peer)
+				thread = threading.Thread(target=reply)
+				thread.start()
+				try:
+					script = f'source tests/host/lib.sh; dns_query app.testdcheck {server.getsockname()[1]} rcode'
+					result = subprocess.run(['bash', '-c', script], cwd=ROOT,
+						env={**os.environ, 'TESTD_HOST_OUTPUT_DIR': temporary},
+						capture_output=True, text=True, timeout=10)
+				finally:
+					thread.join(timeout=5)
+				self.assertFalse(thread.is_alive())
+				if has_matching_id and not is_truncated:
+					self.assertEqual(result.returncode, 0, result.stderr)
+					self.assertEqual(result.stdout.strip(), str(rcode))
+				else:
+					self.assertNotEqual(result.returncode, 0)
+
 	def test_quick_launch_definition_pins_the_fixture_interpreter(self):
 		script = 'source tests/host/common.sh; quick_launch_definition'
 		result = subprocess.run(['bash', '-c', script], cwd=ROOT, env={**os.environ, 'LAUNCH_PORT': '18081'},
@@ -3002,18 +3066,20 @@ class PowerShellScriptTests(unittest.TestCase):
 			"foreach ($name in @('Router-Status', 'Test-NameRemoved')) {"
 			'$definition = $ast.Find({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] '
 			'-and $args[0].Name -eq $name }, $true); . ([scriptblock]::Create($definition.Extent.Text)) };'
-			"$Tld = 'testdcheck'; $router = '404'; $stale = $false; $dns = $true;"
+			"$Tld = 'testdcheck'; $router = '404'; $stale = $false; $dns = $true; $dnsError = 9003;"
 			'function global:curl.exe { $global:curlArgs = @($args); return $global:router };'
 			'function global:Resolve-DnsName { [CmdletBinding()] param($Name, $Server, $Type, [switch]$DnsOnly);'
 			"if ($Name -eq 'testd.testdcheck') { if ($global:dns) { return @{ IPAddress = '127.0.0.1' } }; "
-			"throw 'DNS unavailable' }; if ($global:stale) { return @{ IPAddress = '127.0.0.1' } }; throw 'NXDOMAIN' };"
+			"throw 'DNS unavailable' }; if ($global:stale) { return @{ IPAddress = '127.0.0.1' } }; "
+			"throw [ComponentModel.Win32Exception]::new($global:dnsError) };"
 			"$good = Test-NameRemoved 'app.testdproj.testdcheck';"
 			"$router = '200'; $routed = Test-NameRemoved 'app.testdproj.testdcheck';"
 			"$router = '000'; $unreachable = Test-NameRemoved 'app.testdproj.testdcheck';"
 			"$router = '404'; $stale = $true; $staleName = Test-NameRemoved 'app.testdproj.testdcheck';"
-			"$stale = $false; $dns = $false; $noDns = Test-NameRemoved 'app.testdproj.testdcheck';"
+			"$stale = $false; $dnsError = 9002; $servfail = Test-NameRemoved 'app.testdproj.testdcheck';"
+			"$dnsError = 9003; $dns = $false; $noDns = Test-NameRemoved 'app.testdproj.testdcheck';"
 			'@{ good = $good; routed = $routed; unreachable = $unreachable; stale = $staleName; '
-			'noDns = $noDns; curlArgs = $global:curlArgs } | ConvertTo-Json -Depth 4 -Compress'
+			'servfail = $servfail; noDns = $noDns; curlArgs = $global:curlArgs } | ConvertTo-Json -Depth 4 -Compress'
 		)
 		for engine in POWERSHELLS:
 			with self.subTest(engine=pathlib.Path(engine).name):
@@ -3022,7 +3088,7 @@ class PowerShellScriptTests(unittest.TestCase):
 				self.assertEqual(result.returncode, 0, result.stderr)
 				value = json.loads(result.stdout)
 				self.assertTrue(value['good'])
-				for field in ('routed', 'unreachable', 'stale', 'noDns'):
+				for field in ('routed', 'unreachable', 'stale', 'servfail', 'noDns'):
 					self.assertFalse(value[field], field)
 				self.assertIn('Host: app.testdproj.testdcheck', value['curlArgs'])
 				self.assertIn('http://127.0.0.1:7740/', value['curlArgs'])

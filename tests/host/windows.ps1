@@ -97,9 +97,11 @@ function Test-NameRemoved([string]$HostName) {
 	# An unregistered TLS name has no certificate, so ask the plain router for a positive 404.
 	if ((Router-Status $HostName) -ne '404') { return $false }
 	try {
-		$answer = @(Resolve-DnsName -Name $HostName -Server 127.0.0.1 -Type A -DnsOnly -ErrorAction Stop)
-		if (@($answer | Where-Object { $_.IPAddress }).Count -gt 0) { return $false }
-	} catch { }
+		$null = Resolve-DnsName -Name $HostName -Server 127.0.0.1 -Type A -DnsOnly -ErrorAction Stop
+		return $false
+	} catch {
+		if ($_.Exception.NativeErrorCode -ne 9003) { return $false }
+	}
 	# A failed query alone is not proof of removal: the DNS server must still answer.
 	try {
 		$dashboard = Resolve-DnsName -Name "testd.$Tld" -Server 127.0.0.1 -Type A -DnsOnly -ErrorAction Stop
@@ -605,7 +607,7 @@ if (-not $python) {
 		$null = Dashboard-Post '/api/local/launches/stop' (@{ id = $LaunchId } | ConvertTo-Json -Compress)
 		$stopped = $false
 		for ($i = 0; $i -lt 20; $i++) {
-			if ((Curl-Status "launch.testdproj.$Tld" '/') -ne '200') { $stopped = $true; break }
+			if (Test-NameRemoved "launch.testdproj.$Tld") { $stopped = $true; break }
 			Start-Sleep -Seconds 1
 		}
 		if ($stopped) { Pass 'stopping a launch removes the name' } else { Fail 'stopping a launch removes the name' }

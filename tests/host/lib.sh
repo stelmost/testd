@@ -151,6 +151,7 @@ wait_for_proxy() {
 create_fake_tunnel() {
 	cat >"$FAKE_TUNNEL" <<'SH'
 #!/bin/sh
+echo "$$" > "$(dirname "$0")/fake-tunnel.pid"
 echo 'INF |  https://fake-name.trycloudflare.com  |' >&2
 exec sleep 60
 SH
@@ -208,13 +209,13 @@ ensure_app_server() {
 # Query A records from the built-in DNS server without dig/dnspython.
 dns_query() {
 	local name="$1" port="$2"
-	python3 - "$name" "$port" <<'PY'
+	python3 - "$name" "$port" "${3:-answers}" <<'PY'
 import random
 import socket
 import struct
 import sys
 
-name, port = sys.argv[1], int(sys.argv[2])
+name, port, mode = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 qid = random.randrange(65536)
 query = struct.pack('>HHHHHH', qid, 0x0100, 1, 0, 0, 0)
 for label in name.strip('.').split('.'):
@@ -222,8 +223,16 @@ for label in name.strip('.').split('.'):
 query += b'\x00' + struct.pack('>HH', 1, 1)
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.settimeout(3)
-sock.sendto(query, ('127.0.0.1', port))
-data, _ = sock.recvfrom(2048)
+sock.connect(('127.0.0.1', port))
+sock.send(query)
+data = sock.recv(2048)
+response_id, flags = struct.unpack('>HH', data[:4])
+assert response_id == qid and flags & 0x8000 and not flags & 0x0200, 'invalid DNS response'
+rcode = flags & 0xF
+if mode == 'rcode':
+    print(rcode)
+    sys.exit(0)
+assert rcode == 0, f'DNS response code {rcode}'
 off = 12
 for _ in range(struct.unpack('>H', data[4:6])[0]):
     while data[off] != 0:
@@ -255,6 +264,19 @@ http_get() {
 		--cacert "$(pki_path)/root.crt" \
 		--resolve "$host:$EDGE_PORT:127.0.0.1" \
 		"https://$host:$EDGE_PORT$path"
+}
+
+router_status() {
+	curl --silent --max-time 10 --noproxy '*' --output /dev/null --write-out '%{http_code}' \
+		--header "Host: $1" 'http://127.0.0.1:7740/'
+}
+
+name_is_removed() {
+	# TLS errors and dead upstreams are not evidence that a registration was removed.
+	[ "$(router_status "$1")" = '404' ] || return 1
+	[ "$(dns_query "$1" "$DNS_PORT" rcode)" = '3' ] || return 1
+	[ "$(dns_query "testd.$TLD" "$DNS_PORT")" = '127.0.0.1' ] || return 1
+	dashboard_get /api/status >/dev/null
 }
 
 # HTTP status from the edge, trusting the throwaway root explicitly.

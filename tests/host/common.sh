@@ -287,7 +287,7 @@ check_registration() {
 	stop_client
 	local removed=0
 	for _ in $(seq 1 20); do
-		if ! http_get "app.testdproj.$TLD" / >/dev/null 2>&1; then removed=1; break; fi
+		if name_is_removed "app.testdproj.$TLD"; then removed=1; break; fi
 		sleep 1
 	done
 	if [ "$removed" = '1' ]; then pass 'disconnect removes the name'; else fail 'disconnect removes the name'; fi
@@ -355,10 +355,30 @@ check_sharing() {
 		pass 'an unknown provider is refused'
 	fi
 
+	# Leave a live share for disconnect cleanup to stop, rather than testing an empty share list.
+	if ! HOME="$TEST_HOME" "$TESTD_BIN" share share.testdproj >/dev/null 2>&1; then
+		fail 'disconnect fixture starts a share'
+		stop_client
+		return
+	fi
+	local share_pid
+	share_pid="$(< "$TEST_HOME/fake-tunnel.pid")"
+	if [[ ! "$share_pid" =~ ^[0-9]+$ ]] || [ "$share_pid" -le 1 ] || ! kill -0 "$share_pid" 2>/dev/null; then
+		fail 'disconnect fixture has a live provider'
+		stop_client
+		return
+	fi
 	stop_client
 	local removed=0
 	for _ in $(seq 1 20); do
-		if ! http_get "share.testdproj.$TLD" / >/dev/null 2>&1; then removed=1; break; fi
+		if name_is_removed "share.testdproj.$TLD" && ! kill -0 "$share_pid" 2>/dev/null && \
+			dashboard_get /api/status | python3 -c '
+import json, sys
+assert not any(share["name"] == "share.testdproj" for share in json.load(sys.stdin)["shares"])
+'; then
+			removed=1
+			break
+		fi
 		sleep 1
 	done
 	if [ "$removed" = '1' ]; then
@@ -472,7 +492,7 @@ assert any(state["state"] == "confirmed" for state in launch["states"])
 	fi
 	local stopped=0
 	for _ in $(seq 1 20); do
-		if ! http_get "launch.testdproj.$TLD" / >/dev/null 2>&1; then stopped=1; break; fi
+		if name_is_removed "launch.testdproj.$TLD"; then stopped=1; break; fi
 		sleep 1
 	done
 	if [ "$stopped" = '1' ]; then
