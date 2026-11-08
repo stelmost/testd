@@ -39,6 +39,7 @@ pub struct Setup {
 	/// The same address as `url`, for tests and callers that need it.
 	pub addr: SocketAddr,
 	finish: tokio::sync::mpsc::UnboundedReceiver<FinishRequest>,
+	_task: crate::task::BackgroundTask,
 }
 
 impl Setup {
@@ -62,6 +63,7 @@ struct State {
 
 /// Bind the setup listener on an ephemeral loopback port and start serving.
 pub fn start(rt: &tokio::runtime::Handle) -> io::Result<Setup> {
+	let _entered = rt.enter();
 	let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
 	listener.set_nonblocking(true)?;
 	let listener = TcpListener::from_std(listener)?;
@@ -69,8 +71,8 @@ pub fn start(rt: &tokio::runtime::Handle) -> io::Result<Setup> {
 	let (finish, finish_rx) = tokio::sync::mpsc::unbounded_channel();
 	let (stop, stop_rx) = tokio::sync::watch::channel(false);
 	let state = Arc::new(State { stop, finish });
-	rt.spawn(serve(listener, state, stop_rx));
-	Ok(Setup { url: format!("http://{addr}/"), addr, finish: finish_rx })
+	let task = crate::task::BackgroundTask(rt.spawn(serve(listener, state, stop_rx)));
+	Ok(Setup { url: format!("http://{addr}/"), addr, finish: finish_rx, _task: task })
 }
 
 async fn serve(listener: TcpListener, state: Arc<State>, mut stop: tokio::sync::watch::Receiver<bool>) {
@@ -408,6 +410,23 @@ mod tests {
 		// A rebinding page uses its own name; the setup surface refuses it.
 		let foreign = http(addr, &get("/", "evil.test")).await;
 		assert!(foreign.starts_with("HTTP/1.1 403"), "{foreign}");
+	}
+
+	#[tokio::test]
+	async fn dropping_setup_releases_its_listener() {
+		let setup = start(&tokio::runtime::Handle::current()).unwrap();
+		let address = setup.addr;
+		drop(setup);
+		tokio::time::timeout(std::time::Duration::from_secs(1), async {
+			loop {
+				if TcpListener::bind(address).await.is_ok() {
+					break;
+				}
+				tokio::task::yield_now().await;
+			}
+		})
+		.await
+		.unwrap();
 	}
 
 	#[tokio::test]

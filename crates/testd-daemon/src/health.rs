@@ -376,9 +376,9 @@ impl HealthMonitor {
 	/// root itself at startup, and this keeps that behavior without putting the
 	/// logic in the frontend. Headless hosts leave it off so a terminal is never
 	/// prompted unexpectedly; `testd init` and `testd doctor --fix` own that.
-	pub(crate) fn start(self: &Arc<Self>, auto_trust: bool) {
+	pub(crate) fn start(self: &Arc<Self>, auto_trust: bool) -> Vec<crate::task::BackgroundTask> {
 		if self.started.swap(true, Ordering::SeqCst) {
-			return;
+			return Vec::new();
 		}
 		// Subscribe before the first probe so startup problems reach the
 		// notification task instead of being dropped with no receiver.
@@ -391,14 +391,15 @@ impl HealthMonitor {
 		self.probe(true);
 
 		let monitor = Arc::clone(self);
-		tokio::spawn(async move { monitor.run_probes().await });
+		let mut tasks = vec![crate::task::BackgroundTask(tokio::spawn(async move { monitor.run_probes().await }))];
 
 		// Notifications are an OS/desktop concern. A session without a
 		// notification service still gets the stderr notice from `emit`.
 		if self.notifications_enabled() {
 			let monitor = Arc::clone(self);
-			tokio::spawn(async move { monitor.run_notifier(notices).await });
+			tasks.push(crate::task::BackgroundTask(tokio::spawn(async move { monitor.run_notifier(notices).await })));
 		}
+		tasks
 	}
 
 	/// Probe both prerequisites. `check_root` skips the CA store lookup on

@@ -36,6 +36,7 @@ pub struct Daemon {
 	_control: Option<ControlServer>,
 	/// Quick launches owned by this daemon.
 	launches: Arc<LaunchBook>,
+	_tasks: Vec<crate::task::BackgroundTask>,
 	/// Held for the daemon's lifetime; dropping it releases the instance lock.
 	_instance_lock: std::fs::File,
 }
@@ -53,6 +54,7 @@ impl Daemon {
 
 	pub async fn new_with_elevation(elevation: Elevation) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
 		let _instance_lock = acquire_instance_lock()?;
+		let mut tasks = Vec::new();
 		let config = load_host_config()?;
 		let tld = testd_core::config::host_tld().to_owned();
 
@@ -95,13 +97,13 @@ impl Daemon {
 		// the name answer does not, so clear the leftovers off the startup path.
 		{
 			let shares = Arc::clone(&shares);
-			tokio::spawn(async move { shares.reclaim().await });
+			tasks.push(crate::task::BackgroundTask(tokio::spawn(async move { shares.reclaim().await })));
 		}
 
 		// Shares are reconciled against their owning registration and target.
 		{
 			let shares = Arc::clone(&shares);
-			tokio::spawn(retain_shares(shares, engine.subscribe()));
+			tasks.push(crate::task::BackgroundTask(tokio::spawn(retain_shares(shares, engine.subscribe()))));
 		}
 
 		let control = match ControlServer::start(
@@ -140,8 +142,8 @@ impl Daemon {
 
 		// The tray used to install the root on startup; keep that policy in the
 		// daemon, but never prompt a terminal for `testd host`.
-		health.start(elevation == Elevation::Gui);
-		spawn_request_notices(Arc::clone(&access), Arc::clone(&health));
+		tasks.extend(health.start(elevation == Elevation::Gui));
+		tasks.push(spawn_request_notices(Arc::clone(&access), Arc::clone(&health)));
 
 		Ok(Self {
 			engine,
@@ -153,6 +155,7 @@ impl Daemon {
 			access,
 			_control: control,
 			launches,
+			_tasks: tasks,
 			_instance_lock,
 		})
 	}
@@ -276,9 +279,9 @@ async fn reconcile_shares(shares: &crate::share::Shares) {
 ///
 /// The access store publishes its whole waiting list, so a burst or a missed
 /// wakeup still announces every id that was not seen before.
-fn spawn_request_notices(access: Arc<Access>, health: Arc<HealthMonitor>) {
+fn spawn_request_notices(access: Arc<Access>, health: Arc<HealthMonitor>) -> crate::task::BackgroundTask {
 	let mut changes = access.changes();
-	tokio::spawn(async move {
+	crate::task::BackgroundTask(tokio::spawn(async move {
 		let mut seen: HashSet<String> = HashSet::new();
 		loop {
 			if changes.changed().await.is_err() {
@@ -290,7 +293,7 @@ fn spawn_request_notices(access: Arc<Access>, health: Arc<HealthMonitor>) {
 			}
 			seen = pending.into_iter().map(|request| request.id).collect();
 		}
-	});
+	}))
 }
 
 impl Drop for Daemon {

@@ -24,7 +24,6 @@ use hyper::{Request, Response, StatusCode, Version};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::task::JoinHandle;
 
 use testd_pki::Ca;
 
@@ -75,7 +74,7 @@ impl EdgeContext {
 pub struct Edge {
 	pub tls_addr: SocketAddr,
 	pub http_addr: SocketAddr,
-	tasks: Vec<JoinHandle<()>>,
+	_tasks: Vec<crate::task::BackgroundTask>,
 }
 
 /// Limits both the total number of edge connections and the number from one
@@ -126,14 +125,6 @@ impl Drop for ConnectionPermit {
 	}
 }
 
-impl Drop for Edge {
-	fn drop(&mut self) {
-		for task in &self.tasks {
-			task.abort();
-		}
-	}
-}
-
 /// Start the TLS listener (if `tls_addr` is set) and the plain router.
 pub fn start(
 	ctx: Arc<EdgeContext>,
@@ -150,11 +141,11 @@ pub fn start(
 	let http_addr = plain.local_addr()?;
 	let plain_ctx = ctx.clone();
 	let plain_limiter = Arc::clone(&limiter);
-	tasks.push(tokio::spawn(async move {
+	tasks.push(crate::task::BackgroundTask(tokio::spawn(async move {
 		if let Err(e) = accept_loop(plain, PlainHandler { ctx: plain_ctx }, plain_limiter).await {
 			eprintln!("[error] plain edge: {e}");
 		}
-	}));
+	})));
 
 	let tls_addr = match tls_addr {
 		Some(addr) => {
@@ -177,17 +168,17 @@ pub fn start(
 
 			let tls_ctx = ctx.clone();
 			let tls_limiter = Arc::clone(&limiter);
-			tasks.push(tokio::spawn(async move {
+			tasks.push(crate::task::BackgroundTask(tokio::spawn(async move {
 				if let Err(e) = tls_accept_loop(listener, acceptor, tls_ctx, tls_limiter).await {
 					eprintln!("[error] HTTPS edge: {e}");
 				}
-			}));
+			})));
 			Some(actual)
 		},
 		None => None,
 	};
 
-	Ok(Edge { tls_addr: tls_addr.unwrap_or(http_addr), http_addr, tasks })
+	Ok(Edge { tls_addr: tls_addr.unwrap_or(http_addr), http_addr, _tasks: tasks })
 }
 
 /// On-demand certificate resolver. Leaves never outlive the process cache by
@@ -710,6 +701,28 @@ mod tests {
 		assert!(is_connection_option(&headers, &HeaderName::from_static("x-remove")));
 		assert!(is_connection_option(&headers, &UPGRADE));
 		assert!(!is_connection_option(&headers, &HOST));
+	}
+
+	#[tokio::test]
+	async fn failed_tls_start_releases_the_plain_listener() {
+		let dir = tempfile::tempdir().unwrap();
+		let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+		let plain = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+		let address = plain.local_addr().unwrap();
+		drop(plain);
+		let registry = Arc::new(tokio::sync::Mutex::new(crate::registry::Registry::default()));
+		let context = Arc::new(EdgeContext::new("test", registry));
+		assert!(start(context, Some(occupied.local_addr().unwrap()), address, dir.path()).is_err());
+		tokio::time::timeout(Duration::from_secs(1), async {
+			loop {
+				if TcpListener::bind(address).await.is_ok() {
+					break;
+				}
+				tokio::task::yield_now().await;
+			}
+		})
+		.await
+		.unwrap();
 	}
 
 	#[test]

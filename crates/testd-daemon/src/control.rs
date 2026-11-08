@@ -373,6 +373,7 @@ fn invalid_data(e: impl std::fmt::Display) -> io::Error {
 pub struct ControlServer {
 	path: PathBuf,
 	token: String,
+	_task: crate::task::BackgroundTask,
 }
 
 impl ControlServer {
@@ -403,8 +404,15 @@ impl ControlServer {
 		let addr = listener.local_addr()?;
 		let token = random_token();
 		write_control_file(&path, addr, client_addr, &token)?;
-		tokio::spawn(accept_loop(listener, token.clone(), health, shares, access, tld));
-		Ok(Self { path, token })
+		let task = crate::task::BackgroundTask(tokio::spawn(accept_loop(
+			listener,
+			token.clone(),
+			health,
+			shares,
+			access,
+			tld,
+		)));
+		Ok(Self { path, token, _task: task })
 	}
 
 	/// The local token accepted by the daemon's client listener.

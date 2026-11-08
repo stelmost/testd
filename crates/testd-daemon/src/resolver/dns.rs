@@ -25,6 +25,7 @@ pub struct DnsResolver {
 	listen_addr: SocketAddr,
 	answer_addr: Ipv4Addr,
 	elevation: testd_setup::Elevation,
+	_task: crate::task::BackgroundTask,
 }
 
 impl DnsResolver {
@@ -47,13 +48,13 @@ impl DnsResolver {
 		let server_domains = domains.clone();
 		let server_tld = tld.to_owned();
 
-		tokio::spawn(async move {
+		let task = crate::task::BackgroundTask(tokio::spawn(async move {
 			if let Err(e) = run_server(socket, server_domains, &server_tld).await {
 				eprintln!("DNS server error: {e}");
 			}
-		});
+		}));
 
-		Ok(Self { tld: tld.to_owned(), domains, listen_addr, answer_addr, elevation })
+		Ok(Self { tld: tld.to_owned(), domains, listen_addr, answer_addr, elevation, _task: task })
 	}
 
 	/// The address the DNS server is listening on.
@@ -356,6 +357,23 @@ mod tests {
 			assert_eq!(reply.rcode(), RCODE::NameError, "{labels:?}");
 			assert!(reply.answers.is_empty(), "{labels:?}");
 		}
+	}
+
+	#[tokio::test]
+	async fn dropping_a_resolver_releases_its_listener() {
+		let resolver = resolver("test").await;
+		let address = resolver.listen_addr();
+		drop(resolver);
+		tokio::time::timeout(std::time::Duration::from_secs(1), async {
+			loop {
+				if UdpSocket::bind(address).await.is_ok() {
+					break;
+				}
+				tokio::task::yield_now().await;
+			}
+		})
+		.await
+		.unwrap();
 	}
 
 	#[tokio::test]

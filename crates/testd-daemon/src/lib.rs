@@ -13,3 +13,4 @@ pub mod registry;
 pub mod resolver;
 pub mod setup;
 pub mod share;
+mod task;

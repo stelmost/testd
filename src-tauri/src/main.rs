@@ -107,36 +107,40 @@ fn start_setup(app: tauri::AppHandle, rt: Arc<tokio::runtime::Runtime>) -> Resul
 	std::thread::spawn(move || {
 		// Blocks until the page asks to finish; the receiver is not used inside
 		// the runtime, so a dedicated thread keeps the main loop free.
-		let Some(reply) = setup.wait() else { return };
-
-		let main_app = app.clone();
-		let main_rt = Arc::clone(&rt);
-		let (done_tx, done_rx) = std::sync::mpsc::channel();
-		if let Err(e) = app.run_on_main_thread(move || {
-			let result = tray::start_daemon(&main_app, main_rt)
-				.map(|()| main_app.state::<Arc<Daemon>>().engine.local_dashboard_url());
-			if let Ok(url) = &result {
-				tray::handle_current_url(&main_app);
-				if let Some(window) = main_app.get_webview_window("setup") {
-					let _ = window.close();
+		while let Some(reply) = setup.wait() {
+			let main_app = app.clone();
+			let main_rt = Arc::clone(&rt);
+			let (done_tx, done_rx) = std::sync::mpsc::channel();
+			if let Err(e) = app.run_on_main_thread(move || {
+				let result = tray::start_daemon(&main_app, main_rt)
+					.map(|()| main_app.state::<Arc<Daemon>>().engine.local_dashboard_url());
+				if let Ok(url) = &result {
+					tray::handle_current_url(&main_app);
+					if let Some(window) = main_app.get_webview_window("setup") {
+						let _ = window.close();
+					}
+					#[cfg(target_os = "macos")]
+					let _ = main_app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+					if let Err(e) = tray::open_dashboard(&main_app, url) {
+						tray::trace(&format!("dashboard window failed: {e}"));
+					}
 				}
-				#[cfg(target_os = "macos")]
-				let _ = main_app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-				if let Err(e) = tray::open_dashboard(&main_app, url) {
-					tray::trace(&format!("dashboard window failed: {e}"));
-				}
+				let _ = done_tx.send(result);
+			}) {
+				let _ = reply.send(Err(format!("cannot reach the main thread: {e}")));
+				return;
 			}
-			let _ = done_tx.send(result);
-		}) {
-			let _ = reply.send(Err(format!("cannot reach the main thread: {e}")));
-			return;
-		}
 
-		let result = match done_rx.recv() {
-			Ok(result) => result.map_err(|error| error.to_string()),
-			Err(_) => Err("the daemon did not start".to_owned()),
-		};
-		let _ = reply.send(result);
+			let result = match done_rx.recv() {
+				Ok(result) => result.map_err(|error| error.to_string()),
+				Err(_) => Err("the daemon did not start".to_owned()),
+			};
+			let did_start = result.is_ok();
+			let _ = reply.send(result);
+			if did_start {
+				break;
+			}
+		}
 	});
 
 	Ok(())
