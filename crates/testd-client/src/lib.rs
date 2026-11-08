@@ -18,6 +18,8 @@ pub mod supervisor;
 const RECONNECT_DELAY: Duration = Duration::from_secs(3);
 /// A host that does not answer must not stall a run or a failover attempt.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(130);
 
 type Reader = BufReader<tokio::net::tcp::OwnedReadHalf>;
 type Writer = tokio::net::tcp::OwnedWriteHalf;
@@ -42,7 +44,14 @@ async fn connect_host(config: &mut ClientConfig, host: &str, names: &[String]) -
 	let mut reader = BufReader::new(reader);
 	match authenticate(config, host, &mut reader, &mut writer, names).await {
 		Ok(()) => Ok((reader, writer)),
-		Err(e) => Err(anyhow::Error::new(ConnectFailure::rejected(e))),
+		Err(error) => {
+			let failure = if error.downcast_ref::<std::io::Error>().is_some() {
+				ConnectFailure::unreachable(error)
+			} else {
+				ConnectFailure::rejected(error)
+			};
+			Err(anyhow::Error::new(failure))
+		},
 	}
 }
 
@@ -57,9 +66,11 @@ async fn authenticate(
 	let asking = config.token.is_empty();
 	let request_token = asking.then(|| TokenRequest { label: client_label(), names: names.to_vec() });
 	let auth = Auth { token: config.token.clone(), request_token };
-	protocol::send(writer, &auth).await?;
+	tokio::time::timeout(RESPONSE_TIMEOUT, protocol::send(writer, &auth))
+		.await
+		.map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "authentication write timed out"))??;
 
-	let response: Response = protocol::recv(reader).await?.context("host closed connection during auth")?;
+	let response = read_response(reader, RESPONSE_TIMEOUT).await?;
 
 	match response {
 		Response::Ok => {},
@@ -69,9 +80,7 @@ async fn authenticate(
 				config.token_profile
 			);
 			eprintln!("[testd] [auth]  approve it on the node with `testd requests` and `testd approve {id}`");
-			let response: Response = protocol::recv(reader)
-				.await?
-				.context("host closed connection while waiting for approval")?;
+			let response = read_response(reader, APPROVAL_TIMEOUT).await?;
 			match response {
 				Response::Token { token } => {
 					testd_core::config::write_credential(&config.token_profile, &token).with_context(|| {
@@ -99,6 +108,13 @@ async fn authenticate(
 	}
 
 	Ok(())
+}
+
+async fn read_response(reader: &mut Reader, timeout: Duration) -> Result<Response> {
+	tokio::time::timeout(timeout, protocol::recv(reader))
+		.await
+		.map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "host response timed out"))??
+		.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "host closed the connection").into())
 }
 
 /// The client's identity as shown to the operator deciding a request.
@@ -220,12 +236,16 @@ pub(crate) fn entry_names(entries: &[Entry]) -> Vec<String> {
 /// Send a request and wait for its outcome. A registration can wait on a
 /// pending name grant, so the reply is not always the first frame back.
 async fn request(reader: &mut Reader, writer: &mut Writer, req: &Request) -> Result<()> {
-	protocol::send(writer, req).await?;
+	tokio::time::timeout(RESPONSE_TIMEOUT, protocol::send(writer, req))
+		.await
+		.map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "request write timed out"))??;
+	let mut timeout = RESPONSE_TIMEOUT;
 	loop {
-		let response: Response = protocol::recv(reader).await?.context("host closed connection")?;
+		let response = read_response(reader, timeout).await?;
 		match response {
 			Response::Ok => return Ok(()),
 			Response::PendingGrant { id, domain } => {
+				timeout = APPROVAL_TIMEOUT;
 				eprintln!("[testd] [grant] the host is waiting for approval to grant {domain} (request {id})");
 			},
 			Response::Error { message, disposition } => {
@@ -422,24 +442,24 @@ pub async fn run(entries: &[Entry], command: &[String], force: bool, config: Cli
 	let mut registration = tokio::spawn(async move { maintain_registration(bg_entries, config, bg_stop, force).await });
 
 	// Spawn child process.
-	let mut child = tokio::process::Command::new(&command[0])
+	let mut process = tokio::process::Command::new(&command[0]);
+	process
 		.args(&command[1..])
 		.stdin(Stdio::inherit())
 		.stdout(Stdio::inherit())
-		.stderr(Stdio::inherit())
-		.spawn()
-		.with_context(|| format!("failed to spawn: {}", command[0]))?;
+		.stderr(Stdio::inherit());
+	supervisor::own_process_tree(&mut process);
+	let mut child = process.spawn().with_context(|| format!("failed to spawn: {}", command[0]))?;
 
 	// Wait for child, signal, or a registration loop that stopped on its own.
 	let status = tokio::select! {
 		status = child.wait() => status?,
 		_ = tokio::signal::ctrl_c() => {
-			child.kill().await.ok();
+			supervisor::stop_child(&mut child).await;
 			child.wait().await?
 		},
 		result = &mut registration => {
-			child.kill().await.ok();
-			child.wait().await?;
+			supervisor::stop_child(&mut child).await;
 			match result {
 				// The operator's action already printed why; the child is ours
 				// to stop, and exiting cleanly matches the operator's intent.
@@ -618,6 +638,34 @@ mod tests {
 			.await
 			.expect("server did not stop")
 			.unwrap();
+	}
+
+	#[tokio::test]
+	async fn a_silent_authentication_peer_does_not_block_failover() {
+		let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let ready = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let mut config = ClientConfig {
+			token: "fixture".into(),
+			token_profile: "fixture".into(),
+			node_profile: "fixture".into(),
+			hosts: vec![silent.local_addr().unwrap().to_string(), ready.local_addr().unwrap().to_string()],
+		};
+		let silent_task = tokio::spawn(async move {
+			let (stream, _) = silent.accept().await.unwrap();
+			let _stream = stream;
+			std::future::pending::<()>().await;
+		});
+		let ready_task = tokio::spawn(async move {
+			let (stream, _) = ready.accept().await.unwrap();
+			let (reader, mut writer) = stream.into_split();
+			let _: Auth = protocol::recv(&mut BufReader::new(reader)).await.unwrap().unwrap();
+			protocol::send(&mut writer, &Response::Ok).await.unwrap();
+		});
+		let result =
+			tokio::time::timeout(RESPONSE_TIMEOUT + Duration::from_secs(3), connect_from(&mut config, 0, &[])).await;
+		silent_task.abort();
+		assert_eq!(result.unwrap().unwrap().2, 1);
+		ready_task.await.unwrap();
 	}
 
 	#[test]

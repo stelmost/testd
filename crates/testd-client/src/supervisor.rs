@@ -494,10 +494,7 @@ fn spawn_child(spec: &LaunchSpec, events: &mpsc::Sender<LaunchEvent>) -> Result<
 	for (key, value) in &spec.env {
 		command.env(key, value);
 	}
-	#[cfg(unix)]
-	command.process_group(0);
-	#[cfg(windows)]
-	command.creation_flags(0x0000_0200); // CREATE_NEW_PROCESS_GROUP
+	own_process_tree(&mut command);
 
 	let mut child = command
 		.spawn()
@@ -525,7 +522,15 @@ where
 	});
 }
 
-async fn stop_child(child: &mut Child) {
+pub(crate) fn own_process_tree(command: &mut ProcessCommand) {
+	command.kill_on_drop(true);
+	#[cfg(unix)]
+	command.process_group(0);
+	#[cfg(windows)]
+	command.creation_flags(0x0000_0200); /* CREATE_NEW_PROCESS_GROUP */
+}
+
+pub(crate) async fn stop_child(child: &mut Child) {
 	let Some(pid) = child.id() else {
 		return;
 	};
@@ -1028,6 +1033,37 @@ mod tests {
 		.await
 		.expect("timed out waiting for exit");
 		assert!(host.requests().contains(&"deregister app".to_owned()));
+	}
+
+	#[cfg(target_os = "linux")]
+	#[tokio::test]
+	async fn stopping_an_owned_process_tree_stops_descendants() {
+		let mut command = ProcessCommand::new("sh");
+		command.args(["-c", "sleep 30 & echo $!; wait"]).stdout(Stdio::piped());
+		own_process_tree(&mut command);
+		let mut child = command.spawn().unwrap();
+		let mut output = BufReader::new(child.stdout.take().unwrap());
+		let mut line = String::new();
+		output.read_line(&mut line).await.unwrap();
+		let descendant: u32 = line.trim().parse().unwrap();
+		stop_child(&mut child).await;
+		let path = format!("/proc/{descendant}/stat");
+		let stopped = tokio::time::timeout(Duration::from_secs(3), async {
+			loop {
+				match std::fs::read_to_string(&path) {
+					Err(_) => break,
+					Ok(stat) if stat.rsplit_once(')').unwrap().1.trim_start().starts_with('Z') => break,
+					_ => tokio::time::sleep(Duration::from_millis(10)).await,
+				}
+			}
+		})
+		.await;
+		if stopped.is_err() {
+			unsafe {
+				libc::kill(descendant as i32, libc::SIGKILL);
+			}
+		}
+		assert!(stopped.is_ok(), "the descendant survived its process group");
 	}
 
 	#[tokio::test]
