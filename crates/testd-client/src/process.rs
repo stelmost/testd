@@ -218,7 +218,7 @@ mod tests {
 				"-NonInteractive",
 				"-Command",
 				concat!(
-					"$p = Start-Process powershell -ArgumentList ",
+					"$p = Start-Process powershell -NoNewWindow -ArgumentList ",
 					"'-NoProfile -NonInteractive -Command Start-Sleep -Seconds 30' -PassThru; Write-Output $p.Id"
 				),
 			])
