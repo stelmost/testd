@@ -82,11 +82,15 @@ impl HostConfig {
 
 	/// Loopback endpoint of the client listener, whatever address it binds.
 	pub fn local_client_addr(&self) -> SocketAddr {
-		if self.listen_addr.ip().is_unspecified() {
-			SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), self.listen_addr.port())
-		} else {
-			self.listen_addr
+		if self.listen_addr.ip().is_loopback() {
+			return self.listen_addr;
 		}
+		let ip = if self.listen_addr.is_ipv4() {
+			std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+		} else {
+			std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
+		};
+		SocketAddr::new(ip, self.listen_addr.port())
 	}
 
 	/// The loopback URL the local dashboard answers on: the same port clients use.
@@ -256,7 +260,11 @@ mod tests {
 		config.listen_addr = "0.0.0.0:7800".parse().unwrap();
 		assert_eq!(config.local_client_addr().to_string(), "127.0.0.1:7800");
 		config.listen_addr = "10.0.0.5:7800".parse().unwrap();
-		assert_eq!(config.local_client_addr().to_string(), "10.0.0.5:7800");
+		assert_eq!(config.local_client_addr().to_string(), "127.0.0.1:7800");
+		config.listen_addr = "[2001:db8::1]:7800".parse().unwrap();
+		assert_eq!(config.local_client_addr().to_string(), "[::1]:7800");
+		config.listen_addr = "[::]:7800".parse().unwrap();
+		assert_eq!(config.local_client_addr().to_string(), "[::1]:7800");
 	}
 
 	#[test]

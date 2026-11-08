@@ -108,7 +108,7 @@ impl Daemon {
 
 		let control = match ControlServer::start(
 			Arc::clone(&health),
-			local_client_addr(config.listen_addr),
+			config.local_client_addr(),
 			Arc::clone(&shares),
 			engine.registrations(),
 			Arc::clone(&access),

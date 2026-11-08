@@ -7,7 +7,7 @@ description: 'Remote development, profiles, grants, quick launches, tunnels, ext
 
 ## Remote development
 
-The host intake defaults to loopback. To accept remote leaves, set `[host] listen_addr` to a reachable address. A specific non-loopback bind does not listen on the loopback address. A `0.0.0.0:7737` bind includes loopback but exposes the intake on every IPv4 interface; if used, restrict port 7737 with a firewall.
+The host intake defaults to loopback. To accept remote leaves, set `[host] listen_addr` to a reachable address. A specific non-loopback intake bind also starts a loopback listener on the same port for the dashboard and local launches. A `0.0.0.0:7737` bind includes loopback but exposes the intake on every IPv4 interface; if used, restrict port 7737 with a firewall.
 
 A remote leaf registers over the host's intake port. With no credential for the selected profile, it asks for access and prints a request. On the host:
 
@@ -110,7 +110,7 @@ Quick launches and the operator secret are not issued grants. Names published th
 
 A quick launch is a saved command started from the local dashboard or the tray. It is local-only: the dashboard serves it on loopback and the authenticated intake never exposes process control. The tray lists saved launches with start and stop actions.
 
-A launch definition has a label, a command, an optional working directory, an optional environment, and one or more name entries. For each entry:
+A launch definition has a label, a command, an optional working directory, an optional environment, and one or more name entries. The dashboard asks for the full project directory so commands run there rather than in the tray's or daemon's starting directory. For each entry:
 
 - An empty target, or `auto`, detects the child's listening port.
 - A port or `host:port` overrides detection.

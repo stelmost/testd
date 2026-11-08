@@ -153,6 +153,14 @@ impl HostEngine {
 
 	/// Run the TCP server on an already-bound listener.
 	pub async fn serve(&self, listener: TcpListener) -> io::Result<()> {
+		/* A specific remote bind does not accept loopback dashboard or local launch connections. */
+		let local_listener = if !self.config.listen_addr.ip().is_loopback()
+			&& !self.config.listen_addr.ip().is_unspecified()
+		{
+			Some(TcpListener::bind(self.config.local_client_addr()).await?)
+		} else {
+			None
+		};
 		let mut operator_rx = self
 			.operator_rx
 			.lock()
@@ -198,7 +206,17 @@ impl HostEngine {
 
 		loop {
 			tokio::select! {
-				result = listener.accept() => {
+				result = async {
+					tokio::select! {
+						result = listener.accept() => result,
+						result = async {
+							match &local_listener {
+								Some(local) => local.accept().await,
+								None => std::future::pending().await,
+							}
+						} => result,
+					}
+				} => {
 					let (stream, addr) = result?;
 					let Ok(permit) = Arc::clone(&capacity).try_acquire_owned() else {
 						eprintln!("[warn]   intake connection limit reached: {}", addr.ip());
@@ -1410,6 +1428,38 @@ mod tests {
 		})
 		.await
 		.expect("registration grant race timed out");
+	}
+
+	#[tokio::test]
+	async fn a_specific_network_intake_keeps_a_loopback_dashboard_and_local_auth() {
+		let dir = tempfile::tempdir().unwrap();
+		let intake = TcpListener::bind("127.0.0.2:0").await.unwrap();
+		let port = intake.local_addr().unwrap().port();
+		let mut config: HostConfig = serde_json::from_str("{}").unwrap();
+		/* Substitute a loopback intake socket while exercising the configured remote-bind path. */
+		config.listen_addr = SocketAddr::from(([192, 0, 2, 1], port));
+		config.pki_dir = dir.path().join("pki");
+		let local = config.local_client_addr();
+		let access = Arc::new(Access::load(dir.path().join("tokens.json")).unwrap());
+		let mut engine = HostEngine::new(config, Arc::new(NoopResolver), access);
+		engine.set_local_token("local-token".into());
+		let server = crate::task::BackgroundTask(tokio::spawn(async move { engine.serve(intake).await.unwrap() }));
+		tokio::time::timeout(Duration::from_secs(3), async {
+			let mut stream = loop {
+				match TcpStream::connect(local).await {
+					Ok(stream) => break stream,
+					Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+				}
+			};
+			stream.write_all(b"GET /api/status HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").await.unwrap();
+			let mut response = String::new();
+			stream.read_to_string(&mut response).await.unwrap();
+			assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+			let mut stream = BufReader::new(TcpStream::connect(local).await.unwrap());
+			send(stream.get_mut(), &Auth { token: "local-token".into(), request_token: None }).await.unwrap();
+			assert!(matches!(recv::<_, Response>(&mut stream).await.unwrap(), Some(Response::Ok)));
+		}).await.expect("loopback dashboard and authentication must remain available");
+		drop(server);
 	}
 
 	#[test]

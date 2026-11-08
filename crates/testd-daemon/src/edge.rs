@@ -159,17 +159,12 @@ pub fn start(
 			let actual = listener.local_addr()?;
 
 			let ca = Arc::new(Ca::load_or_init(pki_dir).context("initialize the local CA")?);
-			let resolver = Arc::new(CertStore::new(ca, ctx.tld.clone(), ctx.registrations.clone()));
-			let mut config = rustls::ServerConfig::builder()
-				.with_no_client_auth()
-				.with_cert_resolver(resolver);
-			config.alpn_protocols = vec![b"http/1.1".to_vec()];
-			let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+			let certificates = Arc::new(CertStore::new(ca, ctx.tld.clone(), ctx.registrations.clone()));
 
 			let tls_ctx = ctx.clone();
 			let tls_limiter = Arc::clone(&limiter);
 			tasks.push(crate::task::BackgroundTask(tokio::spawn(async move {
-				if let Err(e) = tls_accept_loop(listener, acceptor, tls_ctx, tls_limiter).await {
+				if let Err(e) = tls_accept_loop(listener, certificates, tls_ctx, tls_limiter).await {
 					eprintln!("[error] HTTPS edge: {e}");
 				}
 			})));
@@ -208,12 +203,11 @@ impl CertStore {
 		Self { ca, tld, dashboard_name, registrations, cache_for, cache: Mutex::new(HashMap::new()) }
 	}
 
-	fn mint(&self, name: &str) -> Option<Arc<rustls::sign::CertifiedKey>> {
+	async fn mint(&self, name: &str) -> Option<Arc<rustls::sign::CertifiedKey>> {
 		if !name.ends_with(&format!(".{}", self.tld)) {
 			return None;
 		}
-		let registered =
-			name == self.dashboard_name || self.registrations.try_lock().is_ok_and(|registry| registry.contains(name));
+		let registered = name == self.dashboard_name || self.registrations.lock().await.contains(name);
 		if !registered {
 			return None;
 		}
@@ -244,16 +238,29 @@ impl CertStore {
 	}
 }
 
-impl rustls::server::ResolvesServerCert for CertStore {
-	fn resolve(&self, hello: rustls::server::ClientHello<'_>) -> Option<Arc<rustls::sign::CertifiedKey>> {
-		let name = hello.server_name()?;
-		self.mint(name)
+async fn accept_tls(
+	stream: TcpStream,
+	certificates: &CertStore,
+) -> std::io::Result<tokio_rustls::server::TlsStream<TcpStream>> {
+	/* Read SNI before choosing a certificate so a busy registry can be awaited without blocking rustls. */
+	let handshake = tokio_rustls::LazyConfigAcceptor::new(rustls::server::Acceptor::default(), stream).await?;
+	let name = handshake.client_hello().server_name().map(str::to_owned);
+	let mut resolver = rustls::server::ResolvesServerCertUsingSni::new();
+	if let Some(name) = name
+		&& let Some(key) = certificates.mint(&name).await
+	{
+		resolver.add(&name, (*key).clone()).map_err(std::io::Error::other)?;
 	}
+	let mut config = rustls::ServerConfig::builder()
+		.with_no_client_auth()
+		.with_cert_resolver(Arc::new(resolver));
+	config.alpn_protocols = vec![b"http/1.1".to_vec()];
+	handshake.into_stream(Arc::new(config)).await
 }
 
 async fn tls_accept_loop(
 	listener: TcpListener,
-	acceptor: tokio_rustls::TlsAcceptor,
+	certificates: Arc<CertStore>,
 	ctx: Arc<EdgeContext>,
 	limiter: Arc<ConnectionLimiter>,
 ) -> Result<()> {
@@ -263,11 +270,11 @@ async fn tls_accept_loop(
 			eprintln!("[warn]   edge connection limit reached: {}", peer.ip());
 			continue;
 		};
-		let acceptor = acceptor.clone();
+		let certificates = Arc::clone(&certificates);
 		let ctx = ctx.clone();
 		tokio::spawn(async move {
 			let permit = Arc::new(permit);
-			match tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await {
+			match tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, accept_tls(stream, &certificates)).await {
 				Ok(Ok(tls)) => {
 					if let Err(e) =
 						serve_connection(tls, Handler { ctx, scheme: "https", plain: false, peer, permit }).await
@@ -343,7 +350,7 @@ async fn handle(handler: Handler, request: Request<Incoming>) -> Response<Body> 
 				.find_map(|pair| pair.strip_prefix("domain=").map(str::to_owned))
 		});
 		return match domain {
-			Some(domain) => ask(&handler.ctx, &domain.to_ascii_lowercase()),
+			Some(domain) => ask(&handler.ctx, &domain.to_ascii_lowercase()).await,
 			None => text(StatusCode::BAD_REQUEST, "missing ?domain="),
 		};
 	}
@@ -378,11 +385,8 @@ async fn handle(handler: Handler, request: Request<Incoming>) -> Response<Body> 
 }
 
 /// On-demand TLS permission endpoint for an external front such as Caddy.
-fn ask(ctx: &EdgeContext, host: &str) -> Response<Body> {
-	let known = host == format!("testd.{}", ctx.tld) || {
-		let registry = ctx.registrations.try_lock();
-		registry.as_ref().is_ok_and(|registry| registry.contains(host))
-	};
+async fn ask(ctx: &EdgeContext, host: &str) -> Response<Body> {
+	let known = host == format!("testd.{}", ctx.tld) || ctx.registrations.lock().await.contains(host);
 	if known { text(StatusCode::OK, "ok") } else { text(StatusCode::NOT_FOUND, "unknown name") }
 }
 
@@ -435,7 +439,13 @@ async fn proxy(handler: Handler, request: Request<Incoming>, target: &str) -> Re
 	if let Ok(value) = HeaderValue::from_str(&forwarded) {
 		headers.insert("x-forwarded-for", value);
 	}
-	if let Ok(value) = HeaderValue::from_str(handler.scheme) {
+	let scheme = if handler.plain && handler.ctx.trust_forwarded_for {
+		headers.get("x-forwarded-proto").and_then(|value| value.to_str().ok())
+			.filter(|scheme| matches!(*scheme, "http" | "https")).unwrap_or(handler.scheme)
+	} else {
+		handler.scheme
+	};
+	if let Ok(value) = HeaderValue::from_str(scheme) {
 		headers.insert("x-forwarded-proto", value);
 	}
 	// Routing uses a normalized name, but applications need the original authority.
@@ -681,8 +691,8 @@ mod tests {
 		assert_eq!(leaf_renewal_after(), Duration::from_secs(18 * 3600));
 	}
 
-	#[test]
-	fn a_cached_leaf_is_reused_until_its_renewal_threshold() {
+	#[tokio::test]
+	async fn a_cached_leaf_is_reused_until_its_renewal_threshold() {
 		let dir = temp_dir();
 		let ca = Arc::new(Ca::load_or_init(&dir).unwrap());
 		let store = CertStore::with_cache_duration(
@@ -691,10 +701,28 @@ mod tests {
 			Duration::from_secs(3600),
 			registrations_with("app.test"),
 		);
-		let first = store.mint("app.test").unwrap();
-		let second = store.mint("app.test").unwrap();
+		let first = store.mint("app.test").await.unwrap();
+		let second = store.mint("app.test").await.unwrap();
 		assert_eq!(first.cert[0].as_ref(), second.cert[0].as_ref());
 		std::fs::remove_dir_all(&dir).ok();
+	}
+
+	#[tokio::test]
+	async fn certificate_and_front_checks_wait_for_the_live_registry() {
+		let dir = tempfile::tempdir().unwrap();
+		let registrations = registrations_with("app.test");
+		let store = CertStore::new(Arc::new(Ca::load_or_init(dir.path()).unwrap()), "test".into(),
+			Arc::clone(&registrations));
+		let context = EdgeContext::new("test", Arc::clone(&registrations));
+		let guard = registrations.lock().await;
+		let mint = store.mint("app.test");
+		let permission = ask(&context, "app.test");
+		tokio::pin!(mint, permission);
+		assert!(tokio::time::timeout(Duration::from_millis(20), &mut mint).await.is_err());
+		assert!(tokio::time::timeout(Duration::from_millis(20), &mut permission).await.is_err());
+		drop(guard);
+		assert!(mint.await.is_some());
+		assert_eq!(permission.await.status(), StatusCode::OK);
 	}
 
 	#[test]
@@ -746,13 +774,13 @@ mod tests {
 		assert_eq!(filtered.get(CONNECTION).unwrap(), "upgrade");
 	}
 
-	#[test]
-	fn an_expired_cache_entry_is_minted_again() {
+	#[tokio::test]
+	async fn an_expired_cache_entry_is_minted_again() {
 		let dir = temp_dir();
 		let ca = Arc::new(Ca::load_or_init(&dir).unwrap());
 		let store = CertStore::with_cache_duration(ca, "test".into(), Duration::ZERO, registrations_with("app.test"));
-		let first = store.mint("app.test").unwrap();
-		let second = store.mint("app.test").unwrap();
+		let first = store.mint("app.test").await.unwrap();
+		let second = store.mint("app.test").await.unwrap();
 		assert_ne!(first.cert[0].as_ref(), second.cert[0].as_ref());
 		std::fs::remove_dir_all(&dir).ok();
 	}
@@ -845,8 +873,8 @@ mod tests {
 		String::from_utf8_lossy(&out).into_owned()
 	}
 
-	#[test]
-	fn only_registered_names_and_the_dashboard_get_certificates() {
+	#[tokio::test]
+	async fn only_registered_names_and_the_dashboard_get_certificates() {
 		let dir = temp_dir();
 		let ca = Arc::new(Ca::load_or_init(&dir).unwrap());
 		let store = CertStore::with_cache_duration(
@@ -855,10 +883,10 @@ mod tests {
 			Duration::from_secs(3600),
 			registrations_with("app.test"),
 		);
-		assert!(store.mint("app.test").is_some());
-		assert!(store.mint("testd.test").is_some());
-		assert!(store.mint("unknown.test").is_none());
-		assert!(store.mint("app.example").is_none());
+		assert!(store.mint("app.test").await.is_some());
+		assert!(store.mint("testd.test").await.is_some());
+		assert!(store.mint("unknown.test").await.is_none());
+		assert!(store.mint("app.example").await.is_none());
 		std::fs::remove_dir_all(&dir).ok();
 	}
 }
