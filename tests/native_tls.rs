@@ -16,7 +16,7 @@ use testd_daemon::engine::{HostEngine, Registrations};
 use testd_daemon::resolver::{ResolvedName, Resolver};
 use testd_pki::transport::{self, Identity};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::process::{Child, Command};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
@@ -157,6 +157,17 @@ fn candidate(home: &Path) -> Command {
 		.stderr(Stdio::piped())
 		.kill_on_drop(true);
 	command
+}
+
+async fn replace_paired_host(host: &mut Host) -> TcpListener {
+	host.server.abort();
+	assert!((&mut host.server).await.unwrap_err().is_cancelled());
+	/* Pairing leaves a TIME_WAIT connection: the replacement must reuse the listener's Unix address. */
+	let socket = TcpSocket::new_v4().unwrap();
+	#[cfg(unix)]
+	socket.set_reuseaddr(true).unwrap();
+	socket.bind(host.address).unwrap();
+	socket.listen(128).unwrap()
 }
 
 async fn headers<S: tokio::io::AsyncRead + Unpin>(reader: &mut BufReader<S>) -> Vec<String> {
@@ -301,9 +312,7 @@ async fn a_changed_host_identity_is_rejected_before_credentials_are_sent() {
 	let mut host = Host::start().await;
 	let home = tempfile::tempdir().unwrap();
 	host.pair(home.path()).await;
-	host.server.abort();
-	assert!((&mut host.server).await.unwrap_err().is_cancelled());
-	let listener = TcpListener::bind(host.address).await.unwrap();
+	let listener = replace_paired_host(&mut host).await;
 	let attacker = Identity::ephemeral(transport::HOST_NAME).unwrap();
 	let serving = tokio::spawn(async move {
 		let (stream, _) = listener.accept().await.unwrap();
@@ -329,9 +338,7 @@ async fn a_plaintext_server_cannot_downgrade_a_paired_connection() {
 	let mut host = Host::start().await;
 	let home = tempfile::tempdir().unwrap();
 	host.pair(home.path()).await;
-	host.server.abort();
-	assert!((&mut host.server).await.unwrap_err().is_cancelled());
-	let listener = TcpListener::bind(host.address).await.unwrap();
+	let listener = replace_paired_host(&mut host).await;
 	let (finished, until_finished) = tokio::sync::oneshot::channel();
 	let serving = tokio::spawn(async move {
 		let (mut stream, _) = listener.accept().await.unwrap();
