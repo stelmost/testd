@@ -1432,7 +1432,9 @@ mod tests {
 	#[tokio::test]
 	async fn a_specific_network_intake_keeps_a_loopback_dashboard_and_local_auth() {
 		let dir = tempfile::tempdir().unwrap();
-		let intake = TcpListener::bind("127.0.0.2:0").await.unwrap();
+		/* macOS does not provide secondary IPv4 loopback addresses without interface aliases. */
+		let intake_addr = if cfg!(target_os = "macos") { "[::1]:0" } else { "127.0.0.2:0" };
+		let intake = TcpListener::bind(intake_addr).await.unwrap();
 		let port = intake.local_addr().unwrap().port();
 		let mut config: HostConfig = serde_json::from_str("{}").unwrap();
 		/* Substitute a loopback intake socket while exercising the configured remote-bind path. */
