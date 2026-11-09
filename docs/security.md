@@ -18,7 +18,7 @@ This page covers the operational security model. Vulnerability reporting is in [
 | Host to secure leaf | Mutual TLS 1.3 | Leaf CA bound to its authenticated registration; host client certificate required |
 | Leaf forwarder to app | Local HTTP/1.1 | Target must resolve to an interface on that leaf |
 | Local-only registration and direct targets | Loopback registration, HTTP/1.1 upstream | Local direct registrations do not gain encrypted remote target forwarding |
-| Dashboard | Loopback TCP, no TLS | Any local user; the loopback peer is the authority |
+| Dashboard and setup | Loopback HTTP, or dashboard HTTPS through the edge | Owner-scoped per-run or per-setup bearer credential; loopback alone grants no authority |
 | Control channel | Loopback TCP, no TLS | Same-user local access plus a per-run token |
 
 The root CA and intermediate are created by the host. The root key stays on the host and is never copied to a dev environment. Leaf certificates are minted on demand for live names and live 24 hours.
@@ -32,6 +32,8 @@ The root CA and intermediate are created by the host. The root key stays on the 
 | Root CA key | `pki/root.key` | Can sign any certificate under the root |
 | Intermediate key | `pki/node.key` | Can issue leaf certificates |
 | Control token | `control.json` | Local launches and control channel for this daemon run |
+| Dashboard credential | `control.json`, then origin-scoped browser session storage | Local administration for this daemon run; distinct from registration and control tokens |
+| Setup credential | Memory and setup window session storage | One setup surface; not reusable in another setup session |
 | Leaf forwarding keys | Memory only, per registration connection | Accept application connections from the paired host CA |
 
 `config.toml`, `tokens.json`, `credentials/<profile>`, and the private keys are written with user-only permissions on Unix. Treat any copy of them as a credential. A leaked operator secret can register any valid name; a leaked issued token can publish only its granted names.
@@ -71,11 +73,15 @@ Enable it only for leaves you would already trust with that reach. It relaxes th
 
 The dashboard is served on loopback and checks that the `Host` header is `localhost`, `127.0.0.1`, `[::1]`, or `testd.<tld>`. That check blocks DNS-rebinding pages from becoming local admin clients.
 
-There is no login and no URL token. The loopback peer is the authority: any local user who can connect to `127.0.0.1:7737` can read and mutate the dashboard. On a shared machine, that is a real widening compared with a same-user token; the product assumes a single-user dev host.
+Administration requires the per-run dashboard credential from the owner's private `control.json`. Tray and CLI dashboard links deliver it in a URL fragment; the page removes the credential from history and keeps it in origin-scoped session storage, not cookies shared across local ports. API and event requests use an Authorization header. An uncredentialed page contains no live names, launches, grants, or requests. The public stylesheet, liveness image, and public root certificate remain downloadable.
+
+The credential is separate from the operator secret, issued leaf tokens, and local launch/control token. A restart creates a new credential; old sessions receive 401 and must be reopened through the tray or CLI. There is no account service or dashboard password. Treat a copied bootstrap link as an administrative credential for that daemon run.
+
+First-run setup has its own in-memory credential. Unauthenticated local callers cannot read or regenerate the operator secret, request privileged setup, or finish another user's setup surface.
 
 A `POST` also needs `X-Testd-Request: 1`, which a cross-site form cannot set and a cross-origin fetch cannot pass without a preflight this server does not grant. That header is the CSRF boundary.
 
-The page keeps an event stream open for live updates. The stream is loopback-only like the rest of the dashboard.
+The page keeps an authenticated event stream open for live updates. The stream is loopback-only like the rest of the dashboard.
 
 `https://testd.test/` reaches the same listener through the edge. The edge forwards the dashboard name only when the client is on this machine: the immediate peer must be loopback, and with a configured front proxy the first `X-Forwarded-For` hop must be loopback too. On the plain listener, which only a front reaches, the dashboard name requires `trust_forwarded_for = true`; without it the edge cannot tell the real client and returns 404. Every other client gets a 404.
 

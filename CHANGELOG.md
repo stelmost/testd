@@ -7,11 +7,13 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 ### Added
 
 - Native TLS 1.3 registration with explicit host pairing, independently derived verification codes, and saved per-endpoint trust
+- Owner-authenticated dashboard and setup requests, including event streams, without cross-port cookie credentials
 - Mutually authenticated host-to-leaf application forwarding with connection-scoped in-memory leaf keys; dev servers can remain local HTTP
 
 ### Changed
 
-- The dashboard is served at `https://testd.test/` as well as `http://127.0.0.1:7737/`; the edge forwards the dashboard name only for loopback clients, and the loopback peer replaces the per-run URL token as the authority
+- Dashboard administration requires an owner-scoped per-run credential, separate from registration and control tokens; tray and CLI links bootstrap origin-scoped sessions, and bare loopback connections reveal no live state
+- Setup uses a separate ephemeral credential before reading secrets or invoking privileged actions; daemon restart invalidates dashboard sessions
 - The tray app opens the dashboard in a window instead of the browser, and lists `testd.test → dashboard` as the last row of the name list
 - First-run setup is a local page served by the daemon on an ephemeral loopback port and shown in a dialog; it shares the dashboard stylesheet and talks HTTP instead of Tauri commands
 

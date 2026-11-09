@@ -121,6 +121,7 @@ impl Daemon {
 		{
 			Ok(server) => {
 				engine.set_local_token(server.token().to_owned());
+				engine.set_dashboard_token(server.dashboard_token().to_owned());
 				Some(server)
 			},
 			Err(e) => {

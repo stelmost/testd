@@ -20,6 +20,7 @@ use crate::registry::Claim;
 
 /// State shared by every dashboard request.
 pub struct HttpContext {
+	pub dashboard_token: Option<String>,
 	pub tld: String,
 	pub https_port: u16,
 	pub pki_dir: PathBuf,
@@ -102,6 +103,19 @@ where
 		return respond(&mut writer, "403 Forbidden", "text/plain", b"A dashboard request header is required.").await;
 	}
 
+	let is_authorized = crate::local_auth::authorized(&headers, ctx.dashboard_token.as_deref());
+	let is_public = method == "GET" && matches!(path.as_str(), "/" | "/dashboard.css" | "/ok.svg" | "/ca.crt");
+	if !is_public && !is_authorized {
+		return respond_json(
+			&mut writer,
+			"401 Unauthorized",
+			&serde_json::json!({
+				"error": "Open the dashboard from the tray or run `testd dashboard` in the daemon owner's account."
+			}),
+		)
+		.await;
+	}
+
 	let body = if method == "POST" {
 		tokio::time::timeout(REQUEST_TIMEOUT, read_body(&mut reader, &headers))
 			.await
@@ -111,7 +125,11 @@ where
 	};
 
 	match (method.as_str(), path.as_str()) {
-		("GET", "/") => serve_dashboard(&mut writer, ctx).await,
+		("GET", "/") if is_authorized => serve_dashboard(&mut writer, ctx).await,
+		("GET", "/") => {
+			let page = render_dashboard(ctx, &[], &HashSet::new(), &[]);
+			respond(&mut writer, "200 OK", "text/html; charset=utf-8", page.as_bytes()).await
+		},
 		("GET", "/dashboard.css") => {
 			let css = crate::assets::load(crate::assets::DASHBOARD_CSS);
 			respond(&mut writer, "200 OK", "text/css; charset=utf-8", css.as_bytes()).await

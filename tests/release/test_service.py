@@ -185,6 +185,22 @@ class ServiceSafetyTests(unittest.TestCase):
 			units = sorted(path.read_text(encoding='utf-8') for path in other.parent.iterdir())
 			self.assertEqual(units, ['preserve', 'replacement'])
 
+	def test_readiness_uses_the_current_dashboard_credential_after_restart(self):
+		with tempfile.TemporaryDirectory() as temporary:
+			control = pathlib.Path(temporary) / 'control.json'
+			with patch.object(service.http.client, 'HTTPConnection') as connect:
+				connection = connect.return_value
+				response = connection.getresponse.return_value
+				response.status = 200
+				response.read.return_value = b'{"tld":"test"}'
+				for token in ('before-restart', 'after-restart'):
+					control.write_text(service.json.dumps({'dashboard_token': token}), encoding='utf-8')
+					service.wait_dashboard(7737, control)
+				headers = [call.kwargs['headers'] for call in connection.request.call_args_list]
+				self.assertEqual(headers, [
+					{'Authorization': 'Bearer before-restart'}, {'Authorization': 'Bearer after-restart'},
+				])
+
 	def test_supervision_signals_only_the_validated_manager_unit(self):
 		with tempfile.TemporaryDirectory() as temporary:
 			unit = pathlib.Path(temporary) / 'fixture.service'

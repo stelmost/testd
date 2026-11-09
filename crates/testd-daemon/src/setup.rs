@@ -57,6 +57,7 @@ struct FinishRequest {
 }
 
 struct State {
+	token: String,
 	stop: tokio::sync::watch::Sender<bool>,
 	finish: tokio::sync::mpsc::UnboundedSender<FinishRequest>,
 }
@@ -70,9 +71,11 @@ pub fn start(rt: &tokio::runtime::Handle) -> io::Result<Setup> {
 	let addr = listener.local_addr()?;
 	let (finish, finish_rx) = tokio::sync::mpsc::unbounded_channel();
 	let (stop, stop_rx) = tokio::sync::watch::channel(false);
-	let state = Arc::new(State { stop, finish });
+	let token = testd_core::config::generate_operator_secret()?;
+	let url = format!("http://{addr}/#token={token}");
+	let state = Arc::new(State { token, stop, finish });
 	let task = crate::task::BackgroundTask(rt.spawn(serve(listener, state, stop_rx)));
-	Ok(Setup { url: format!("http://{addr}/"), addr, finish: finish_rx, _task: task })
+	Ok(Setup { url, addr, finish: finish_rx, _task: task })
 }
 
 async fn serve(listener: TcpListener, state: Arc<State>, mut stop: tokio::sync::watch::Receiver<bool>) {
@@ -134,6 +137,17 @@ async fn handle(stream: TcpStream, state: Arc<State>) -> io::Result<()> {
 	}
 
 	let path = target.split('?').next().unwrap_or("/").to_owned();
+	let is_public = method == "GET" && matches!(path.as_str(), "/" | "/dashboard.css");
+	if !is_public && !crate::local_auth::authorized(&headers, Some(&state.token)) {
+		return respond_json(
+			&mut writer,
+			"401 Unauthorized",
+			&serde_json::json!({
+				"error": "Open setup from the testd tray to authorize this session."
+			}),
+		)
+		.await;
+	}
 	let body = if method == "POST" {
 		tokio::time::timeout(REQUEST_TIMEOUT, read_body(&mut reader, &headers))
 			.await
@@ -427,6 +441,23 @@ mod tests {
 		})
 		.await
 		.unwrap();
+	}
+
+	#[tokio::test]
+	async fn setup_credentials_are_required_and_do_not_carry_to_another_session() {
+		let first = start(&tokio::runtime::Handle::current()).unwrap();
+		let second = start(&tokio::runtime::Handle::current()).unwrap();
+		let first_token = first.url.split("#token=").nth(1).unwrap();
+		let second_token = second.url.split("#token=").nth(1).unwrap();
+		assert_ne!(first_token, second_token);
+		let request = |token: &str| {
+			format!("GET /api/setup/unknown HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\n\r\n")
+		};
+		assert!(http(second.addr, &request(first_token)).await.starts_with("HTTP/1.1 401"));
+		assert!(http(second.addr, &request(second_token)).await.starts_with("HTTP/1.1 404"));
+		let unauthorized = "POST /api/setup/secret HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+			X-Testd-Request: 1\r\nContent-Length: 2\r\n\r\n{}";
+		assert!(http(second.addr, unauthorized).await.starts_with("HTTP/1.1 401"));
 	}
 
 	#[tokio::test]

@@ -47,18 +47,43 @@ test('quick launches display captured output as text', () => {
 });
 
 test('certificate status refreshes on focus and periodically', () => {
-	const source = dashboard.slice(dashboard.indexOf("window.addEventListener('focus', certificateState);"),
+	const source = dashboard.slice(dashboard.indexOf('if (dashboardToken) {'),
 		dashboard.lastIndexOf('</script>'));
 	let refreshes = 0;
 	let focused: (() => void) | undefined;
 	let tick: (() => void) | undefined;
-	new Function('window', 'setInterval', 'certificateState', 'connectEvents', source)(
+	new Function('window', 'setInterval', 'certificateState', 'connectEvents', 'dashboardToken', source)(
 		{ addEventListener: (_event: string, callback: () => void) => { focused = callback; } },
-		(callback: () => void) => { tick = callback; }, () => { refreshes++; }, () => {},
+		(callback: () => void) => { tick = callback; }, () => { refreshes++; }, () => {}, 'fixture-owner',
 	);
 	focused!();
 	tick!();
 	expect(refreshes).toBe(3);
+});
+
+test('local pages remove fragment credentials and authenticate requests without cross-port cookies', async () => {
+	const setup = await Bun.file(new URL('../../crates/testd-daemon/setup.html', import.meta.url)).text();
+	for (const [page, tokenName, next] of [[dashboard, 'dashboardToken', 'post'], [setup, 'setupToken', 'request']]) {
+		const storage = new Map<string, string>();
+		let replaced = '';
+		const source = page.slice(page.indexOf('function sessionToken('), page.indexOf(`\n\tconst ${tokenName}`));
+		const sessionToken = new Function('location', 'sessionStorage', 'history', 'notice', `return (${source});`)(
+			{ hash: '#token=fixture-owner&view=launches', pathname: '/', search: '' },
+			{ setItem: (key: string, value: string) => storage.set(key, value), getItem: (key: string) => storage.get(key) },
+			{ replaceState: (_state: unknown, _title: string, url: string) => { replaced = url; } }, () => {},
+		);
+		expect(sessionToken()).toBe('fixture-owner');
+		expect(replaced).not.toContain('token=');
+		expect([...storage.values()]).toEqual(['fixture-owner']);
+		let options: any;
+		const fetchSource = page.slice(page.indexOf('function authorizedFetch('), page.indexOf(`\n\tasync function ${next}(`));
+		const authorizedFetch = new Function('fetch', tokenName, `return (${fetchSource});`)(
+			async (_path: string, value: unknown) => { options = value; }, 'fixture-owner',
+		);
+		await authorizedFetch('/api/local/state', { headers: { 'X-Testd-Request': '1' } });
+		expect(options.headers).toEqual({ Authorization: 'Bearer fixture-owner', 'X-Testd-Request': '1' });
+		expect(page).not.toContain('document.cookie');
+	}
 });
 
 test('setup repair buttons regain their names when a prerequisite disappears', async () => {

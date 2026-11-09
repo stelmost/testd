@@ -119,13 +119,11 @@ That secret admits registrations directly. Issued tokens are the per-leaf path t
 
 ## Dashboard
 
-The daemon serves its dashboard on the loopback listener, at `http://127.0.0.1:7737/`, and at `https://testd.test/` through the edge. Both are local surfaces: the edge forwards the dashboard name only for clients on this machine, and the listener refuses every non-loopback peer. There is no login and no URL token; the loopback peer is the authority. Every `POST` carries `X-Testd-Request: 1`, so a cross-site page cannot mutate state.
+Open the dashboard from the tray or the URL printed by `testd dashboard` in the daemon owner's account. The link carries a per-run bootstrap credential in its fragment; the page removes it from the URL and sends it in Authorization headers from origin-scoped session storage. It is separate from registration and control credentials, and restarting the daemon invalidates the session. A bare loopback connection cannot read private state or administer the daemon. The `https://testd.test/` route remains local-only, and every `POST` also needs `X-Testd-Request: 1`.
 
 It lists live names with two actions, active shares with a stop button, access requests with approve and deny buttons, issued tokens with a revoke button, the **Quick launches** table, and the certificate actions. The page keeps a token-authenticated event stream open, so name, share, launch, access, and token changes appear without a reload. On a name, **stop** ends the leaf but keeps its grants, so the next run publishes the names again; **delete** (after a confirmation) deletes the grant for that one name, so the leaf stops publishing it and must ask for a grant next time. A name published with the operator secret or by a local quick launch has no issued grant to delete, so it offers only **stop**; a quick launch is deleted from its own card. `/api/status` is the machine-readable form of the names and shares:
 
-```sh
-curl http://127.0.0.1:7737/api/status
-```
+API clients must read `client_addr` and `dashboard_token` from the owner's private `control.json` and send `Authorization: Bearer <dashboard_token>`. Keep credentials out of command lines and logs. A bare `/api/status` request returns 401.
 
 Fetch the root from either dashboard URL:
 

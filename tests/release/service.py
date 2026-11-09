@@ -116,11 +116,14 @@ def free_ports(count):
 		return [probe.getsockname()[1] for probe in probes]
 
 
-def wait_dashboard(port):
+def wait_dashboard(port, control):
 	for _ in range(100):
 		connection = http.client.HTTPConnection('127.0.0.1', port, timeout=1)
 		try:
-			connection.request('GET', '/api/status')
+			credential = json.loads(control.read_text(encoding='utf-8'))['dashboard_token']
+			if not isinstance(credential, str) or not credential:
+				raise RuntimeError('service control file has no dashboard credential')
+			connection.request('GET', '/api/status', headers={'Authorization': f'Bearer {credential}'})
 			response = connection.getresponse()
 			value = json.loads(response.read())
 			is_running = response.status == 200 and value['tld'] == 'test'
@@ -175,7 +178,8 @@ def pid(run, name):
 
 
 def supervise(run, name, unit, proof, port, tls_port, root):
-	wait_dashboard(port)
+	control = root.parent.parent / 'control.json'
+	wait_dashboard(port, control)
 	run.command('service-tls', ['curl', '--silent', '--show-error', '--max-time', '10', '--noproxy', '*',
 		'--cacert', str(root), '--resolve', f'testd.test:{tls_port}:127.0.0.1',
 		f'https://testd.test:{tls_port}/'])
@@ -192,7 +196,7 @@ def supervise(run, name, unit, proof, port, tls_port, root):
 			break
 	else:
 		raise RuntimeError('the supervisor did not restart the killed daemon')
-	wait_dashboard(port)
+	wait_dashboard(port, control)
 	run.record('service-restart', 'pass', f'{original} -> {current}')
 
 

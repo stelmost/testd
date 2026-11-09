@@ -60,6 +60,8 @@ pub struct HostEngine {
 	/// Accepted from loopback only; lets the local dashboard register supervised
 	/// launches without carrying the operator secret.
 	local_token: Option<String>,
+	/// Separate from both registration and control credentials.
+	dashboard_token: Option<String>,
 	/// Local-only quick launches, shared with the loopback dashboard.
 	launches: Option<Arc<LaunchBook>>,
 	/// Re-probe health after a local certificate change.
@@ -82,6 +84,7 @@ impl HostEngine {
 			shares: None,
 			event_tx,
 			local_token: None,
+			dashboard_token: None,
 			launches: None,
 			health_refresh: None,
 			operator_tx,
@@ -92,6 +95,11 @@ impl HostEngine {
 	/// Set the per-run token accepted from loopback, used by the local GUI.
 	pub fn set_local_token(&mut self, token: String) {
 		self.local_token = Some(token);
+	}
+
+	pub fn set_dashboard_token(&mut self, token: String) {
+		assert!(!token.is_empty(), "the dashboard credential must not be empty");
+		self.dashboard_token = Some(token);
 	}
 
 	/// Attach the share manager. Only the dashboard and the status API use it.
@@ -111,7 +119,11 @@ impl HostEngine {
 
 	/// The loopback dashboard URL: this listener serves HTTP on the same port.
 	pub fn local_dashboard_url(&self) -> String {
-		self.config.local_dashboard_url()
+		let url = self.config.local_dashboard_url();
+		match &self.dashboard_token {
+			Some(token) => format!("{url}/#token={token}"),
+			None => url,
+		}
 	}
 
 	pub fn domain_url(&self, domain: &str) -> String {
@@ -173,6 +185,7 @@ impl HostEngine {
 		let per_ip = Arc::new(PerIpConnections::default());
 
 		let http_ctx = Arc::new(HttpContext {
+			dashboard_token: self.dashboard_token.clone(),
 			tld: self.tld.clone(),
 			https_port: self.config.https_port(),
 			pki_dir: self.config.pki_dir.clone(),
@@ -1568,6 +1581,7 @@ mod tests {
 		let access = Arc::new(Access::load(dir.path().join("tokens.json")).unwrap());
 		let mut engine = HostEngine::new(config, Arc::new(NoopResolver), access);
 		engine.set_local_token("local-token".into());
+		engine.set_dashboard_token("dashboard-token".into());
 		let server = crate::task::BackgroundTask(tokio::spawn(async move { engine.serve(intake).await.unwrap() }));
 		tokio::time::timeout(Duration::from_secs(3), async {
 			let mut stream = loop {
@@ -1577,7 +1591,9 @@ mod tests {
 				}
 			};
 			stream
-				.write_all(b"GET /api/status HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+				.write_all(
+					b"GET /api/status HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer dashboard-token\r\n\r\n",
+				)
 				.await
 				.unwrap();
 			let mut response = String::new();

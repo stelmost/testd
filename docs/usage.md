@@ -78,7 +78,7 @@ Use it only when you intend to take over the name. Without it, a duplicate name 
 testd dashboard
 ```
 
-The command prints `http://127.0.0.1:7737/`. The same page is at `https://testd.test/`. There is no user login and no URL token: the loopback listener, and the edge's rule that forwards the dashboard name only for clients on this machine, are the authority. Every mutation also needs the `X-Testd-Request: 1` header, which a cross-site page cannot send.
+Run it in the daemon owner's account. The link includes a per-run bootstrap credential in its fragment; the dashboard removes it from history and authenticates requests from origin-scoped session storage. Restarting the daemon invalidates the session. A bare `http://127.0.0.1:7737/` or `https://testd.test/` page does not grant administration or reveal live state. Every mutation also needs the `X-Testd-Request: 1` header.
 
 The dashboard shows:
 
@@ -89,16 +89,13 @@ The dashboard shows:
 - Quick launches, with start, stop, and logs
 - Certificate trust state, fingerprint, and expiry, with install and remove actions
 
-It is served only on the loopback listener and checks that the `Host` header is loopback. It is not proxied by the edge. If you open it through a port forward or a reverse proxy under another name, it refuses the request.
+The loopback listener checks the Host header, and the edge forwards the dashboard name only for clients on this machine. A foreign Host or a non-loopback dashboard peer is refused even when it supplies a credential.
 
-Useful machine-readable endpoints:
+`/api/status` lists names, targets, projects, advisories, and shares. API clients read the private control file's `client_addr` and `dashboard_token`, then send `Authorization: Bearer <dashboard_token>`; do not put credentials in command lines or logs. `/ca.crt` is public and returns the root certificate:
 
 ```sh
-curl http://127.0.0.1:7737/api/status
 curl http://127.0.0.1:7737/ca.crt -o testd-root.crt
 ```
-
-`/api/status` lists names, targets, projects, advisories, and shares. `/ca.crt` returns the root certificate for installing trust elsewhere. The edge serves neither.
 
 ## Check and repair
 
@@ -108,7 +105,7 @@ testd doctor --json
 testd doctor --fix
 ```
 
-`doctor` checks configuration, the operator secret, the resolver route, name resolution, optional Caddy wiring, and the edge. When the built-in TLS edge is enabled it also checks PKI validity and root trust; with `edge_enabled = false`, the external front owns TLS trust. The exit codes are stable:
+`doctor` checks configuration, the operator secret, the resolver route, name resolution, optional Caddy wiring, and the edge. PKI validity is required for registration TLS even with the built-in edge disabled. The built-in browser edge additionally requires OS root trust; an external front owns its own browser trust. The exit codes are stable:
 
 | Code | Meaning |
 |---|---|

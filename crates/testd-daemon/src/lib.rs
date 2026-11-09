@@ -9,6 +9,7 @@ pub mod engine;
 pub mod health;
 pub mod http;
 pub mod launch;
+mod local_auth;
 pub mod registry;
 pub mod resolver;
 pub mod setup;

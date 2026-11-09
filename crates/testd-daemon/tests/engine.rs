@@ -113,6 +113,7 @@ async fn start_on(bind: &str, provider: Option<std::path::PathBuf>) -> Harness {
 	let access = Arc::new(Access::load(dir.path().join("tokens.json")).unwrap());
 	let mut engine = HostEngine::new(config, resolver.clone(), Arc::clone(&access));
 	engine.set_local_token(LOCAL_TOKEN.into());
+	engine.set_dashboard_token(DASHBOARD_TOKEN.into());
 	let registrations = engine.registrations();
 	let shares = provider.map(|provider| {
 		Arc::new(testd_daemon::share::Shares::new(
@@ -1136,8 +1137,10 @@ async fn http(addr: SocketAddr, request: &str) -> String {
 	String::from_utf8_lossy(&out).into_owned()
 }
 
+const DASHBOARD_TOKEN: &str = "fixture-dashboard-owner";
+
 fn get(path: &str, headers: &[(&str, &str)]) -> String {
-	let mut request = format!("GET {path} HTTP/1.1\r\nHost: testd.test\r\n");
+	let mut request = format!("GET {path} HTTP/1.1\r\nHost: testd.test\r\nAuthorization: Bearer {DASHBOARD_TOKEN}\r\n");
 	for (name, value) in headers {
 		request.push_str(&format!("{name}: {value}\r\n"));
 	}
@@ -1170,7 +1173,7 @@ where
 fn post(path: &str, body: &str) -> String {
 	format!(
 		"POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nx-testd-request: 1\r\n\
-		 Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+		 Authorization: Bearer {DASHBOARD_TOKEN}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
 		body.len()
 	)
 }
@@ -1430,6 +1433,28 @@ async fn the_dashboard_offers_stop_and_grant_delete() {
 	assert!(matches!(waiting.request(register("api", "4000", false)).await, Response::Ok));
 	let page = http(harness.addr, &get("/", &[]).replace("Host: testd.test", "Host: 127.0.0.1")).await;
 	assert!(page.contains("deleteGrant('api.test'"), "a granted name can have its grant deleted: {page}");
+}
+
+#[tokio::test]
+async fn loopback_and_registration_credentials_do_not_grant_dashboard_authority() {
+	let harness = start().await;
+	let mut leaf = Client::connect(harness.addr, &harness.token).await;
+	assert!(matches!(leaf.request(register("private.fixture", "3000", false)).await, Response::Ok));
+	let authorization = format!("Authorization: Bearer {DASHBOARD_TOKEN}\r\n");
+	for path in ["/api/status", "/api/local/state", "/api/local/events", "/api/local/requests"] {
+		let unauthenticated = get(path, &[]).replace(&authorization, "");
+		let denied = http(harness.addr, &unauthenticated).await;
+		assert!(denied.starts_with("HTTP/1.1 401"), "{denied}");
+		assert!(!denied.contains("private.fixture.test"));
+		let wrong_credential = get(path, &[]).replace(DASHBOARD_TOKEN, LOCAL_TOKEN);
+		assert!(http(harness.addr, &wrong_credential).await.starts_with("HTTP/1.1 401"));
+	}
+	let public_page = http(harness.addr, &get("/", &[]).replace(&authorization, "")).await;
+	assert!(public_page.starts_with("HTTP/1.1 200"));
+	assert!(!public_page.contains("private.fixture.test"));
+	let authenticated = http(harness.addr, &get("/api/status", &[])).await;
+	assert!(authenticated.starts_with("HTTP/1.1 200"));
+	assert!(authenticated.contains("private.fixture.test"));
 }
 
 #[tokio::test]

@@ -78,8 +78,14 @@ function Stop-FixtureProcess($Process) {
 
 function Curl-Get([string]$HostName, [string]$Path = '/') {
 	$url = "https://${HostName}:$EdgePort$Path"
-	& curl.exe --silent --show-error --fail --max-time 10 --noproxy '*' --insecure --ssl-no-revoke `
-		--resolve "${HostName}:${EdgePort}:127.0.0.1" $url
+	$arguments = @('--silent', '--show-error', '--fail', '--max-time', '10', '--noproxy', '*',
+		'--cacert', (Join-Path $Pki 'root.crt'), '--ssl-no-revoke',
+		'--resolve', "${HostName}:${EdgePort}:127.0.0.1", $url)
+	if ($HostName -eq "testd.$Tld") {
+		Invoke-DashboardCurl -Arguments $arguments
+	} else {
+		& curl.exe @arguments
+	}
 }
 
 function Curl-Status([string]$HostName, [string]$Path = '/') {
@@ -111,33 +117,37 @@ function Test-NameRemoved([string]$HostName) {
 
 function Dashboard-Token {
 	$path = Join-Path $AppData 'testd\control.json'
-	if (-not (Test-Path $path)) { return '' }
-	return (Get-Content $path -Raw | ConvertFrom-Json).token
+	$token = (Get-Content $path -Raw -ErrorAction Stop | ConvertFrom-Json).dashboard_token
+	if ($token -notmatch '^[A-Za-z0-9_-]+$') { throw 'invalid dashboard credential' }
+	return $token
+}
+
+function Invoke-DashboardCurl([string[]]$Arguments) {
+	$token = Dashboard-Token
+	# Send the credential through stdin, not native arguments visible in process listings.
+	"header = `"Authorization: Bearer $token`"" | & curl.exe --config - @Arguments
 }
 
 function Dashboard-Get([string]$Path = '/') {
-	$token = Dashboard-Token
-	& curl.exe --silent --show-error --fail --max-time 10 --noproxy '*' `
-		-H "X-Testd-Token: $token" "http://127.0.0.1:7737$Path"
+	Invoke-DashboardCurl -Arguments @('--silent', '--show-error', '--fail', '--max-time', '10',
+		'--noproxy', '*', "http://127.0.0.1:7737$Path")
 }
 
 function Dashboard-Post([string]$Path, [string]$Body = '') {
 	if ($Body) {
-		# PowerShell 5.1 does not quote an argument that holds both spaces and
-		# double quotes, so a JSON body on the command line reaches curl broken.
-		# Hand curl a file instead.
+		# PowerShell 5.1 does not preserve JSON quotes in native arguments. Use a body file.
 		$bodyFile = [IO.Path]::GetTempFileName()
 		try {
 			[IO.File]::WriteAllText($bodyFile, $Body, [Text.UTF8Encoding]::new($false))
-			& curl.exe --silent --show-error --fail --max-time 20 --noproxy '*' `
-				-H "X-Testd-Token: $(Dashboard-Token)" -H 'X-Testd-Request: 1' -H 'Content-Type: application/json' `
-				--data-binary "@$bodyFile" "http://127.0.0.1:7737$Path"
+			Invoke-DashboardCurl -Arguments @('--silent', '--show-error', '--fail', '--max-time', '20',
+				'--noproxy', '*', '-H', 'X-Testd-Request: 1', '-H', 'Content-Type: application/json',
+				'--data-binary', "@$bodyFile", "http://127.0.0.1:7737$Path")
 		} finally {
 			Remove-Item -LiteralPath $bodyFile -Force -ErrorAction SilentlyContinue
 		}
 	} else {
-		& curl.exe --silent --show-error --fail --max-time 20 --noproxy '*' `
-			-H "X-Testd-Token: $(Dashboard-Token)" -H 'X-Testd-Request: 1' -X POST "http://127.0.0.1:7737$Path"
+		Invoke-DashboardCurl -Arguments @('--silent', '--show-error', '--fail', '--max-time', '20',
+			'--noproxy', '*', '-H', 'X-Testd-Request: 1', '-X', 'POST', "http://127.0.0.1:7737$Path")
 	}
 }
 
@@ -342,6 +352,11 @@ try {
 } catch { Fail "loopback dashboard status is proxied through the edge: $_" }
 
 Section 'local dashboard'
+if ((Dashboard-Status '/api/local/state') -eq '401') {
+	Pass 'loopback alone does not grant dashboard authority'
+} else {
+	Fail 'loopback alone does not grant dashboard authority'
+}
 try {
 	$page = Dashboard-Get '/'
 	if ($page -match 'Active domains') {

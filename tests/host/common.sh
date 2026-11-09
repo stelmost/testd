@@ -124,6 +124,12 @@ check_system_trust() {
 
 check_dashboard() {
 	section 'local dashboard'
+	if [ "$(curl --silent --max-time 10 --noproxy '*' --output /dev/null --write-out '%{http_code}' \
+		'http://127.0.0.1:7737/api/local/state')" = '401' ]; then
+		pass 'loopback alone does not grant dashboard authority'
+	else
+		fail 'loopback alone does not grant dashboard authority'
+	fi
 	local page
 	page="$(dashboard_get /)"
 	if grep -q 'Active domains' <<<"$page"; then

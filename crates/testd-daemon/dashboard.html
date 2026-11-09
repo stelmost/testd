@@ -283,8 +283,34 @@
 	}
 	applyTheme(storedTheme());
 
+	function sessionToken() {
+		const parameters = new URLSearchParams(location.hash.slice(1));
+		let token = parameters.get('token') || '';
+		try {
+			if (token) sessionStorage.setItem('testd.dashboard.token', token);
+			else token = sessionStorage.getItem('testd.dashboard.token') || '';
+		} catch {
+			notice('Session storage is unavailable. Reopen from the tray after reloading this window.');
+		}
+		if (parameters.has('token')) {
+			parameters.delete('token');
+			const fragment = parameters.toString();
+			history.replaceState(null, '', location.pathname + location.search + (fragment ? '#' + fragment : ''));
+		}
+		return token;
+	}
+
+	const dashboardToken = sessionToken();
+
+	function authorizedFetch(path, options = {}) {
+		return fetch(path, {
+			...options,
+			headers: { ...options.headers, Authorization: 'Bearer ' + dashboardToken },
+		});
+	}
+
 	async function post(path, body) {
-		const response = await fetch(path, {
+		const response = await authorizedFetch(path, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json', 'X-Testd-Request': '1' },
 			body: JSON.stringify(body || {}),
@@ -296,7 +322,8 @@
 	}
 
 	async function getJson(path) {
-		const response = await fetch(path);
+		const response = await authorizedFetch(path);
+		if (response.status === 401) throw new Error('Session expired. Reopen from the tray or `testd dashboard`.');
 		if (!response.ok) throw new Error(response.statusText);
 		return response.json();
 	}
@@ -918,10 +945,16 @@
 		streamController = controller;
 		setConnection('connecting');
 		try {
-			const response = await fetch('/api/local/events', {
+			const response = await authorizedFetch('/api/local/events', {
 				cache: 'no-store',
 				signal: controller.signal,
 			});
+			if (response.status === 401) {
+				streamController = null;
+				setConnection('offline');
+				notice('Session expired. Reopen from the tray or run `testd dashboard` in the daemon owner account.');
+				return;
+			}
 			if (!response.ok || !response.body) {
 				throw new Error(response.statusText || 'the daemon did not open a stream');
 			}
@@ -966,10 +999,15 @@
 		document.getElementById('launches')?.scrollIntoView();
 	}
 
-	window.addEventListener('focus', certificateState);
-	setInterval(certificateState, 60000);
-	certificateState();
-	connectEvents();
+	if (dashboardToken) {
+		window.addEventListener('focus', certificateState);
+		setInterval(certificateState, 60000);
+		certificateState();
+		connectEvents();
+	} else {
+		setConnection('offline');
+		notice('Open the dashboard from the tray or run `testd dashboard` in the daemon owner account.');
+	}
 </script>
 </body>
 </html>

@@ -259,8 +259,9 @@ PY
 }
 
 http_get() {
-	local host="$1" path="${2:-/}"
-	curl --silent --show-error --fail --max-time 10 --noproxy '*' \
+	local host="$1" path="${2:-/}" client='curl'
+	if [ "$host" = "testd.$TLD" ]; then client='dashboard_curl'; fi
+	"$client" --silent --show-error --fail --max-time 10 --noproxy '*' \
 		--cacert "$(pki_path)/root.crt" \
 		--resolve "$host:$EDGE_PORT:127.0.0.1" \
 		"https://$host:$EDGE_PORT$path"
@@ -314,26 +315,35 @@ operator_secret() {
 }
 
 dashboard_token() {
-	sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "$TEST_HOME/.config/testd/control.json" 2>/dev/null || true
+	python3 -c '
+import json, re, sys
+with open(sys.argv[1], encoding="utf-8") as source:
+    token = json.load(source)["dashboard_token"]
+assert isinstance(token, str) and re.fullmatch(r"[A-Za-z0-9_-]+", token), "invalid dashboard credential"
+print(token)
+' "$(control_path)"
+}
+
+dashboard_curl() {
+	local token
+	token="$(dashboard_token)" || return
+	# Keep the owner credential out of curl's command line and process listings.
+	printf 'header = "Authorization: Bearer %s"\n' "$token" | curl --config - "$@"
 }
 
 dashboard_get() {
-	local token
-	token="$(dashboard_token)"
-	curl --silent --show-error --fail --max-time 10 --noproxy '*' \
-		-H "X-Testd-Token: $token" "http://127.0.0.1:7737$1"
+	dashboard_curl --silent --show-error --fail --max-time 10 --noproxy '*' "http://127.0.0.1:7737$1"
 }
 
 dashboard_post() {
-	local path="$1" body="${2:-}" token
-	token="$(dashboard_token)"
+	local path="$1" body="${2:-}"
 	if [ -n "$body" ]; then
-		curl --silent --show-error --fail --max-time 20 --noproxy '*' \
-			-H "X-Testd-Token: $token" -H 'X-Testd-Request: 1' -H 'Content-Type: application/json' \
+		dashboard_curl --silent --show-error --fail --max-time 20 --noproxy '*' \
+			-H 'X-Testd-Request: 1' -H 'Content-Type: application/json' \
 			-X POST --data "$body" "http://127.0.0.1:7737$path"
 	else
-		curl --silent --show-error --fail --max-time 20 --noproxy '*' \
-			-H "X-Testd-Token: $token" -H 'X-Testd-Request: 1' -X POST "http://127.0.0.1:7737$path"
+		dashboard_curl --silent --show-error --fail --max-time 20 --noproxy '*' \
+			-H 'X-Testd-Request: 1' -X POST "http://127.0.0.1:7737$path"
 	fi
 }
 

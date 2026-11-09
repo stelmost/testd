@@ -4292,6 +4292,7 @@ dependencies = [
  "serde_json",
  "simple-dns",
  "socket2",
+ "subtle",
  "tempfile",
  "testd-client",
  "testd-core",

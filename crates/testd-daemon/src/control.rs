@@ -49,6 +49,8 @@ struct ControlFile {
 	token: String,
 	#[serde(default)]
 	client_addr: Option<String>,
+	#[serde(default)]
+	dashboard_token: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -167,7 +169,7 @@ pub fn control_path() -> PathBuf {
 }
 
 /// Loopback URL for the local dashboard, or `None` when no daemon wrote a
-/// control file. Access is bounded by the loopback listener, not by a token.
+/// control file. Its fragment bootstrap credential is distinct from registration and control tokens.
 pub fn dashboard_url() -> io::Result<Option<String>> {
 	dashboard_url_at(&control_path())
 }
@@ -182,7 +184,11 @@ fn dashboard_url_at(path: &Path) -> io::Result<Option<String>> {
 	let client = control
 		.client_addr
 		.ok_or_else(|| invalid_data("control file has no client address"))?;
-	Ok(Some(format!("http://{client}/")))
+	let token = control
+		.dashboard_token
+		.filter(|token| !token.is_empty())
+		.ok_or_else(|| invalid_data("control file has no dashboard credential; restart the daemon"))?;
+	Ok(Some(format!("http://{client}/#token={token}")))
 }
 
 /// Local client credentials for GUI-supervised launches.
@@ -373,6 +379,7 @@ fn invalid_data(e: impl std::fmt::Display) -> io::Error {
 pub struct ControlServer {
 	path: PathBuf,
 	token: String,
+	dashboard_token: String,
 	_task: crate::task::BackgroundTask,
 }
 
@@ -403,7 +410,8 @@ impl ControlServer {
 		let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
 		let addr = listener.local_addr()?;
 		let token = random_token();
-		write_control_file(&path, addr, client_addr, &token)?;
+		let dashboard_token = random_token();
+		write_control_file(&path, addr, client_addr, &token, &dashboard_token)?;
 		let task = crate::task::BackgroundTask(tokio::spawn(accept_loop(
 			listener,
 			token.clone(),
@@ -412,12 +420,16 @@ impl ControlServer {
 			access,
 			tld,
 		)));
-		Ok(Self { path, token, _task: task })
+		Ok(Self { path, token, dashboard_token, _task: task })
 	}
 
 	/// The local token accepted by the daemon's client listener.
 	pub(crate) fn token(&self) -> &str {
 		&self.token
+	}
+
+	pub(crate) fn dashboard_token(&self) -> &str {
+		&self.dashboard_token
 	}
 }
 
@@ -433,12 +445,22 @@ fn random_token() -> String {
 	URL_SAFE_NO_PAD.encode(bytes)
 }
 
-fn write_control_file(path: &Path, addr: SocketAddr, client_addr: SocketAddr, token: &str) -> io::Result<()> {
+fn write_control_file(
+	path: &Path,
+	addr: SocketAddr,
+	client_addr: SocketAddr,
+	token: &str,
+	dashboard_token: &str,
+) -> io::Result<()> {
 	if let Some(parent) = path.parent() {
 		std::fs::create_dir_all(parent)?;
 	}
-	let control =
-		ControlFile { addr: addr.to_string(), token: token.to_owned(), client_addr: Some(client_addr.to_string()) };
+	let control = ControlFile {
+		addr: addr.to_string(),
+		token: token.to_owned(),
+		client_addr: Some(client_addr.to_string()),
+		dashboard_token: Some(dashboard_token.to_owned()),
+	};
 	let data = serde_json::to_vec(&control).map_err(invalid_data)?;
 
 	write_private(path, &data)
@@ -786,7 +808,8 @@ mod tests {
 		assert_eq!(config.hosts, vec!["127.0.0.1:17737"]);
 		assert_eq!(config.token, server.token());
 		let url = dashboard_url_at(&path).unwrap().unwrap();
-		assert_eq!(url, "http://127.0.0.1:17737/");
+		assert_eq!(url, format!("http://127.0.0.1:17737/#token={}", server.dashboard_token()));
+		assert_ne!(server.dashboard_token(), server.token());
 	}
 
 	#[tokio::test]

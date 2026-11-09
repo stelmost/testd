@@ -249,7 +249,7 @@ Host, under the config directory:
 | `pki/node.crt`, `pki/node.key` | Host intermediate | private key private |
 | `pki/backups/` | Previous intermediates | private |
 | `tokens.json` | Issued tokens and granted names, including secrets | `0600` |
-| `control.json` | Per-run loopback control token | user-private |
+| `control.json` | Distinct per-run local control and dashboard credentials | user-private |
 | `launches.json` | Quick launch definitions | user-private |
 | `Caddyfile` | Managed external-front config | plain |
 
@@ -259,6 +259,7 @@ Leaf:
 |---|---|
 | `leaf.toml` | Node profiles |
 | `credentials/<profile>` | Bearer token for that profile, mode `0600` |
+| `trusted-hosts/<endpoint-hash>.crt` | Explicitly paired host CA, DER; previous public pins retained on re-pairing |
 
 The host's token store is the source of truth. A leaf's credential file is a copy, not a second grant database.
 
@@ -266,14 +267,14 @@ The host's token store is the source of truth. A leaf's credential file is a cop
 
 | Listener | Default | Config key | Notes |
 |---|---|---|---|
-| Leaf intake | `127.0.0.1:7737` | `listen_addr` | Plain TCP, bearer token |
+| Leaf intake | `127.0.0.1:7737` | `listen_addr` | Network clients require paired TLS 1.3; loopback retains the local protocol |
 | Dashboard | `127.0.0.1:7737` | follows `listen_addr` port | Loopback only |
 | HTTPS edge | `127.0.0.1:443` | `edge_addr` | Only when `edge_enabled`; needs privilege on Linux |
 | Plain HTTP routing | `127.0.0.1:7740` | `http_addr` | Always on; used by external fronts |
 | DNS | `127.0.0.1:7753` | fixed | Linux and macOS |
 | DNS | `127.0.0.1:53` | fixed | Windows |
 
-The control channel uses the dashboard address with a per-run token from `control.json`; the dashboard HTTP surface itself is authorized by the loopback peer.
+The control channel has an ephemeral loopback address in `control.json`. Its control credential also admits local launches. The dashboard uses a separate per-run credential from the same private file. Secure leaves bind dynamically allocated TLS listeners on their registration interface; the host needs a return route and firewall permission.
 
 ## Names, targets, and limits
 
@@ -283,7 +284,7 @@ The control channel uses the dashboard address with a per-run token from `contro
 - Maximum label: 63 bytes. Maximum full name: 253 bytes.
 - `testd.test` is reserved for the dashboard. The edge serves it to clients on this machine only.
 - Targets: bare port, `host:port`, `ip:port`, or `[ipv6]:port`. Maximum 512 bytes. Port 0 is invalid. The `run` entry syntax splits `host:name:port` on colons, so an IPv6 host cannot be used in a `run` entry; use a host name. Quick launches accept a full IPv6 target.
-- A bare port is completed with the leaf's connection address.
+- A bare application port means leaf loopback for secure forwarding; local direct registrations retain host-side address inference.
 
 Operational limits:
 
@@ -298,7 +299,9 @@ Operational limits:
 | Edge connections | 512 total, 64 per source address |
 | Edge certificate cache | 1024 entries |
 | Pending access requests | 32 |
-| Access request lifetime | 120 seconds |
+| Access or pairing request lifetime | 120 seconds |
+| TLS application endpoints per leaf connection | 64 |
+| Incoming connections per leaf TLS endpoint | 64 |
 | Control request line | 4096 bytes |
 | Quick launch log | 500 lines in memory |
 | Leaf certificate | 24 hours |
@@ -311,7 +314,13 @@ There is no telemetry, usage reporting, or name reporting.
 
 Base URLs: `http://127.0.0.1:7737/` and `https://testd.test/`. Both reach the same loopback listener; the edge forwards the dashboard name only when the client is on this machine. The `Host` header must be `localhost`, `127.0.0.1`, `[::1]`, or `testd.<tld>`. Only `GET` and `POST` are accepted.
 
-Authorization is the loopback peer. There is no login and no token. Every `POST` needs:
+Private API reads, event streams, and mutations require the owner credential from `control.json`, not a registration or control token:
+
+```text
+Authorization: Bearer <dashboard_token>
+```
+
+The tray or `testd dashboard` delivers it in a fragment bootstrap link; browser requests use origin-scoped session storage and remove the credential from URL history. Restart invalidates it. Public GETs are limited to the empty dashboard shell, stylesheet, liveness image, and public root certificate. Every `POST` additionally needs:
 
 ```text
 X-Testd-Request: 1

@@ -208,8 +208,30 @@
 	let resolverReady = false;
 	let certificateReady = false;
 
+	function sessionToken() {
+		const parameters = new URLSearchParams(location.hash.slice(1));
+		let token = parameters.get('token') || '';
+		try {
+			if (token) sessionStorage.setItem('testd.setup.token', token);
+			else token = sessionStorage.getItem('testd.setup.token') || '';
+		} catch {
+			notice('Session storage is unavailable. Reopen setup from the tray after reloading.');
+		}
+		if (parameters.has('token')) history.replaceState(null, '', location.pathname + location.search);
+		return token;
+	}
+
+	const setupToken = sessionToken();
+
+	function authorizedFetch(path, options = {}) {
+		return fetch(path, {
+			...options,
+			headers: { ...options.headers, Authorization: 'Bearer ' + setupToken },
+		});
+	}
+
 	async function request(path, body) {
-		const response = await fetch(path, {
+		const response = await authorizedFetch(path, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json', 'X-Testd-Request': '1' },
 			body: JSON.stringify(body || {}),
@@ -221,7 +243,7 @@
 	}
 
 	async function getJson(path) {
-		const response = await fetch(path, { cache: 'no-store' });
+		const response = await authorizedFetch(path, { cache: 'no-store' });
 		let data = {};
 		try { data = await response.json(); } catch (e) {}
 		if (!response.ok) throw new Error(data.error || response.statusText);
@@ -359,7 +381,7 @@
 		button.textContent = 'Starting testd...';
 		hideNotice();
 		try {
-			const response = await fetch('/api/setup/finish', {
+			const response = await authorizedFetch('/api/setup/finish', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json', 'X-Testd-Request': '1' },
 				body: JSON.stringify({ secret }),
