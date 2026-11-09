@@ -462,22 +462,41 @@ async fn deregister_best_effort(writer: &mut Writer, entries: &[Entry]) {
 	}
 }
 
-/// Wait for Ctrl+C or the service manager's normal termination signal.
-pub async fn shutdown_signal() -> std::io::Result<()> {
+/// Install shutdown handlers before starting owned processes or services.
+pub fn prepare_shutdown_signal() -> std::io::Result<impl std::future::Future<Output = std::io::Result<()>>> {
 	#[cfg(unix)]
 	{
-		let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-		tokio::select! {
-			result = tokio::signal::ctrl_c() => result,
-			_ = terminate.recv() => Ok(()),
-		}
+		use tokio::signal::unix::{SignalKind, signal};
+
+		let mut terminate = signal(SignalKind::terminate())?;
+		let mut interrupt = signal(SignalKind::interrupt())?;
+		Ok(async move {
+			tokio::select! {
+				_ = interrupt.recv() => Ok(()),
+				_ = terminate.recv() => Ok(()),
+			}
+		})
 	}
-	#[cfg(not(unix))]
-	tokio::signal::ctrl_c().await
+	#[cfg(windows)]
+	{
+		let mut interrupt = tokio::signal::windows::ctrl_c()?;
+		Ok(async move {
+			interrupt.recv().await;
+			Ok(())
+		})
+	}
+	#[cfg(not(any(unix, windows)))]
+	Ok(tokio::signal::ctrl_c())
+}
+
+/// Wait for Ctrl+C or the service manager's normal termination signal.
+pub async fn shutdown_signal() -> std::io::Result<()> {
+	prepare_shutdown_signal()?.await
 }
 
 /// Register entries, run a command, deregister on exit.
 pub async fn run(entries: &[Entry], command: &[String], force: bool, config: ClientConfig) -> Result<()> {
+	let shutdown = prepare_shutdown_signal()?;
 	let stop = Arc::new(Notify::new());
 
 	// Maintain registration in the background.
@@ -498,7 +517,7 @@ pub async fn run(entries: &[Entry], command: &[String], force: bool, config: Cli
 	// Wait for child, signal, or a registration loop that stopped on its own.
 	let status = tokio::select! {
 		status = child.wait() => status?,
-		signal = shutdown_signal() => {
+		signal = shutdown => {
 			signal?;
 			process_tree.stop(&mut child).await?;
 			child.wait().await?
@@ -530,6 +549,7 @@ pub async fn run(entries: &[Entry], command: &[String], force: bool, config: Cli
 
 /// Register entries and hold the connection until interrupted.
 pub async fn register(entries: &[Entry], force: bool, config: ClientConfig) -> Result<()> {
+	let shutdown = prepare_shutdown_signal()?;
 	let stop = Arc::new(Notify::new());
 
 	let bg_entries: Vec<Entry> = entries.to_vec();
@@ -538,7 +558,7 @@ pub async fn register(entries: &[Entry], force: bool, config: ClientConfig) -> R
 
 	eprintln!("[testd] Press Ctrl+C to deregister.");
 	tokio::select! {
-		signal = shutdown_signal() => {
+		signal = shutdown => {
 			signal?;
 			stop.notify_one();
 		},
@@ -598,6 +618,18 @@ mod tests {
 			.unwrap_err();
 		server.await.unwrap();
 		error
+	}
+
+	#[cfg(target_os = "linux")]
+	#[tokio::test]
+	async fn termination_is_registered_before_the_signal_future_is_polled() {
+		let shutdown = prepare_shutdown_signal().unwrap();
+		/* SAFETY: the handler is installed and the signal targets only this test process. */
+		assert_eq!(unsafe { libc::raise(libc::SIGTERM) }, 0);
+		tokio::time::timeout(Duration::from_secs(3), shutdown)
+			.await
+			.expect("termination signal was lost")
+			.unwrap();
 	}
 
 	#[test]

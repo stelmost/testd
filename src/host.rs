@@ -5,12 +5,13 @@ use anyhow::{Result, anyhow};
 use testd_daemon::daemon::Daemon;
 
 pub async fn run() -> Result<()> {
+	let shutdown = testd_client::prepare_shutdown_signal()?;
 	let daemon = Daemon::new().await.map_err(|e| anyhow!("{e}"))?;
 
 	// Run engine until interrupted.
 	tokio::select! {
 		result = daemon.run() => result?,
-		signal = testd_client::shutdown_signal() => {
+		signal = shutdown => {
 			signal?;
 			eprintln!("\n[stop]   shutting down");
 		}

@@ -67,7 +67,7 @@ fn operator_secret(home: &Path) -> String {
 async fn service_termination_stops_the_command_and_deregisters() {
 	use std::process::Stdio;
 	use std::time::Duration;
-	use tokio::io::{AsyncBufReadExt, BufReader};
+	use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 	use testd_core::protocol::{Auth, Request, Response, recv, send};
 
 	let home = TempDir::new().unwrap();
@@ -84,12 +84,21 @@ async fn service_termination_stops_the_command_and_deregisters() {
 	let mut command = tokio::process::Command::from(command);
 	let mut child = command.kill_on_drop(true).spawn().unwrap();
 	let mut output = BufReader::new(child.stdout.take().unwrap());
+	let mut errors = BufReader::new(child.stderr.take().unwrap());
+	let mut stderr = String::new();
 	let mut line = String::new();
 	tokio::time::timeout(Duration::from_secs(5), output.read_line(&mut line))
 		.await
 		.unwrap()
 		.unwrap();
 	let group: u32 = line.trim().parse().unwrap();
+	let status = std::fs::read_to_string(format!("/proc/{}/status", child.id().unwrap())).unwrap();
+	let caught = status
+		.lines()
+		.find_map(|line| line.strip_prefix("SigCgt:"))
+		.and_then(|mask| u64::from_str_radix(mask.trim(), 16).ok())
+		.expect("SIGTERM handler status");
+	let handles_termination_before_registration = caught & (1 << 14) != 0;
 	let result = tokio::time::timeout(Duration::from_secs(10), async {
 		let (stream, _) = host.accept().await.unwrap();
 		let mut reader = BufReader::new(stream);
@@ -97,6 +106,9 @@ async fn service_termination_stops_the_command_and_deregisters() {
 		send(reader.get_mut(), &Response::Ok).await.unwrap();
 		assert!(matches!(recv::<_, Request>(&mut reader).await.unwrap(), Some(Request::Register { .. })));
 		send(reader.get_mut(), &Response::Ok).await.unwrap();
+		while !stderr.contains("[reg]   app.example") {
+			assert_ne!(errors.read_line(&mut stderr).await.unwrap(), 0, "client exited before registration: {stderr}");
+		}
 		assert!(
 			tokio::process::Command::new("kill")
 				.args(["-TERM", &child.id().unwrap().to_string()])
@@ -117,7 +129,12 @@ async fn service_termination_stops_the_command_and_deregisters() {
 		.status()
 		.await;
 	let (deregistered, status) = result.expect("SIGTERM must finish cleanup instead of abandoning the command");
-	assert!(matches!(deregistered, Some(Request::Deregister { .. })));
+	tokio::time::timeout(Duration::from_secs(3), errors.read_to_string(&mut stderr))
+		.await
+		.expect("child stderr remained open")
+		.unwrap();
+	assert!(handles_termination_before_registration, "SIGTERM handler was not ready before the child started");
+	assert!(matches!(deregistered, Some(Request::Deregister { .. })), "{deregistered:?}; {status}; {stderr}");
 	assert!(!status.success(), "the interrupted command must not be reported as successful");
 }
 
