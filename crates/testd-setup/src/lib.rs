@@ -8,7 +8,7 @@ use std::path::Path;
 
 #[cfg(target_os = "linux")]
 mod linux_resolver;
-#[cfg(any(target_os = "linux", target_os = "windows", test))]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod ownership;
 #[cfg(any(target_os = "windows", test))]
 mod windows_helper;
