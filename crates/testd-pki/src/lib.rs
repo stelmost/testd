@@ -8,6 +8,8 @@
 //! root key is stored offline serves from `node.crt` / `node.key` alone
 //! and needs `root.key` restored to renew or recreate the intermediate.
 
+pub mod transport;
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -128,8 +130,14 @@ impl Ca {
 
 	/// Mint a leaf for `hostname`, returning the DER chain and key for rustls.
 	pub fn mint_der(&self, hostname: &str) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+		self.mint_der_with_params(leaf_params(hostname)?)
+	}
+
+	fn mint_der_with_params(
+		&self,
+		params: CertificateParams,
+	) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
 		let intermediate = self.intermediate()?;
-		let params = leaf_params(hostname)?;
 		let key = KeyPair::generate().context("generate leaf key")?;
 		let cert = params.signed_by(&key, &intermediate.issuer).context("sign leaf")?;
 
