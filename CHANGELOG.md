@@ -29,7 +29,7 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 - Private state is replaced atomically; failed quick-launch edits preserve live definitions, and unreadable launch files stop startup rather than being overwritten
 - Windows credentials, control data, and PKI keys use protected owner-scoped ACLs from creation; unsafe existing files and unverifiable parents are refused before use
 - Windows resolver and root removal require unchanged administrator-owned records; CLI uninstall remains blocked pending native validation
-- Windows elevation uses the system PowerShell and verifies a single in-memory helper-source snapshot before execution without exceeding the native command-line limit
+- Windows elevation uses the system PowerShell and verifies a single in-memory helper-source snapshot before execution without exceeding the native command-line limit; helper and certificate staging files close before the elevated process reads them
 - macOS certificate actions preserve other installations' roots, and Windows resolver setup refuses conflicting unowned rules
 - Failed startup releases background listeners, and the setup dialog accepts another attempt after a start failure
 - Wrapped CLI commands stop their process trees; quick launches keep Stop responsive during rebinding and stalled host requests

@@ -81,7 +81,9 @@ pub(super) fn run(action: &str, args: &[(&str, &str)]) -> std::io::Result<()> {
 	let mut helper = testd_core::private_file::temporary_in(&std::env::temp_dir())?;
 	helper.write_all(SOURCE.as_bytes())?;
 	helper.as_file().sync_all()?;
-	let encoded = encoded(&command(helper.path(), action, &args));
+	/* Windows readers cannot open the file while its writer is still open. */
+	let helper = helper.into_temp_path();
+	let encoded = encoded(&command(&helper, action, &args));
 	let powershell = powershell()?;
 	let status = if is_elevated(&powershell) {
 		silent_command(&powershell)
@@ -146,13 +148,14 @@ mod tests {
 		let mut temporary = testd_core::private_file::temporary_in(&std::env::temp_dir()).unwrap();
 		use std::io::Write;
 		temporary.write_all(b"throw 'fixture source executed'").unwrap();
-		temporary.flush().unwrap();
+		temporary.as_file().sync_all().unwrap();
+		let temporary = temporary.into_temp_path();
 		let output = super::super::silent_command(powershell().unwrap())
 			.args([
 				"-NoProfile",
 				"-NonInteractive",
 				"-EncodedCommand",
-				&encoded(&command(temporary.path(), "RemoveNrpt", &[("Tld", "testdcheck")])),
+				&encoded(&command(&temporary, "RemoveNrpt", &[("Tld", "testdcheck")])),
 			])
 			.output()
 			.unwrap();
@@ -160,5 +163,30 @@ mod tests {
 		let error = String::from_utf8_lossy(&output.stderr);
 		assert!(error.contains("source changed"), "{error}");
 		assert!(!error.contains("fixture source executed"), "{error}");
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn an_unchanged_staging_file_is_readable_without_elevation() {
+		use std::io::Write;
+
+		let mut temporary = testd_core::private_file::temporary_in(&std::env::temp_dir()).unwrap();
+		temporary.write_all(SOURCE.as_bytes()).unwrap();
+		temporary.as_file().sync_all().unwrap();
+		let temporary = temporary.into_temp_path();
+		/* ValidateSet rejects this action before the helper can inspect or modify system state. */
+		let output = super::super::silent_command(powershell().unwrap())
+			.args([
+				"-NoProfile",
+				"-NonInteractive",
+				"-EncodedCommand",
+				&encoded(&command(&temporary, "InvalidFixtureAction", &[])),
+			])
+			.output()
+			.unwrap();
+		assert!(!output.status.success());
+		let error = String::from_utf8_lossy(&output.stderr);
+		assert!(error.contains("InvalidFixtureAction"), "{error}");
+		assert!(!error.contains("source changed"), "{error}");
 	}
 }

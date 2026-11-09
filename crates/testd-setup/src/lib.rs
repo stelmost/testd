@@ -1379,7 +1379,9 @@ fn trust_root_windows(cert_pem: &str) -> io::Result<()> {
 	let mut temporary = testd_core::private_file::temporary_in(&std::env::temp_dir())?;
 	temporary.write_all(&der)?;
 	temporary.as_file().sync_all()?;
-	let cert_path = temporary.path().to_string_lossy();
+	/* Close the writer before the elevated helper reads this public certificate. */
+	let temporary = temporary.into_temp_path();
+	let cert_path = temporary.to_string_lossy();
 	run_windows_helper(
 		"InstallRoot",
 		&[("CertPath", &cert_path), ("Thumbprint", &thumbprint), ("Fingerprint", &fingerprint)],
