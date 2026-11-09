@@ -712,7 +712,7 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		let path = dir.path().join("tokens.json");
 		let legacy = r#"{"tokens":[{"id":"old","token":"secret","label":"old leaf","created_at":1}]}"#;
-		std::fs::write(&path, legacy).unwrap();
+		write_private(&path, legacy.as_bytes()).unwrap();
 		let access = Access::load(path).unwrap();
 
 		assert!(access.allows("old", "anything.test"));

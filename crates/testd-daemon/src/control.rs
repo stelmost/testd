@@ -783,7 +783,7 @@ mod tests {
 		assert_eq!(dispatch(&missing, Action::SetupResolver.url()).unwrap(), Dispatch::NotRunning);
 
 		let stale = dir.path().join("stale.json");
-		std::fs::write(&stale, br#"{"addr":"127.0.0.1:1","token":"x"}"#).unwrap();
+		write_private(&stale, br#"{"addr":"127.0.0.1:1","token":"x"}"#).unwrap();
 		assert_eq!(dispatch(&stale, Action::SetupResolver.url()).unwrap(), Dispatch::NotRunning);
 	}
 
