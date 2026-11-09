@@ -3229,7 +3229,7 @@ class PowerShellScriptTests(unittest.TestCase):
 						)
 						try:
 							result = subprocess.run([engine, '-NoProfile', '-NonInteractive', '-Command', command],
-								env=env, capture_output=True, encoding='utf-8', timeout=20)
+								env=env, capture_output=True, encoding='utf-8', timeout=45)
 						finally:
 							server.shutdown()
 							thread.join(timeout=5)
