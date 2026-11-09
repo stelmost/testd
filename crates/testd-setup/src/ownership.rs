@@ -1,7 +1,8 @@
 //! Private identity used to distinguish installations sharing system state.
 
 use std::io::{self, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 pub(super) struct InstallationId(String);
@@ -15,8 +16,14 @@ impl InstallationId {
 		Self::load_or_create_at(&ownership_path())
 	}
 
+	#[cfg(any(target_os = "linux", test))]
 	pub(super) fn as_str(&self) -> &str {
 		&self.0
+	}
+
+	#[cfg(any(target_os = "macos", target_os = "windows", test))]
+	pub(super) fn fingerprint(&self) -> String {
+		super::sha256_hex(self.0.as_bytes())
 	}
 
 	fn load_at(path: &Path) -> io::Result<Option<Self>> {
@@ -25,13 +32,17 @@ impl InstallationId {
 			Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
 			Err(error) => return Err(error),
 		};
-		if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
+		#[cfg(unix)]
+		let has_private_permissions = metadata.permissions().mode() & 0o077 == 0;
+		#[cfg(windows)]
+		let has_private_permissions = true;
+		if !metadata.is_file() || !has_private_permissions {
 			return Err(io::Error::new(
 				io::ErrorKind::PermissionDenied,
 				format!("{} must be a private regular file", path.display()),
 			));
 		}
-		let content = std::fs::read_to_string(path)?;
+		let content = testd_core::private_file::read_to_string(path)?;
 		let value = content.trim();
 		let valid = covo::decode(value).is_ok_and(|bytes| bytes.len() == 16 && covo::encode(&bytes) == value);
 		if !valid {
@@ -52,16 +63,18 @@ impl InstallationId {
 			.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing parent"))?;
 		std::fs::create_dir_all(parent)?;
 		let value = testd_core::config::generate_operator_secret()?;
-		let mut file = match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path) {
+		let mut file = match testd_core::private_file::create_new(path) {
 			Ok(file) => file,
 			Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
 				return Self::load_at(path)?.ok_or(error);
 			},
 			Err(error) => return Err(error),
 		};
+		#[cfg(unix)]
 		file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
 		writeln!(file, "{value}")?;
 		file.sync_all()?;
+		#[cfg(unix)]
 		std::fs::File::open(parent)?.sync_all()?;
 		Ok(Self(value))
 	}
@@ -83,6 +96,9 @@ mod tests {
 		let second = InstallationId::load_or_create_at(&path).unwrap();
 		assert_eq!(first.as_str(), second.as_str());
 		assert_eq!(covo::decode(first.as_str()).unwrap().len(), 16);
+		assert_eq!(first.fingerprint(), second.fingerprint());
+		assert_eq!(first.fingerprint().len(), 64);
+		#[cfg(unix)]
 		assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o600);
 	}
 
@@ -111,6 +127,7 @@ mod tests {
 		assert!(successes.iter().all(|id| id.as_str() == winner.as_str()));
 	}
 
+	#[cfg(unix)]
 	#[test]
 	fn rejects_public_or_invalid_ids_without_changing_them() {
 		let fixture = tempfile::tempdir().unwrap();
@@ -123,6 +140,7 @@ mod tests {
 		assert_eq!(std::fs::read_to_string(path).unwrap(), "not an ownership id\n");
 	}
 
+	#[cfg(unix)]
 	#[test]
 	fn refuses_a_symlink_instead_of_following_it() {
 		let fixture = tempfile::tempdir().unwrap();

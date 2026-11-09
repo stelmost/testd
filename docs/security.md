@@ -36,7 +36,7 @@ The root CA and intermediate are created by the host. The root key stays on the 
 | Setup credential | Memory and setup window session storage | One setup surface; not reusable in another setup session |
 | Leaf forwarding keys | Memory only, per registration connection | Accept application connections from the paired host CA |
 
-`config.toml`, `tokens.json`, `credentials/<profile>`, `control.json`, and private keys are written with user-only permissions on Unix. On Windows, private files are created with a protected ACL granting access only to the owner, SYSTEM, and Administrators, including temporary files used for atomic replacement. Reads verify ownership and ACLs before using credentials, control data, saved host trust, or keys. Unowned files, links, broader ACLs, and filesystems without verifiable ACLs are refused rather than silently repaired or adopted. Private writes also refuse shared or redirected parent directories whose ownership and access cannot be verified.
+`config.toml`, `tokens.json`, `credentials/<profile>`, `control.json`, and private keys are written with user-only permissions on Unix. On Windows, private files are created with a protected ACL granting access only to the owner, SYSTEM, and Administrators, including temporary files used for atomic replacement. Reads verify ownership and ACLs before using credentials, control data, saved host trust, or keys. Unowned files, links, broader ACLs, and filesystems without verifiable ACLs are refused rather than silently repaired or adopted. Private writes also refuse redirected parents, untrusted owners, and parent access rules that let other users modify their contents or permissions.
 
 Back up existing files and their ACLs before manual permission repair. Restricting an already exposed file does not revoke a copied secret or key: rotate compromised credentials and rebuild exposed PKI. Treat any copy as a credential. A leaked operator secret can register any valid name; a leaked issued token can publish only its granted names.
 
@@ -98,7 +98,9 @@ The testd root is a local certificate authority. Anything that trusts it accepts
 - If the root key is exposed, rebuild the PKI, reinstall trust on every browser machine, and restart the host.
 - If the root key is moved offline, restore it before the intermediate expires; the intermediate renews with it.
 
-Installing the root on a browser machine is a real trust change. On Linux, use `testd uninstall` to remove owned trust and resolver integration when the machine no longer uses testd. macOS and Windows uninstall is blocked until ownership can be verified; other resolver and trust actions on those platforms do not yet have equivalent ownership safeguards. Removing the desktop app does not remove the root or the resolver route.
+Installing the root on a browser machine is a real trust change. On Linux and Windows, use `testd uninstall` to remove owned trust and resolver integration when the machine no longer uses testd. macOS uninstall remains blocked until equivalent safeguards exist. Removing the desktop app does not remove the root or the resolver route.
+
+Windows records new NRPT rule identities and complete root-store certificate snapshots under administrator-only `%ProgramData%/testd/ownership`. Cleanup requires the private installation ID and unchanged recorded state. Compatible pre-existing rules and roots are not adopted. New root installation refuses a certificate created in the meantime, and installs the already validated certificate from memory rather than reopening a mutable path. Interrupted setup with incomplete ownership preserves live state for review; interrupted removal can be retried. Private record backups are retained after cleanup.
 
 On Linux, testd checks the distro's system CA bundle and uses an already trusted root without adopting its source. Setup reports a conflict rather than overwriting a different certificate at its system anchor path. Removal requires the installation's private ownership ID, its system ownership record, and an unchanged anchor and certificate; if ownership cannot be established, the anchor is left in place and the conflict is reported. The Linux DNS route uses the same ownership rule for its resolver drop-in. Inspect and back up existing files before making any changes.
 
@@ -156,7 +158,7 @@ The root-managed systemd unit grants only `CAP_NET_BIND_SERVICE` and keeps `NoNe
 4. If the root or intermediate key leaked, rebuild the PKI, reinstall trust everywhere, and restart.
 5. Remove any exposure at the firewall, tunnel, or tailnet layer.
 6. Check `~/.config/testd/tokens.json` and the dashboard Access card for unexpected grants.
-7. When a Linux host is retired, run `testd uninstall --purge` after reviewing the data to be deleted. macOS and Windows cleanup remains blocked until ownership can be verified.
+7. When a Linux or Windows host is retired, stop the daemon and run `testd uninstall --purge` after reviewing the data to be deleted. macOS cleanup remains blocked until equivalent safeguards exist.
 
 ## What testd does not do
 

@@ -2,7 +2,7 @@
 
 These checks can modify machine-wide DNS and trust. Use only a disposable VM with a persisted, restorable full-system snapshot and a fresh user. Do not seed or remove real routes, certificates, or production trust. Record the OS image and version, resolver implementation, candidate hashes and source commit, full-system snapshot location, commands, results, and before/after evidence without collecting private keys or credentials.
 
-The release runner snapshots selected paths and refuses existing testd integration. Its snapshot is not a full machine backup and does not prove that shared CA bundles, hooks, unrelated resolver configuration, or login settings are unchanged. The conflicting-state cases below require separate, manually seeded disposable snapshots; do not use `host --system` to overwrite a conflict. Product system checks on macOS and Windows are blocked until equivalent ownership safeguards exist.
+The release runner snapshots selected paths and refuses existing testd integration. Its snapshot is not a full machine backup and does not prove that shared CA bundles, hooks, unrelated resolver configuration, or login settings are unchanged. The conflicting-state cases below require separate, manually seeded disposable snapshots; do not use `host --system` to overwrite a conflict. Automated product system checks on macOS and Windows remain blocked pending native ownership and cleanup evidence. Windows ownership guards can be exercised manually through the candidate on the disposable VM; PowerShell mocks are not that evidence. macOS owned removal is still unimplemented.
 
 ```sh
 python3 tests/run.py host --system --bin /path/to/candidate-testd --report /path/to/new-persisted-report
@@ -33,6 +33,6 @@ For each case, restore a clean VM snapshot, seed only synthetic state, record it
 
 - [ ] SYS-14: Run the applicable cases on each claimed Linux distribution and resolver stack, including the actual distro trust utility. Unsupported resolver stacks report their limitation rather than being marked passed.
 - [ ] SYS-15: After equivalent ownership safeguards exist, repeat the cases against macOS `/etc/resolver` and the System keychain. Until then, record this platform's ownership coverage as blocked.
-- [ ] SYS-16: After equivalent ownership safeguards exist, repeat the cases against Windows NRPT and the machine root store, including UAC and exact certificate identity. Until then, record this platform's ownership coverage as blocked.
+- [ ] SYS-16: Repeat the cases against Windows NRPT and the machine root store, including denied UAC, exact certificate identity, changed rule properties, interrupted ownership writes, removal retries, and native private-file ACLs. Verify another standard user cannot read credentials or bootstrap data. Retain the native ownership records and before/after evidence; until this is run, record native ownership coverage as unverified.
 
 A successful fixture script or a restored test-only path is not evidence that a real OS trust store, browser store, or unowned configuration was preserved. Keep all reports private until reviewed.

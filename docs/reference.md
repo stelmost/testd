@@ -175,9 +175,9 @@ Writes the managed Caddyfile to `[host] caddyfile_path` and prints the `import` 
 testd uninstall [--purge]
 ```
 
-On Linux, remove owned resolver and trust integration while retaining local data. Stop the daemon first. `--purge` also deletes the configuration directory, including its default PKI, tokens, and local state, only after system cleanup succeeds. A custom PKI outside that directory is not deleted. Purge checks the configuration directory before cleanup and again before deletion; stop the daemon and avoid concurrent changes. Unowned or changed resolver and trust state is left untouched; conflicts and a root still trusted through another source are reported. If the local root certificate is missing, trust removal and purge are incomplete; restore the certificate before retrying.
+On Linux and Windows, remove owned resolver and trust integration while retaining local data. Stop the daemon first. `--purge` also deletes the configuration directory, including its default PKI, tokens, and local state, only after system cleanup succeeds. A custom PKI outside that directory is not deleted. Purge checks the configuration directory before cleanup and again before deletion; stop the daemon and avoid concurrent changes. Unowned or changed resolver and trust state is left untouched; conflicts and a root still trusted through another source are reported. If the local root certificate is missing, trust removal and purge are incomplete; restore the certificate before retrying.
 
-Uninstall is blocked on macOS and Windows until resolver and trust ownership can be verified. Other resolver and trust actions on those platforms do not yet have equivalent ownership safeguards. This command does not remove the executable or desktop app.
+Windows removal requires unchanged administrator-owned records and the private installation ID. Compatible pre-existing rules or roots are not adopted; legacy, changed, or incompletely recorded live state is preserved and reported. Administrator-only ownership-record backups are retained after cleanup. macOS uninstall remains blocked until equivalent safeguards exist. This command does not remove the executable or desktop app.
 
 ## Environment variables
 

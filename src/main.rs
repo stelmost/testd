@@ -1096,8 +1096,8 @@ fn uninstall(purge: bool) -> anyhow::Result<()> {
 
 fn require_owned_uninstall(system: &str) -> anyhow::Result<()> {
 	match system {
-		"linux" => Ok(()),
-		"macos" | "windows" => anyhow::bail!(
+		"linux" | "windows" => Ok(()),
+		"macos" => anyhow::bail!(
 			"uninstall is blocked on {system} until resolver and trust ownership can be verified; \
 			 system and local state were left untouched"
 		),
@@ -1158,7 +1158,7 @@ fn remove_trusted_root(config: Option<&testd_core::config::HostConfig>) -> anyho
 		.map(|config| config.pki_dir.clone())
 		.unwrap_or_else(|| testd_core::config::config_dir().join("pki"));
 	let path = pki_dir.join("root.crt");
-	let pem = match std::fs::read_to_string(&path) {
+	let pem = match testd_core::private_file::read_to_string(&path) {
 		Ok(pem) => pem,
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
 			anyhow::bail!("{} is missing; cannot identify the trusted root, so trust was not removed", path.display())
@@ -1174,43 +1174,27 @@ fn remove_trusted_root(config: Option<&testd_core::config::HostConfig>) -> anyho
 }
 
 fn snapshot_local_data(dir: &std::path::Path) -> anyhow::Result<Option<std::fs::File>> {
-	let metadata = match std::fs::symlink_metadata(dir) {
-		Ok(metadata) if metadata.is_dir() => metadata,
+	match std::fs::symlink_metadata(dir) {
+		Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {},
 		Ok(_) => anyhow::bail!("{} is not a directory; left untouched", dir.display()),
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
 		Err(error) => return Err(error).with_context(|| format!("inspect {}", dir.display())),
-	};
-	// Keep the directory open until deletion so its identity cannot be reused during cleanup.
-	let directory = std::fs::File::open(dir).with_context(|| format!("open {}", dir.display()))?;
-	if !same_local_directory(&metadata, &directory.metadata()?) {
-		anyhow::bail!("{} changed before cleanup; left untouched", dir.display());
 	}
+	/* Retain an open, non-redirected object so its file ID cannot be reused during cleanup. */
+	let directory = testd_core::private_file::open_directory(dir)
+		.with_context(|| format!("cannot safely open {}; left untouched", dir.display()))?;
 	Ok(Some(directory))
 }
 
-fn same_local_directory(first: &std::fs::Metadata, second: &std::fs::Metadata) -> bool {
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::MetadataExt;
-		first.is_dir() && second.is_dir() && first.dev() == second.dev() && first.ino() == second.ino()
-	}
-	#[cfg(not(unix))]
-	{
-		// Uninstall remains blocked until this platform has a verified directory identity check.
-		let _ = (first, second);
-		false
-	}
-}
-
 fn remove_local_data(dir: &std::path::Path, snapshot: Option<std::fs::File>) -> anyhow::Result<()> {
-	let current = match std::fs::symlink_metadata(dir) {
-		Ok(metadata) => Some(metadata),
+	let current = match testd_core::private_file::open_directory(dir) {
+		Ok(directory) => Some(directory),
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-		Err(error) => return Err(error).with_context(|| format!("inspect {}", dir.display())),
+		Err(error) => return Err(error).with_context(|| format!("cannot verify {}; left untouched", dir.display())),
 	};
 	let directory = match (snapshot, current) {
 		(None, None) => return Ok(()),
-		(Some(directory), Some(metadata)) if same_local_directory(&directory.metadata()?, &metadata) => directory,
+		(Some(directory), Some(current)) if testd_core::private_file::same_file(&directory, &current)? => directory,
 		_ => anyhow::bail!("{} changed during system cleanup; left untouched", dir.display()),
 	};
 	eprintln!("removing local data {}", dir.display());
@@ -1246,7 +1230,8 @@ mod uninstall_tests {
 	#[test]
 	fn platforms_without_ownership_guards_cannot_uninstall() {
 		assert!(require_owned_uninstall("linux").is_ok());
-		for system in ["macos", "windows", "freebsd"] {
+		assert!(require_owned_uninstall("windows").is_ok());
+		for system in ["macos", "freebsd"] {
 			let error = require_owned_uninstall(system).unwrap_err().to_string();
 			assert!(error.contains("left untouched"), "{error}");
 		}
@@ -1273,7 +1258,6 @@ mod uninstall_tests {
 		assert_eq!(std::fs::read_to_string(dir.join("data")).unwrap(), "preserve until cleanup succeeds");
 	}
 
-	#[cfg(unix)]
 	#[test]
 	fn purge_removes_local_data_after_both_cleanups() {
 		let (_fixture, dir) = local_state();
@@ -1297,7 +1281,6 @@ mod uninstall_tests {
 		assert!(!dir.exists());
 	}
 
-	#[cfg(unix)]
 	#[test]
 	fn failed_cleanups_report_both_errors_and_keep_local_data() {
 		let (_fixture, dir) = local_state();
@@ -1314,7 +1297,6 @@ mod uninstall_tests {
 		assert!(dir.join("data").is_file());
 	}
 
-	#[cfg(unix)]
 	#[test]
 	fn missing_root_certificate_prevents_purge() {
 		let (_fixture, dir) = local_state();
@@ -1327,7 +1309,6 @@ mod uninstall_tests {
 		assert!(dir.join("data").is_file());
 	}
 
-	#[cfg(unix)]
 	#[test]
 	fn purge_refuses_a_directory_created_during_cleanup() {
 		let fixture = tempfile::tempdir().unwrap();
@@ -1348,7 +1329,6 @@ mod uninstall_tests {
 		assert_eq!(std::fs::read_to_string(dir.join("data")).unwrap(), "unrelated data");
 	}
 
-	#[cfg(unix)]
 	#[test]
 	fn purge_refuses_a_directory_replaced_during_cleanup() {
 		let (fixture, dir) = local_state();

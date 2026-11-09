@@ -256,8 +256,12 @@ class ReleaseTests(unittest.TestCase):
 	def test_windows_product_helper_does_not_wait_for_confirmation(self):
 		script = (ROOT / 'scripts/testd-elevated.ps1').read_text()
 		self.assertIn("$ConfirmPreference = 'None'", script)
-		self.assertIn('certutil.exe -delstore -f Root', script)
-		self.assertIn('Remove-DnsClientNrptRule -Name $_.Name -Force', script)
+		self.assertIn('Remove-MachineRoot $roots[0]', script)
+		self.assertIn('Remove-DnsClientNrptRule -Name $record.Name -Force -Confirm:$false', script)
+		self.assertIn('CertAddCertificateContextToStore', script)
+		self.assertIn('AddNew($store.StoreHandle, $cert.Handle, 1,', script)
+		self.assertIn("$record.State = 'removing'", script)
+		self.assertNotIn('$store.Add($cert)', script)
 		install = script.split("'InstallNrpt' {", 1)[1].split("'RemoveNrpt' {", 1)[0]
 		self.assertNotIn('Remove-DnsClientNrptRule', install)
 		self.assertNotIn('Remove-CimInstance', script)
@@ -941,7 +945,7 @@ class SystemStateTests(unittest.TestCase):
 		windows = (ROOT / 'tests/release/windows-system-state.ps1').read_text()
 		elevated = (ROOT / 'scripts/testd-elevated.ps1').read_text()
 		for script in (windows, elevated):
-			self.assertIn('+ $Tld', script, 'NRPT namespaces must stay scoped to the TLD')
+			self.assertIn('+ $tld', script.lower(), 'NRPT namespaces must stay scoped to the TLD')
 		self.assertIn('testd root', windows)
 
 	def test_self_test_uses_a_dedicated_root_and_blocks_unowned_windows_rules(self):
@@ -3069,6 +3073,24 @@ class PowerShellScriptTests(unittest.TestCase):
 				with self.subTest(engine=pathlib.Path(engine).name, script=str(script.relative_to(ROOT))):
 					code, output = script_syntax_errors(engine, script)
 					self.assertEqual(code, 0, f'{script.relative_to(ROOT)}: {output}')
+
+	def test_windows_certificate_interop_compiles_without_opening_a_store(self):
+		script = state.powershell_quote(ROOT / 'scripts/testd-elevated.ps1')
+		command = (
+			'$tokens = $null; $errors = $null;'
+			f'$ast = [System.Management.Automation.Language.Parser]::ParseFile({script}, [ref]$tokens, [ref]$errors);'
+			'$definitions = @($ast.FindAll({ $args[0] -is '
+			'[System.Management.Automation.Language.StringConstantExpressionAst] -and '
+			'$args[0].Value.Contains("public static class TestdRootStore") }, $true));'
+			'if ($definitions.Count -ne 1) { throw "missing closed certificate interop" };'
+			'Add-Type -TypeDefinition $definitions[0].Value;'
+			'if (-not ("TestdRootStore" -as [type])) { throw "certificate interop did not compile" }'
+		)
+		for engine in POWERSHELLS:
+			with self.subTest(engine=pathlib.Path(engine).name):
+				result = subprocess.run([engine, '-NoProfile', '-NonInteractive', '-Command', command],
+					capture_output=True, encoding='utf-8', timeout=30)
+				self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 	def test_windows_system_scripts_refuse_before_touching_the_host(self):
 		with tempfile.TemporaryDirectory() as temporary:

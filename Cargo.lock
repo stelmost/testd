@@ -4347,6 +4347,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "testd-core",
+ "windows-sys 0.61.2",
  "x509-parser",
 ]
 

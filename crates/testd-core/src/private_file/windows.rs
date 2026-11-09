@@ -6,7 +6,9 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
 use std::ptr::{addr_of, null, null_mut};
 
-use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, HANDLE, INVALID_HANDLE_VALUE, LocalFree};
+use windows_sys::Win32::Foundation::{
+	ERROR_INSUFFICIENT_BUFFER, GENERIC_EXECUTE, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
+};
 use windows_sys::Win32::Security::Authorization::{
 	ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
 	SE_FILE_OBJECT,
@@ -19,8 +21,8 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::Storage::FileSystem::{
 	BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
 	FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ,
-	FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-	GetFileInformationByHandle, OPEN_EXISTING, READ_CONTROL,
+	FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+	FILE_SHARE_WRITE, GetFileInformationByHandle, OPEN_EXISTING, READ_CONTROL,
 };
 use windows_sys::Win32::System::SystemServices::{ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE};
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -196,6 +198,27 @@ pub(super) fn open_private(path: &Path) -> io::Result<File> {
 	Ok(file)
 }
 
+pub(super) fn open_directory(path: &Path) -> io::Result<File> {
+	let directory = existing(path, FILE_FLAG_BACKUP_SEMANTICS)?;
+	validate_directory(&directory, &User::current()?)?;
+	Ok(directory)
+}
+
+pub(super) fn same_file(first: &File, second: &File) -> io::Result<bool> {
+	let first = information(first)?;
+	let second = information(second)?;
+	if first.nFileIndexHigh == 0 && first.nFileIndexLow == 0 || second.nFileIndexHigh == 0 && second.nFileIndexLow == 0
+	{
+		return Err(io::Error::new(
+			io::ErrorKind::Unsupported,
+			"filesystem does not provide verifiable file identities",
+		));
+	}
+	Ok(first.dwVolumeSerialNumber == second.dwVolumeSerialNumber
+		&& first.nFileIndexHigh == second.nFileIndexHigh
+		&& first.nFileIndexLow == second.nFileIndexLow)
+}
+
 fn information(file: &File) -> io::Result<BY_HANDLE_FILE_INFORMATION> {
 	/* SAFETY: the output is a plain Windows structure initialized by GetFileInformationByHandle. */
 	let mut information = unsafe { std::mem::zeroed() };
@@ -217,7 +240,12 @@ fn validate_file(file: &File, user: &User) -> io::Result<()> {
 	if unsafe { EqualSid(security.owner, user.sid()) } == 0 {
 		return Err(denied("private file belongs to another owner; it was left untouched"));
 	}
-	security.validate_acl(user)
+	if security.untrusted_access(user)? != 0 {
+		return Err(denied(
+			"access is granted outside the owner, SYSTEM, or Administrators; restrict the ACL manually",
+		));
+	}
+	Ok(())
 }
 
 fn validate_directory(file: &File, user: &User) -> io::Result<()> {
@@ -231,7 +259,12 @@ fn validate_directory(file: &File, user: &User) -> io::Result<()> {
 	if !trusted_sid(security.owner, user) {
 		return Err(denied("private file parent belongs to an untrusted owner"));
 	}
-	security.validate_acl(user)
+	/* Directory listing is harmless; untrusted creation, replacement, or ACL changes are not. */
+	let read_access = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE | GENERIC_READ | GENERIC_EXECUTE;
+	if security.untrusted_access(user)? & !read_access != 0 {
+		return Err(denied("private file parent can be modified by untrusted users"));
+	}
+	Ok(())
 }
 
 struct Security {
@@ -268,7 +301,8 @@ impl Security {
 		Ok(Self { _allocation: allocation, owner, acl })
 	}
 
-	fn validate_acl(&self, user: &User) -> io::Result<()> {
+	fn untrusted_access(&self, user: &User) -> io::Result<u32> {
+		let mut access = 0;
 		/* SAFETY: Security retains the valid descriptor and GetAce checks every index. */
 		for index in 0..unsafe { (*self.acl).AceCount } as u32 {
 			let mut ace = null_mut();
@@ -284,16 +318,14 @@ impl Security {
 				ACCESS_ALLOWED_ACE_TYPE => {
 					let allowed = unsafe { &*ace.cast::<ACCESS_ALLOWED_ACE>() };
 					let sid = addr_of!(allowed.SidStart).cast_mut().cast();
-					if allowed.Mask != 0 && !trusted_sid(sid, user) {
-						return Err(denied(
-							"access is granted outside the owner, SYSTEM, or Administrators; restrict the ACL manually",
-						));
+					if !trusted_sid(sid, user) {
+						access |= allowed.Mask;
 					}
 				},
 				_ => return Err(denied("an unsupported access rule prevents proving file privacy")),
 			}
 		}
-		Ok(())
+		Ok(access)
 	}
 }
 
@@ -319,9 +351,10 @@ mod tests {
 		GetSecurityDescriptorControl, GetSecurityDescriptorDacl, PROTECTED_DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED,
 	};
 
-	fn grant_everyone(path: &Path) {
+	fn grant_everyone(path: &Path, rights: &str) {
 		let user = User::current().unwrap().text().unwrap();
-		let descriptor = parse_descriptor(&format!("D:P(A;;FA;;;{user})(A;;FA;;;SY)(A;;FA;;;BA)(A;;GR;;;WD)")).unwrap();
+		let descriptor =
+			parse_descriptor(&format!("D:P(A;;FA;;;{user})(A;;FA;;;SY)(A;;FA;;;BA)(A;OICI;{rights};;;WD)")).unwrap();
 		let mut present = 0;
 		let mut defaulted = 0;
 		let mut acl = null_mut();
@@ -364,7 +397,7 @@ mod tests {
 		let directory = tempfile::tempdir().unwrap();
 		let path = directory.path().join("credential");
 		crate::config::write_private(&path, b"fixture-token").unwrap();
-		grant_everyone(&path);
+		grant_everyone(&path, "GR");
 		assert_eq!(crate::private_file::read(&path).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
 		assert_eq!(
 			crate::config::write_private(&path, b"replacement").unwrap_err().kind(),
@@ -377,10 +410,31 @@ mod tests {
 	#[test]
 	fn private_files_are_not_created_inside_a_shared_directory() {
 		let directory = tempfile::tempdir().unwrap();
-		grant_everyone(directory.path());
+		grant_everyone(directory.path(), "FA");
 		let path = directory.path().join("credential");
 		assert_eq!(create_new(&path).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
 		assert!(!path.exists());
+	}
+
+	#[test]
+	fn directory_readers_do_not_inherit_access_to_new_private_files() {
+		let directory = tempfile::tempdir().unwrap();
+		grant_everyone(directory.path(), "GR");
+		let path = directory.path().join("key");
+		crate::config::write_private(&path, b"fixture-key").unwrap();
+		assert_eq!(crate::private_file::read(&path).unwrap(), b"fixture-key");
+	}
+
+	#[test]
+	fn directory_identity_is_the_open_object_not_its_name_or_timestamps() {
+		let fixture = tempfile::tempdir().unwrap();
+		let path = fixture.path().join("state");
+		std::fs::create_dir(&path).unwrap();
+		let original = open_directory(&path).unwrap();
+		assert!(same_file(&original, &open_directory(&path).unwrap()).unwrap());
+		std::fs::rename(&path, fixture.path().join("previous")).unwrap();
+		std::fs::create_dir(&path).unwrap();
+		assert!(!same_file(&original, &open_directory(&path).unwrap()).unwrap());
 	}
 
 	#[test]

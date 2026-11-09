@@ -8,8 +8,14 @@ use std::path::Path;
 
 #[cfg(target_os = "linux")]
 mod linux_resolver;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
 mod ownership;
+#[cfg(any(target_os = "windows", test))]
+mod windows_helper;
+#[cfg(target_os = "windows")]
+use windows_helper::run as run_windows_helper;
+#[cfg(any(target_os = "windows", test))]
+use windows_helper::quote as powershell_single_quote;
 #[cfg(any(target_os = "macos", all(test, unix)))]
 mod macos_resolver;
 
@@ -19,7 +25,7 @@ mod macos_resolver;
 /// `CREATE_NO_WINDOW` is set. The tray probes the system on a timer, so every
 /// probe used to flash a PowerShell or certutil window.
 #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
-fn silent_command(program: &str) -> std::process::Command {
+fn silent_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
 	let mut command = std::process::Command::new(program);
 	#[cfg(target_os = "windows")]
 	{
@@ -319,27 +325,48 @@ fn linux_resolver_preflight(tld: &str, addr: SocketAddr) -> io::Result<LinuxReso
 
 #[cfg(target_os = "windows")]
 fn is_os_resolver_configured_windows(tld: &str, addr: SocketAddr) -> bool {
-	let Ok(output) = silent_command("powershell")
+	if validate_windows_resolver_addr(addr).is_err() {
+		return false;
+	}
+	let Ok(powershell) = windows_helper::powershell() else {
+		return false;
+	};
+	let Ok(output) = silent_command(powershell)
 		.args(["-NoProfile", "-NonInteractive", "-Command", &nrpt_query_command(tld)])
 		.output()
 	else {
 		return false;
 	};
 	let stdout = String::from_utf8_lossy(&output.stdout);
-	nrpt_has_name_server(&stdout, addr)
+	output.status.success() && nrpt_has_name_server(&stdout, addr)
 }
 
 #[cfg(any(target_os = "windows", test))]
 fn nrpt_query_command(tld: &str) -> String {
+	let namespace = powershell_single_quote(&format!(".{tld}"));
 	format!(
-		"Get-DnsClientNrptRule | Where-Object {{ $_.Namespace -eq '.{tld}' }} | ForEach-Object {{ $_.NameServers }}"
+		"$rules = @(Get-DnsClientNrptRule -ErrorAction Stop | Where-Object {{ $_.Namespace -contains {namespace} }}); \
+		foreach ($rule in $rules) {{ \
+		if (@($rule.Namespace).Count -ne 1 -or @($rule.NameServers).Count -ne 1 -or \
+		$rule.DirectAccessEnabled -or $rule.DnsSecEnabled -or $rule.DnsSecValidationRequired) {{ exit 1 }}; \
+		$rule.NameServers }}"
 	)
 }
 
 #[cfg(any(target_os = "windows", test))]
 fn nrpt_has_name_server(output: &str, addr: SocketAddr) -> bool {
-	let expected = addr.ip().to_string();
-	output.split_whitespace().any(|server| server == expected)
+	let mut servers = output.split_whitespace();
+	validate_windows_resolver_addr(addr).is_ok()
+		&& servers.next() == Some("127.0.0.1")
+		&& servers.all(|server| server == "127.0.0.1")
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn validate_windows_resolver_addr(addr: SocketAddr) -> io::Result<()> {
+	if addr != SocketAddr::from(([127, 0, 0, 1], 53)) {
+		return Err(io::Error::new(io::ErrorKind::InvalidInput, "Windows NRPT requires DNS at 127.0.0.1:53"));
+	}
+	Ok(())
 }
 
 /// How to obtain the privileges for a one-time system change.
@@ -409,6 +436,7 @@ pub fn setup_os_resolver_gui(tld: &str, addr: SocketAddr) -> io::Result<()> {
 /// helper prompts for UAC only when this process is not already elevated.
 #[cfg(target_os = "windows")]
 fn setup_gui_windows(tld: &str, addr: SocketAddr) -> io::Result<()> {
+	validate_windows_resolver_addr(addr)?;
 	let name_server = addr.ip().to_string();
 	run_windows_helper("InstallNrpt", &[("Tld", tld), ("NameServer", name_server.as_str())])
 }
@@ -575,7 +603,7 @@ fn gui_write(path: &Path, content: &str) -> io::Result<()> {
 	let target = powershell_single_quote(&path.display().to_string());
 	let script =
 		format!("$bytes = [Convert]::FromBase64String('{encoded}'); [IO.File]::WriteAllBytes({target}, $bytes)");
-	let encoded_command = powershell_encoded(&script);
+	let encoded_command = windows_helper::encoded(&script);
 	let argument = format!("-NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded_command}");
 	let command = format!(
 		"$ErrorActionPreference = 'Stop'; $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ErrorAction Stop -ArgumentList {}; exit $p.ExitCode",
@@ -786,7 +814,7 @@ mod tests {
 	#[test]
 	fn nrpt_query_selects_name_servers_for_namespace() {
 		let command = nrpt_query_command("test");
-		assert!(command.contains("Namespace -eq '.test'"));
+		assert!(command.contains("Namespace -contains '.test'"));
 		assert!(command.contains("NameServers"));
 	}
 
@@ -796,6 +824,9 @@ mod tests {
 		assert!(nrpt_has_name_server("127.0.0.1\r\n", addr));
 		assert!(!nrpt_has_name_server("1.1.1.1\r\n", addr));
 		assert!(!nrpt_has_name_server("", addr));
+		assert!(!nrpt_has_name_server("127.0.0.1\r\n192.0.2.1\r\n", addr));
+		assert!(!nrpt_has_name_server("127.0.0.1", "127.0.0.1:7753".parse().unwrap()));
+		assert!(!nrpt_has_name_server("127.0.0.1", "127.0.0.2:53".parse().unwrap()));
 	}
 
 	#[test]
@@ -1341,16 +1372,18 @@ fn trust_root_windows(cert_pem: &str) -> io::Result<()> {
 	// Windows certificate APIs load DER reliably; PEM support depends on the
 	// .NET version, so convert once before handing the file to the helper. The
 	// expected thumbprint comes from the PEM, not from the mutable temp file.
+	use std::io::Write;
 	let der = pem_to_der(cert_pem)?;
 	let thumbprint = sha1_hex(&der);
-	let tmp = std::env::temp_dir().join(format!("testd-root-{}.cer", std::process::id()));
-	std::fs::write(&tmp, &der)?;
-	let result = {
-		let cert_path = tmp.display().to_string();
-		run_windows_helper("InstallRoot", &[("CertPath", cert_path.as_str()), ("Thumbprint", thumbprint.as_str())])
-	};
-	let _ = std::fs::remove_file(&tmp);
-	result
+	let fingerprint = sha256_hex(&der);
+	let mut temporary = testd_core::private_file::temporary_in(&std::env::temp_dir())?;
+	temporary.write_all(&der)?;
+	temporary.as_file().sync_all()?;
+	let cert_path = temporary.path().to_string_lossy();
+	run_windows_helper(
+		"InstallRoot",
+		&[("CertPath", &cert_path), ("Thumbprint", &thumbprint), ("Fingerprint", &fingerprint)],
+	)
 }
 
 fn require_root_certificate(cert_pem: &str) -> io::Result<()> {
@@ -1447,12 +1480,14 @@ fn untrust_root_macos(cert_pem: &str) -> io::Result<()> {
 
 #[cfg(target_os = "windows")]
 fn untrust_root_windows(cert_pem: &str) -> io::Result<()> {
-	if !is_root_trusted_windows(cert_pem) {
-		return Ok(());
-	}
 	let der = pem_to_der(cert_pem)?;
-	let thumbprint = sha1_hex(&der);
-	run_windows_helper("RemoveRoot", &[("Thumbprint", thumbprint.as_str())])
+	run_windows_helper("RemoveRoot", &[("Thumbprint", &sha1_hex(&der)), ("Fingerprint", &sha256_hex(&der))])
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn sha256_hex(bytes: &[u8]) -> String {
+	use sha2::{Digest, Sha256};
+	Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Decode the first CERTIFICATE block in a PEM document to DER.
@@ -1474,86 +1509,6 @@ fn pem_to_der(pem: &str) -> io::Result<Vec<u8>> {
 	STANDARD
 		.decode(encoded.as_bytes())
 		.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("invalid certificate PEM: {e}")))
-}
-
-#[cfg(target_os = "windows")]
-const WINDOWS_ELEVATED_SCRIPT: &str = include_str!("../../../scripts/testd-elevated.ps1");
-
-/// Quote a value for a PowerShell single-quoted string.
-#[cfg(any(target_os = "windows", test))]
-fn powershell_single_quote(value: &str) -> String {
-	format!("'{}'", value.replace('\'', "''"))
-}
-
-#[cfg(target_os = "windows")]
-fn windows_helper_command(action: &str, args: &[(&str, &str)]) -> String {
-	// Embed the trusted helper source in the encoded command. A temp script
-	// could be replaced between the write and the elevated launch.
-	let script = powershell_single_quote(WINDOWS_ELEVATED_SCRIPT);
-	let mut invocation = format!("& ([ScriptBlock]::Create({script})) -Action {}", powershell_single_quote(action));
-	for (name, value) in args {
-		invocation.push_str(&format!(" -{name} {}", powershell_single_quote(value)));
-	}
-	invocation
-}
-
-/// PowerShell's -EncodedCommand takes UTF-16LE base64. Encoding the whole
-/// invocation keeps paths and arguments out of a re-quotable command line.
-#[cfg(target_os = "windows")]
-fn powershell_encoded(script: &str) -> String {
-	use base64::Engine;
-	use base64::engine::general_purpose::STANDARD;
-
-	let mut bytes = Vec::with_capacity(script.len() * 2);
-	for unit in script.encode_utf16() {
-		bytes.extend_from_slice(&unit.to_le_bytes());
-	}
-	STANDARD.encode(bytes)
-}
-
-#[cfg(target_os = "windows")]
-fn is_windows_elevated() -> bool {
-	let command = "([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)";
-	silent_command("powershell")
-		.args(["-NoProfile", "-Command", command])
-		.output()
-		.ok()
-		.is_some_and(|output| String::from_utf8_lossy(&output.stdout).trim().eq_ignore_ascii_case("true"))
-}
-
-/// Run one action through the audited helper. If the process is not elevated,
-/// the helper is launched with `-Verb RunAs`, so only the helper is elevated.
-#[cfg(target_os = "windows")]
-fn run_windows_helper(action: &str, args: &[(&str, &str)]) -> io::Result<()> {
-	let encoded = powershell_encoded(&windows_helper_command(action, args));
-	if is_windows_elevated() {
-		silent_command("powershell")
-			.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", &encoded])
-			.status()
-			.and_then(require_helper_success)
-	} else {
-		let argument_line = format!("-NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}");
-		let command = format!(
-			"$ErrorActionPreference = 'Stop'; $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ErrorAction Stop -ArgumentList {}; exit $p.ExitCode",
-			powershell_single_quote(&argument_line)
-		);
-		silent_command("powershell")
-			.args(["-NoProfile", "-Command", &command])
-			.status()
-			.and_then(require_helper_success)
-	}
-}
-
-#[cfg(target_os = "windows")]
-fn require_helper_success(status: std::process::ExitStatus) -> io::Result<()> {
-	if status.success() {
-		Ok(())
-	} else {
-		Err(io::Error::new(
-			io::ErrorKind::PermissionDenied,
-			"elevated testd helper failed (cancelled, denied, or invalid arguments)",
-		))
-	}
 }
 
 /// Compare certificates ignoring line-ending and trailing-whitespace noise.

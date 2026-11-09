@@ -14,6 +14,31 @@ pub fn open(path: &Path) -> io::Result<File> {
 	File::open(path)
 }
 
+pub fn open_directory(path: &Path) -> io::Result<File> {
+	#[cfg(windows)]
+	return windows::open_directory(path);
+	#[cfg(not(windows))]
+	{
+		use std::os::unix::fs::OpenOptionsExt;
+		std::fs::OpenOptions::new()
+			.read(true)
+			.custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
+			.open(path)
+	}
+}
+
+pub fn same_file(first: &File, second: &File) -> io::Result<bool> {
+	#[cfg(windows)]
+	return windows::same_file(first, second);
+	#[cfg(not(windows))]
+	{
+		use std::os::unix::fs::MetadataExt;
+		let first = first.metadata()?;
+		let second = second.metadata()?;
+		Ok(first.dev() == second.dev() && first.ino() == second.ino())
+	}
+}
+
 pub fn read(path: &Path) -> io::Result<Vec<u8>> {
 	let mut file = open(path)?;
 	let mut data = Vec::new();
@@ -40,7 +65,7 @@ pub fn create_new(path: &Path) -> io::Result<File> {
 	}
 }
 
-pub(crate) fn temporary_in(directory: &Path) -> io::Result<tempfile::NamedTempFile> {
+pub fn temporary_in(directory: &Path) -> io::Result<tempfile::NamedTempFile> {
 	#[cfg(windows)]
 	{
 		for _ in 0..10 {
