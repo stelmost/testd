@@ -16,7 +16,7 @@ use testd_daemon::engine::{HostEngine, Registrations};
 use testd_daemon::resolver::{ResolvedName, Resolver};
 use testd_pki::transport::{self, Identity};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpSocket, TcpStream};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, Command};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
@@ -51,14 +51,19 @@ struct Host {
 	address: SocketAddr,
 	edge: Edge,
 	root: Vec<u8>,
+	reservation: std::net::TcpListener,
 	server: JoinHandle<()>,
 }
 
 impl Host {
 	async fn start() -> Self {
 		let directory = tempfile::tempdir().unwrap();
-		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+		listener.set_nonblocking(true).unwrap();
 		let address = listener.local_addr().unwrap();
+		/* Keep the same socket reserved when the test swaps servers at the paired endpoint. */
+		let reservation = listener.try_clone().unwrap();
+		let listener = TcpListener::from_std(listener).unwrap();
 		let mut config: HostConfig = toml::from_str("").unwrap();
 		config.listen_addr = address;
 		config.pki_dir = directory.path().join("pki");
@@ -75,7 +80,7 @@ impl Host {
 			edge::start(context, Some("127.0.0.1:0".parse().unwrap()), "127.0.0.1:0".parse().unwrap(), &config.pki_dir)
 				.unwrap();
 		let server = tokio::spawn(async move { engine.serve(listener).await.unwrap() });
-		Self { _directory: directory, access, resolver, registrations, address, edge, root, server }
+		Self { _directory: directory, access, resolver, registrations, address, edge, root, reservation, server }
 	}
 
 	async fn pending(&self) -> PendingView {
@@ -162,12 +167,7 @@ fn candidate(home: &Path) -> Command {
 async fn replace_paired_host(host: &mut Host) -> TcpListener {
 	host.server.abort();
 	assert!((&mut host.server).await.unwrap_err().is_cancelled());
-	/* Pairing leaves a TIME_WAIT connection: the replacement must reuse the listener's Unix address. */
-	let socket = TcpSocket::new_v4().unwrap();
-	#[cfg(unix)]
-	socket.set_reuseaddr(true).unwrap();
-	socket.bind(host.address).unwrap();
-	socket.listen(128).unwrap()
+	TcpListener::from_std(host.reservation.try_clone().unwrap()).unwrap()
 }
 
 async fn headers<S: tokio::io::AsyncRead + Unpin>(reader: &mut BufReader<S>) -> Vec<String> {
