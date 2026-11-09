@@ -124,9 +124,43 @@ function Dashboard-Token {
 
 function Invoke-DashboardCurl([string[]]$Arguments) {
 	$token = Dashboard-Token
-	# The token is ASCII; avoid a UTF-8 BOM in curl's stdin and keep it out of process arguments.
-	$OutputEncoding = [Text.Encoding]::ASCII
-	"header = `"Authorization: Bearer $token`"" | & curl.exe --config - @Arguments
+	$start = [Diagnostics.ProcessStartInfo]::new()
+	$start.FileName = (Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+	# Double backslashes before quotes and at the end of each Windows command-line argument.
+	$quoted = @($Arguments | ForEach-Object {
+		$value = [regex]::Replace($_, '(\\*)"', '$1$1\"')
+		$value = [regex]::Replace($value, '(\\*)$', '$1$1')
+		'"' + $value + '"'
+	})
+	$start.Arguments = '--config - ' + ($quoted -join ' ')
+	$start.UseShellExecute = $false
+	$start.CreateNoWindow = $true
+	$start.RedirectStandardInput = $true
+	$start.RedirectStandardOutput = $true
+	$start.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
+	$process = [Diagnostics.Process]::new()
+	$process.StartInfo = $start
+	$started = $false
+	$output = $null
+	try {
+		if (-not $process.Start()) { throw 'could not start curl' }
+		$started = $true
+		# Write the credential as bytes, not through PowerShell 5.1's BOM-emitting native pipeline.
+		$bytes = [Text.Encoding]::ASCII.GetBytes("header = `"Authorization: Bearer $token`"`n")
+		$stdin = $process.StandardInput.BaseStream
+		try { $stdin.Write($bytes, 0, $bytes.Length) } finally { $stdin.Dispose() }
+		$output = $process.StandardOutput
+		$reading = $output.ReadToEndAsync()
+		if (-not $process.WaitForExit(30000)) { throw 'curl did not exit' }
+		$global:LASTEXITCODE = $process.ExitCode
+		$content = $reading.GetAwaiter().GetResult()
+		if ($content) { $content }
+	} finally {
+		try { if ($started) { Stop-FixtureProcess $process } } finally {
+			if ($output) { $output.Dispose() }
+			$process.Dispose()
+		}
+	}
 }
 
 function Dashboard-Get([string]$Path = '/') {

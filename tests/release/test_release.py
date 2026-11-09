@@ -3173,47 +3173,74 @@ class PowerShellScriptTests(unittest.TestCase):
 		script = state.powershell_quote(ROOT / 'tests/host/windows.ps1')
 		fixture = load('loopback_http_fixture', ROOT / 'tests/host/http-server.py')
 		with tempfile.TemporaryDirectory() as temporary:
+			paths = [temporary]
 			if os.name != 'nt':
 				(pathlib.Path(temporary) / 'curl.exe').symlink_to(curl)
-			env = {**os.environ, 'PATH': temporary + os.pathsep + os.environ.get('PATH', '')}
+				duplicate = pathlib.Path(temporary) / 'duplicate'
+				duplicate.mkdir()
+				(duplicate / 'curl.exe').symlink_to(curl)
+				paths.append(str(duplicate))
+			body = pathlib.Path(temporary) / 'fixture body.json'
+			body.write_bytes(b'{"message":"spaces and quotes"}')
+			env = {**os.environ, 'PATH': os.pathsep.join([*paths, os.environ.get('PATH', '')])}
 			for engine in POWERSHELLS:
 				with self.subTest(engine=pathlib.Path(engine).name):
 					received = []
+					page = 'fixture-é' + 'x' * 70000
 					class Handler(http.server.BaseHTTPRequestHandler):
-						def do_GET(self):
-							received.append(self.headers.get('Authorization'))
-							self.send_response(200)
+						def respond(self, content=None):
+							received.append((self.path, self.headers.get('Authorization'), self.headers.get('X-Fixture'), content))
+							self.send_response(403 if self.path == '/denied' else 200)
 							self.end_headers()
-							self.wfile.write(b'fixture-ok')
+							if self.path != '/denied':
+								self.wfile.write(page.encode('utf-8') if self.path == '/' else b'fixture-ok')
+						def do_GET(self):
+							self.respond()
+						def do_POST(self):
+							self.respond(self.rfile.read(int(self.headers['Content-Length'])))
 						def log_message(self, *_):
 							pass
 					with fixture.LoopbackHTTPServer(('127.0.0.1', 0), Handler) as server:
-						server.timeout = 10
-						thread = threading.Thread(target=server.handle_request)
+						thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': 0.1})
 						thread.start()
 						url = f'http://127.0.0.1:{server.server_port}/'
 						command = (
+							'[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false);'
 							'$OutputEncoding = [Text.Encoding]::UTF8;'
 							'$tokens = $null; $errors = $null;'
 							f'$ast = [System.Management.Automation.Language.Parser]::ParseFile({script}, [ref]$tokens, [ref]$errors);'
+							"foreach ($name in @('Stop-FixtureProcess', 'Invoke-DashboardCurl')) {"
 							'$definition = $ast.Find({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] '
-							"-and $args[0].Name -eq 'Invoke-DashboardCurl' }, $true);"
-							'. ([scriptblock]::Create($definition.Extent.Text));'
+							'-and $args[0].Name -eq $name }, $true);'
+							'. ([scriptblock]::Create($definition.Extent.Text)) };'
 							"function Dashboard-Token { 'fixture-token' };"
-							f"Invoke-DashboardCurl -Arguments @('--silent', '--show-error', '--fail', '--max-time', '3', "
-							f"'--noproxy=*', '{url}');"
-							'if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE };'
+							"$probe = 'X-Fixture: ' + [char]92 + '\"quoted\" path' + [char]92;"
+							f'$body = {state.powershell_quote(body)};'
+							f"Invoke-DashboardCurl -Arguments @('--silent', '--fail', '--max-time', '3', "
+							f"'--noproxy=*', '-H', $probe, '{url}');"
+							"if ($LASTEXITCODE -ne 0) { throw 'GET failed' };"
+							f"Invoke-DashboardCurl -Arguments @('--silent', '--fail', '--max-time', '3', "
+							f"'--noproxy=*', '--data-binary', ('@' + $body), '{url}upload');"
+							"if ($LASTEXITCODE -ne 0) { throw 'POST failed' };"
+							f"Invoke-DashboardCurl -Arguments @('--silent', '--fail', '--max-time', '3', "
+							f"'--noproxy=*', '{url}denied');"
+							"if ($LASTEXITCODE -ne 22) { throw 'curl failure was not propagated' };"
 							"if ($OutputEncoding.GetPreamble().Length -ne 3) { throw 'caller encoding changed' }"
 						)
 						try:
 							result = subprocess.run([engine, '-NoProfile', '-NonInteractive', '-Command', command],
 								env=env, capture_output=True, encoding='utf-8', timeout=20)
 						finally:
-							thread.join(timeout=11)
+							server.shutdown()
+							thread.join(timeout=5)
 						self.assertFalse(thread.is_alive(), 'fixture HTTP server did not stop')
 					self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-					self.assertEqual(result.stdout.strip(), 'fixture-ok')
-					self.assertEqual(received, ['Bearer fixture-token'])
+					self.assertEqual(result.stdout.lstrip('\ufeff').splitlines(), [page, 'fixture-ok'])
+					self.assertEqual(received, [
+						('/', 'Bearer fixture-token', '\\"quoted" path\\', None),
+						('/upload', 'Bearer fixture-token', None, body.read_bytes()),
+						('/denied', 'Bearer fixture-token', None, None),
+					])
 
 	def test_windows_host_fixture_disables_real_providers(self):
 		with tempfile.TemporaryDirectory() as temporary:
