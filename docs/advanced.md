@@ -204,7 +204,7 @@ The tray:
 - Lists saved quick launches with start and stop actions
 - Provides share controls
 
-Unticking **Launch at login** is final until you tick it again, even if the login item is removed outside the tray. Removing the app with the OS uninstaller does not remove the DNS route or the trusted root. On Linux and Windows, run `testd uninstall` first; macOS uninstall remains blocked until system ownership can be verified.
+Unticking **Launch at login** is final until you tick it again, even if the login item is removed outside the tray. Removing the app with the OS uninstaller does not remove the DNS route or the trusted root. On Linux, run `testd uninstall` first; macOS and Windows uninstall remain blocked until system ownership can be verified.
 
 Notifications and OS URL-scheme launches share one action grammar:
 
@@ -265,8 +265,8 @@ testd uninstall
 testd uninstall --purge
 ```
 
-On Linux and Windows, `uninstall` removes owned resolver and trust integration and retains local data. `--purge` also deletes the configuration directory, including its default PKI and tokens, but only after system cleanup succeeds. A custom PKI outside that directory is not deleted. Unowned or changed system state is left untouched and conflicts are reported. If the local root certificate is missing, trust removal and purge are incomplete; restore the certificate before retrying.
+On Linux, `uninstall` removes owned resolver and trust integration and retains local data. `--purge` also deletes the configuration directory, including its default PKI and tokens, but only after system cleanup succeeds. A custom PKI outside that directory is not deleted. Unowned or changed system state is left untouched and conflicts are reported. If the local root certificate is missing, trust removal and purge are incomplete; restore the certificate before retrying.
 
 Windows removal requires the private installation ID and unchanged administrator-owned NRPT or root-store records. Compatible pre-existing integration is never adopted. Records left incomplete by interrupted setup are preserved for review rather than treated as permission to delete live resources; failed removals retain their record for retry. Ownership-record backups remain in `%ProgramData%/testd/ownership/history`.
 
-Uninstall remains blocked on macOS until equivalent resolver and trust safeguards exist. It does not remove the executable or desktop app.
+Uninstall remains blocked on macOS until equivalent safeguards exist, and on Windows until the new ownership safeguards are validated natively. It does not remove the executable or desktop app.

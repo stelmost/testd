@@ -98,7 +98,7 @@ The testd root is a local certificate authority. Anything that trusts it accepts
 - If the root key is exposed, rebuild the PKI, reinstall trust on every browser machine, and restart the host.
 - If the root key is moved offline, restore it before the intermediate expires; the intermediate renews with it.
 
-Installing the root on a browser machine is a real trust change. On Linux and Windows, use `testd uninstall` to remove owned trust and resolver integration when the machine no longer uses testd. macOS uninstall remains blocked until equivalent safeguards exist. Removing the desktop app does not remove the root or the resolver route.
+Installing the root on a browser machine is a real trust change. On Linux, use `testd uninstall` to remove owned trust and resolver integration when the machine no longer uses testd. macOS uninstall remains blocked until equivalent safeguards exist; Windows uninstall remains blocked pending native validation. Removing the desktop app does not remove the root or the resolver route.
 
 Windows records new NRPT rule identities and complete root-store certificate snapshots under administrator-only `%ProgramData%/testd/ownership`. Cleanup requires the private installation ID and unchanged recorded state. Compatible pre-existing rules and roots are not adopted. New root installation refuses a certificate created in the meantime, and installs the already validated certificate from memory rather than reopening a mutable path. Interrupted setup with incomplete ownership preserves live state for review; interrupted removal can be retried. Private record backups are retained after cleanup.
 
@@ -158,7 +158,7 @@ The root-managed systemd unit grants only `CAP_NET_BIND_SERVICE` and keeps `NoNe
 4. If the root or intermediate key leaked, rebuild the PKI, reinstall trust everywhere, and restart.
 5. Remove any exposure at the firewall, tunnel, or tailnet layer.
 6. Check `~/.config/testd/tokens.json` and the dashboard Access card for unexpected grants.
-7. When a Linux or Windows host is retired, stop the daemon and run `testd uninstall --purge` after reviewing the data to be deleted. macOS cleanup remains blocked until equivalent safeguards exist.
+7. When a Linux host is retired, stop the daemon and run `testd uninstall --purge` after reviewing the data to be deleted. macOS and Windows CLI cleanup remain blocked pending ownership safeguards or native validation.
 
 ## What testd does not do
 

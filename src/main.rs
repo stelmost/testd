@@ -1096,8 +1096,8 @@ fn uninstall(purge: bool) -> anyhow::Result<()> {
 
 fn require_owned_uninstall(system: &str) -> anyhow::Result<()> {
 	match system {
-		"linux" | "windows" => Ok(()),
-		"macos" => anyhow::bail!(
+		"linux" => Ok(()),
+		"macos" | "windows" => anyhow::bail!(
 			"uninstall is blocked on {system} until resolver and trust ownership can be verified; \
 			 system and local state were left untouched"
 		),
@@ -1230,8 +1230,7 @@ mod uninstall_tests {
 	#[test]
 	fn platforms_without_ownership_guards_cannot_uninstall() {
 		assert!(require_owned_uninstall("linux").is_ok());
-		assert!(require_owned_uninstall("windows").is_ok());
-		for system in ["macos", "freebsd"] {
+		for system in ["macos", "windows", "freebsd"] {
 			let error = require_owned_uninstall(system).unwrap_err().to_string();
 			assert!(error.contains("left untouched"), "{error}");
 		}

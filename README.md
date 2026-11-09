@@ -191,11 +191,11 @@ Stop the daemon first, then remove the OS resolver route and the trusted root:
 testd uninstall
 ```
 
-On Linux and Windows, `testd uninstall` removes only owned resolver and trust integration and keeps local data. `testd uninstall --purge` also deletes the configuration directory (`~/.config/testd` on Linux, `%APPDATA%/testd` on Windows), including the default PKI and local state, after system cleanup succeeds. A custom PKI outside that directory is not deleted. Purge checks the configuration directory before cleanup and again before deletion; stop the daemon and avoid concurrent changes. Unowned or changed system state is left untouched and conflicts are reported; if the root certificate is missing, trust removal and purge are incomplete.
+On Linux, `testd uninstall` removes only owned resolver and trust integration and keeps local data. `testd uninstall --purge` also deletes `~/.config/testd`, including the default PKI and local state, after system cleanup succeeds. A custom PKI outside that directory is not deleted. Purge checks the configuration directory before cleanup and again before deletion; stop the daemon and avoid concurrent changes. Unowned or changed system state is left untouched and conflicts are reported; if the root certificate is missing, trust removal and purge are incomplete.
 
 Windows setup records newly created NRPT rules and machine-root trust under administrator-only `%ProgramData%/testd/ownership`. Removal requires this installation's private ID and unchanged recorded state. Compatible pre-existing state is reused without adoption; legacy or changed state is preserved and reported. Ownership-record backups remain administrator-only after cleanup.
 
-Uninstall remains blocked on macOS until equivalent resolver and trust safeguards exist. This command does not remove the executable or desktop app. Removing the app with the OS uninstaller does not remove the certificate or DNS route.
+Uninstall remains blocked on macOS until equivalent resolver and trust safeguards exist, and on Windows until the new ownership safeguards are validated natively. This command does not remove the executable or desktop app. Removing the app with the OS uninstaller does not remove the certificate or DNS route.
 
 ## URL actions
 
