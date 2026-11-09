@@ -622,14 +622,16 @@ mod tests {
 
 	#[cfg(target_os = "linux")]
 	#[tokio::test]
-	async fn termination_is_registered_before_the_signal_future_is_polled() {
-		let shutdown = prepare_shutdown_signal().unwrap();
-		/* SAFETY: the handler is installed and the signal targets only this test process. */
-		assert_eq!(unsafe { libc::raise(libc::SIGTERM) }, 0);
-		tokio::time::timeout(Duration::from_secs(3), shutdown)
-			.await
-			.expect("termination signal was lost")
-			.unwrap();
+	async fn shutdown_signals_are_registered_before_the_future_is_polled() {
+		for signal in [libc::SIGINT, libc::SIGTERM] {
+			let shutdown = prepare_shutdown_signal().unwrap();
+			/* SAFETY: the handler is installed and the signal targets only this test process. */
+			assert_eq!(unsafe { libc::raise(signal) }, 0);
+			tokio::time::timeout(Duration::from_secs(3), shutdown)
+				.await
+				.unwrap_or_else(|_| panic!("shutdown signal {signal} was lost"))
+				.unwrap();
+		}
 	}
 
 	#[test]
