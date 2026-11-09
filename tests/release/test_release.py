@@ -2,6 +2,7 @@ import contextlib
 import importlib.util
 import hashlib
 import http.client
+import http.server
 import io
 import locale
 import os
@@ -3164,6 +3165,54 @@ class PowerShellScriptTests(unittest.TestCase):
 				self.assertIn('not validated against the candidate', records[0])
 				self.assertIn('not validated against the candidate', records[1])
 				self.assertIn('not configured', records[2])
+
+	def test_windows_dashboard_curl_sends_a_bom_free_authorization_header(self):
+		curl = shutil.which('curl.exe' if os.name == 'nt' else 'curl')
+		if not curl:
+			self.skipTest('curl is not installed')
+		script = state.powershell_quote(ROOT / 'tests/host/windows.ps1')
+		with tempfile.TemporaryDirectory() as temporary:
+			if os.name != 'nt':
+				(pathlib.Path(temporary) / 'curl.exe').symlink_to(curl)
+			env = {**os.environ, 'PATH': temporary + os.pathsep + os.environ.get('PATH', '')}
+			for engine in POWERSHELLS:
+				with self.subTest(engine=pathlib.Path(engine).name):
+					received = []
+					class Handler(http.server.BaseHTTPRequestHandler):
+						def do_GET(self):
+							received.append(self.headers.get('Authorization'))
+							self.send_response(200)
+							self.end_headers()
+							self.wfile.write(b'fixture-ok')
+						def log_message(self, *_):
+							pass
+					with http.server.HTTPServer(('127.0.0.1', 0), Handler) as server:
+						server.timeout = 4
+						thread = threading.Thread(target=server.handle_request)
+						thread.start()
+						url = f'http://127.0.0.1:{server.server_port}/'
+						command = (
+							'$OutputEncoding = [Text.Encoding]::UTF8;'
+							'$tokens = $null; $errors = $null;'
+							f'$ast = [System.Management.Automation.Language.Parser]::ParseFile({script}, [ref]$tokens, [ref]$errors);'
+							'$definition = $ast.Find({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] '
+							"-and $args[0].Name -eq 'Invoke-DashboardCurl' }, $true);"
+							'. ([scriptblock]::Create($definition.Extent.Text));'
+							"function Dashboard-Token { 'fixture-token' };"
+							f"Invoke-DashboardCurl -Arguments @('--silent', '--show-error', '--fail', '--max-time', '3', "
+							f"'--noproxy=*', '{url}');"
+							'if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE };'
+							"if ($OutputEncoding.GetPreamble().Length -ne 3) { throw 'caller encoding changed' }"
+						)
+						try:
+							result = subprocess.run([engine, '-NoProfile', '-NonInteractive', '-Command', command],
+								env=env, capture_output=True, encoding='utf-8', timeout=15)
+						finally:
+							thread.join(timeout=5)
+						self.assertFalse(thread.is_alive(), 'fixture HTTP server did not stop')
+					self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+					self.assertEqual(result.stdout.strip(), 'fixture-ok')
+					self.assertEqual(received, ['Bearer fixture-token'])
 
 	def test_windows_host_fixture_disables_real_providers(self):
 		with tempfile.TemporaryDirectory() as temporary:
