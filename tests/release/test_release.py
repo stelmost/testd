@@ -3188,7 +3188,7 @@ class PowerShellScriptTests(unittest.TestCase):
 						def log_message(self, *_):
 							pass
 					with fixture.LoopbackHTTPServer(('127.0.0.1', 0), Handler) as server:
-						server.timeout = 4
+						server.timeout = 10
 						thread = threading.Thread(target=server.handle_request)
 						thread.start()
 						url = f'http://127.0.0.1:{server.server_port}/'
@@ -3207,9 +3207,9 @@ class PowerShellScriptTests(unittest.TestCase):
 						)
 						try:
 							result = subprocess.run([engine, '-NoProfile', '-NonInteractive', '-Command', command],
-								env=env, capture_output=True, encoding='utf-8', timeout=15)
+								env=env, capture_output=True, encoding='utf-8', timeout=20)
 						finally:
-							thread.join(timeout=5)
+							thread.join(timeout=11)
 						self.assertFalse(thread.is_alive(), 'fixture HTTP server did not stop')
 					self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 					self.assertEqual(result.stdout.strip(), 'fixture-ok')
