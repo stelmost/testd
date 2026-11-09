@@ -205,7 +205,11 @@ impl std::fmt::Display for ConnectFailure {
 	}
 }
 
-impl std::error::Error for ConnectFailure {}
+impl std::error::Error for ConnectFailure {
+	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+		self.error.chain().nth(1)
+	}
+}
 
 /// Try every host once, starting at `start`.
 async fn connect_from(config: &mut ClientConfig, start: usize, names: &[String]) -> Result<(Reader, Writer, usize)> {
@@ -594,6 +598,14 @@ mod tests {
 			.unwrap_err();
 		server.await.unwrap();
 		error
+	}
+
+	#[test]
+	fn terminal_connection_errors_keep_the_underlying_cause() {
+		let cause = std::io::Error::other("fixture storage failure");
+		let error = anyhow::Error::new(cause).context("failed to save the credential");
+		let error = anyhow::Error::new(ConnectFailure::rejected(error)).context("registration failed");
+		assert_eq!(format!("{error:#}"), "registration failed: failed to save the credential: fixture storage failure");
 	}
 
 	#[tokio::test]
