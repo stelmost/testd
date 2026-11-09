@@ -474,9 +474,7 @@ The unprivileged host checks do not install a resolver or trust root. The produc
 
 ### Windows
 
-Prerequisites: PowerShell 5.1 or later, `curl.exe` (included with Windows 10
-1803+), and a free port 53. The daemon uses port 53 for NRPT; if another
-service owns it, the script fails at the DNS check.
+Prerequisites: Python 3.12 or newer, PowerShell 5.1 or later, `curl.exe` (included with Windows 10 1803+), and a free port 53. The daemon uses port 53 for NRPT; if another service owns it, the script fails at the DNS check.
 
 The unprivileged script prints the OS caption, version, build, and architecture at the start of every run. Compilation, PowerShell fixtures, and CLI checks do not validate NRPT, machine trust, or a desktop Windows release.
 

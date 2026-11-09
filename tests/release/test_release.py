@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import importlib.util
 import hashlib
@@ -240,12 +241,40 @@ class ReleaseTests(unittest.TestCase):
 	def test_dashboard_helpers_keep_owner_credentials_out_of_native_arguments(self):
 		windows = (ROOT / 'tests/host/windows.ps1').read_text()
 		unix = (ROOT / 'tests/host/lib.sh').read_text()
-		for script in (windows, unix):
-			self.assertIn('dashboard_token', script)
-			self.assertIn('curl', script)
-			self.assertIn('--config -', script)
-			self.assertNotIn('X-Testd-Token:', script)
-			self.assertNotIn('-H "Authorization:', script)
+		self.assertIn('dashboard-curl.py', windows)
+		self.assertNotIn('Authorization: Bearer', windows)
+		self.assertIn('dashboard_token', unix)
+		self.assertIn('--config -', unix)
+		self.assertNotIn('-H "Authorization:', unix)
+
+	def test_windows_dashboard_curl_sends_a_validated_credential_only_to_stdin(self):
+		fixture = load('dashboard_curl', ROOT / 'tests/host/dashboard-curl.py')
+		arguments = ['--noproxy=*', '-H', 'X-Fixture: "quoted"']
+		with tempfile.TemporaryDirectory() as temporary:
+			control = pathlib.Path(temporary) / 'control.json'
+			control.write_text(json.dumps({'dashboard_token': 'fixture-token'}), encoding='utf-8')
+			with patch.object(fixture.subprocess, 'run', return_value=SimpleNamespace(returncode=22)) as command:
+				self.assertEqual(fixture.invoke_dashboard_curl(control, 'curl.exe', arguments), 22)
+			self.assertEqual(command.call_args.args[0], ['curl.exe', '--config', '-', *arguments])
+			self.assertEqual(command.call_args.kwargs['input'], b'header = "Authorization: Bearer fixture-token"\n')
+			self.assertEqual(command.call_args.kwargs['timeout'], 30)
+			for data in ({'dashboard_token': ''}, {'dashboard_token': 'bad\nheader'},
+					{'dashboard_token': 'bad"header'}, {}, None):
+				with self.subTest(data=data), patch.object(fixture.subprocess, 'run') as command:
+					control.write_text(json.dumps(data), encoding='utf-8')
+					with self.assertRaisesRegex(ValueError, 'invalid dashboard credential'):
+						fixture.invoke_dashboard_curl(control, 'curl.exe', arguments)
+					command.assert_not_called()
+
+	def test_windows_dashboard_curl_rejects_malformed_argument_lists(self):
+		helper = ROOT / 'tests/host/dashboard-curl.py'
+		for arguments in ('not a list', [1]):
+			with self.subTest(arguments=arguments):
+				encoded = base64.b64encode(json.dumps(arguments).encode()).decode('ascii')
+				result = subprocess.run([sys.executable, str(helper), 'unused-control', 'unused-curl', encoded],
+					capture_output=True, encoding='utf-8', timeout=10)
+				self.assertNotEqual(result.returncode, 0)
+				self.assertIn('curl arguments must be a list of strings', result.stderr)
 
 	def test_windows_state_snapshot_does_not_remove_rules_or_roots(self):
 		script = (ROOT / 'tests/release/windows-system-state.ps1').read_text()
@@ -1522,6 +1551,16 @@ class HostSystemTests(unittest.TestCase):
 				with self.assertRaisesRegex(RuntimeError, 'port busy'):
 					runner.host(run)
 			snapshot.assert_not_called()
+
+	def test_windows_host_passes_the_running_python_to_the_fixture(self):
+		with tempfile.TemporaryDirectory() as directory:
+			run = self.create_run(directory)
+			run.args.system = False
+			with patch.object(runner, 'SYSTEM', 'Windows'), patch.object(runner, 'binary', return_value=pathlib.Path('candidate')), \
+				patch.object(runner, 'check_ports'), patch.object(runner, 'record_host_coverage'), \
+				patch.object(run, 'command', return_value='') as command:
+				runner.host(run)
+			self.assertEqual(command.call_args.args[3]['TESTD_HOST_PYTHON'], sys.executable)
 
 	def test_plain_host_run_does_not_touch_system_state(self):
 		with tempfile.TemporaryDirectory() as directory:
@@ -3180,8 +3219,10 @@ class PowerShellScriptTests(unittest.TestCase):
 				duplicate.mkdir()
 				(duplicate / 'curl.exe').symlink_to(curl)
 				paths.append(str(duplicate))
-			body = pathlib.Path(temporary) / 'fixture body.json'
+			body = pathlib.Path(temporary) / 'fixture é body.json'
 			body.write_bytes(b'{"message":"spaces and quotes"}')
+			control = pathlib.Path(temporary) / 'fixture é control.json'
+			control.write_text(json.dumps({'dashboard_token': 'fixture-token'}), encoding='utf-8')
 			env = {**os.environ, 'PATH': os.pathsep.join([*paths, os.environ.get('PATH', '')])}
 			for engine in POWERSHELLS:
 				with self.subTest(engine=pathlib.Path(engine).name):
@@ -3206,26 +3247,28 @@ class PowerShellScriptTests(unittest.TestCase):
 						url = f'http://127.0.0.1:{server.server_port}/'
 						command = (
 							'[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false);'
+							'$inputCodepage = [Console]::InputEncoding.CodePage;'
 							'$OutputEncoding = [Text.Encoding]::UTF8;'
 							'$tokens = $null; $errors = $null;'
 							f'$ast = [System.Management.Automation.Language.Parser]::ParseFile({script}, [ref]$tokens, [ref]$errors);'
-							"foreach ($name in @('Stop-FixtureProcess', 'Invoke-DashboardCurl')) {"
 							'$definition = $ast.Find({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] '
-							'-and $args[0].Name -eq $name }, $true);'
-							'. ([scriptblock]::Create($definition.Extent.Text)) };'
-							"function Dashboard-Token { 'fixture-token' };"
+							"-and $args[0].Name -eq 'Invoke-DashboardCurl' }, $true);"
+							'. ([scriptblock]::Create($definition.Extent.Text));'
+							f'$Root = {state.powershell_quote(ROOT)}; $Control = {state.powershell_quote(control)};'
+							f'$PythonExecutable = {state.powershell_quote(sys.executable)};'
 							"$probe = 'X-Fixture: ' + [char]92 + '\"quoted\" path' + [char]92;"
 							f'$body = {state.powershell_quote(body)};'
-							f"Invoke-DashboardCurl -Arguments @('--silent', '--fail', '--max-time', '3', "
+							f"$page = Invoke-DashboardCurl -Arguments @('--silent', '--fail', '--max-time', '3', "
 							f"'--noproxy=*', '-H', $probe, '{url}');"
-							"if ($LASTEXITCODE -ne 0) { throw 'GET failed' };"
-							f"Invoke-DashboardCurl -Arguments @('--silent', '--fail', '--max-time', '3', "
+							"if ($LASTEXITCODE -ne 0) { throw 'GET failed' }; [Console]::WriteLine($page);"
+							f"$posted = Invoke-DashboardCurl -Arguments @('--silent', '--fail', '--max-time', '3', "
 							f"'--noproxy=*', '--data-binary', ('@' + $body), '{url}upload');"
-							"if ($LASTEXITCODE -ne 0) { throw 'POST failed' };"
+							"if ($LASTEXITCODE -ne 0) { throw 'POST failed' }; [Console]::WriteLine($posted);"
 							f"Invoke-DashboardCurl -Arguments @('--silent', '--fail', '--max-time', '3', "
 							f"'--noproxy=*', '{url}denied');"
 							"if ($LASTEXITCODE -ne 22) { throw 'curl failure was not propagated' };"
-							"if ($OutputEncoding.GetPreamble().Length -ne 3) { throw 'caller encoding changed' }"
+							"if ($OutputEncoding.GetPreamble().Length -ne 3) { throw 'caller encoding changed' };"
+							"if ([Console]::InputEncoding.CodePage -ne $inputCodepage) { throw 'console input changed' }"
 						)
 						try:
 							result = subprocess.run([engine, '-NoProfile', '-NonInteractive', '-Command', command],
@@ -3256,9 +3299,11 @@ class PowerShellScriptTests(unittest.TestCase):
 				'. ([scriptblock]::Create($definition.Extent.Text));'
 				"$env:TESTD_TUNNEL = 'real-provider'; $env:TESTD_TOKEN = 'real-secret';"
 				"$env:TESTD_HOSTS = 'remote.example'; $env:TESTD_HOST_TLD = 'testdcheck';"
+				"$env:TESTD_HOST_PYTHON = 'fixture-interpreter';"
 				f'$appData = Set-TestEnvironment {path};'
 				'@{ home = $env:HOME; appdata = $env:APPDATA; tunnel = $env:TESTD_TUNNEL; '
-				'leaked = [bool]($env:TESTD_TOKEN -or $env:TESTD_HOSTS); allowed = $env:TESTD_HOST_TLD; '
+				'leaked = [bool]($env:TESTD_TOKEN -or $env:TESTD_HOSTS -or $env:TESTD_HOST_PYTHON); '
+				'allowed = $env:TESTD_HOST_TLD; '
 				'created = (Test-Path -LiteralPath $appData -PathType Container) } | ConvertTo-Json -Compress'
 			)
 			for engine in POWERSHELLS:

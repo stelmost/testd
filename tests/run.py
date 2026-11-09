@@ -575,6 +575,7 @@ def host(run, *, scope='host'):
 	if snapshot:
 		env['TESTD_HOST_SNAPSHOT'] = str(snapshot)
 	if SYSTEM == 'Windows':
+		env['TESTD_HOST_PYTHON'] = sys.executable
 		command = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'tests/host/windows.ps1']
 	else:
 		require('python3')

@@ -16,6 +16,9 @@ if ($env:TESTD_HOST_TEST_SYSTEM -eq '1') {
 }
 $Root = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 Set-Location $Root
+$PythonExecutable = if ($env:TESTD_HOST_PYTHON) { $env:TESTD_HOST_PYTHON } else {
+	(Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+}
 
 $Tld = if ($env:TESTD_HOST_TLD) { $env:TESTD_HOST_TLD } else { 'testdcheck' }
 $env:TESTD_HOST_TLD = $Tld
@@ -115,52 +118,12 @@ function Test-NameRemoved([string]$HostName) {
 	} catch { return $false }
 }
 
-function Dashboard-Token {
-	$path = Join-Path $AppData 'testd\control.json'
-	$token = (Get-Content $path -Raw -ErrorAction Stop | ConvertFrom-Json).dashboard_token
-	if ($token -notmatch '^[A-Za-z0-9_-]+$') { throw 'invalid dashboard credential' }
-	return $token
-}
-
 function Invoke-DashboardCurl([string[]]$Arguments) {
-	$token = Dashboard-Token
-	$start = [Diagnostics.ProcessStartInfo]::new()
-	$start.FileName = (Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
-	# Double backslashes before quotes and at the end of each Windows command-line argument.
-	$quoted = @($Arguments | ForEach-Object {
-		$value = [regex]::Replace($_, '(\\*)"', '$1$1\"')
-		$value = [regex]::Replace($value, '(\\*)$', '$1$1')
-		'"' + $value + '"'
-	})
-	$start.Arguments = '--config - ' + ($quoted -join ' ')
-	$start.UseShellExecute = $false
-	$start.CreateNoWindow = $true
-	$start.RedirectStandardInput = $true
-	$start.RedirectStandardOutput = $true
-	$start.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
-	$process = [Diagnostics.Process]::new()
-	$process.StartInfo = $start
-	$started = $false
-	$output = $null
-	try {
-		if (-not $process.Start()) { throw 'could not start curl' }
-		$started = $true
-		# Write the credential as bytes, not through PowerShell 5.1's BOM-emitting native pipeline.
-		$bytes = [Text.Encoding]::ASCII.GetBytes("header = `"Authorization: Bearer $token`"`n")
-		$stdin = $process.StandardInput.BaseStream
-		try { $stdin.Write($bytes, 0, $bytes.Length) } finally { $stdin.Dispose() }
-		$output = $process.StandardOutput
-		$reading = $output.ReadToEndAsync()
-		if (-not $process.WaitForExit(30000)) { throw 'curl did not exit' }
-		$global:LASTEXITCODE = $process.ExitCode
-		$content = $reading.GetAwaiter().GetResult()
-		if ($content) { $content }
-	} finally {
-		try { if ($started) { Stop-FixtureProcess $process } } finally {
-			if ($output) { $output.Dispose() }
-			$process.Dispose()
-		}
-	}
+	$curl = (Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+	# PowerShell 5.1 may prepend a BOM before writing to a native process's stdin.
+	$json = ConvertTo-Json -InputObject $Arguments -Compress
+	$encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+	& $PythonExecutable (Join-Path $Root 'tests/host/dashboard-curl.py') $Control $curl $encoded
 }
 
 function Dashboard-Get([string]$Path = '/') {
