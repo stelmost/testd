@@ -493,7 +493,7 @@ pub fn find_project_config_path() -> Option<PathBuf> {
 /// Load leaf node profiles. A missing file is an empty config.
 pub fn load_leaf_config() -> Result<LeafConfig, ConfigError> {
 	let path = leaf_path();
-	let content = match crate::private_file::read_to_string(&path) {
+	let content = match std::fs::read_to_string(&path) {
 		Ok(content) => content,
 		Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(LeafConfig::default()),
 		Err(e) => return Err(ConfigError::Io(path, e)),

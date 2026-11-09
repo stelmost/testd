@@ -204,6 +204,21 @@ fn init_writes_and_keeps_an_operator_secret() {
 }
 
 #[test]
+fn a_user_written_leaf_profile_remains_readable() {
+	let home = TempDir::new().unwrap();
+	let dir = config_dir(home.path());
+	std::fs::create_dir_all(&dir).unwrap();
+	std::fs::write(dir.join("leaf.toml"), "[profiles.work]\nhosts = ['192.0.2.1:7737']\n").unwrap();
+	let out = testd_command(home.path(), &["run", "--node-profile", "work", "app.example:3000"])
+		.env("TESTD_TOKEN", "fixture-token")
+		.output()
+		.unwrap();
+	let error = String::from_utf8_lossy(&out.stderr);
+	assert!(!out.status.success());
+	assert!(error.contains("host is not paired; run `testd pair"), "{error}");
+}
+
+#[test]
 fn init_uses_the_fixed_test_tld() {
 	let home = TempDir::new().unwrap();
 	let out = init(home.path());

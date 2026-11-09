@@ -16,8 +16,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 use testd_core::config::{
 	CaddyDetection, DEFAULT_DNS_PORT, PendingConfig, TLD, config_dir, default_http_addr, detect_caddy_config,
-	finish_pending_config, generate_operator_secret, has_pending_config, read_operator_secret, read_pending_config,
-	write_pending_config,
+	finish_pending_config, generate_operator_secret, read_operator_secret, read_pending_config, write_pending_config,
 };
 
 use crate::assets;
@@ -239,7 +238,17 @@ struct SecretRequest {
 
 async fn handle_secret(writer: &mut (impl AsyncWriteExt + Unpin), body: &[u8]) -> io::Result<()> {
 	let request: SecretRequest = serde_json::from_slice(body).unwrap_or_default();
-	let mut pending = pending_or_default();
+	let mut pending = match pending_or_default() {
+		Ok(pending) => pending,
+		Err(error) => {
+			return respond_json(
+				writer,
+				"500 Internal Server Error",
+				&serde_json::json!({ "error": error.to_string() }),
+			)
+			.await;
+		},
+	};
 	if !request.secret.is_empty() {
 		match validate_operator_secret(&request.secret) {
 			Ok(secret) => pending.secret = secret,
@@ -295,7 +304,17 @@ async fn handle_finish(writer: &mut (impl AsyncWriteExt + Unpin), state: &State,
 		Err(e) => return respond_json(writer, "400 Bad Request", &serde_json::json!({ "error": e })).await,
 	};
 
-	let mut pending = pending_or_default();
+	let mut pending = match pending_or_default() {
+		Ok(pending) => pending,
+		Err(error) => {
+			return respond_json(
+				writer,
+				"500 Internal Server Error",
+				&serde_json::json!({ "error": error.to_string() }),
+			)
+			.await;
+		},
+	};
 	pending.step = 3;
 	pending.caddy_config_path = configure_external_front();
 	pending.secret = secret.clone();
@@ -351,13 +370,18 @@ fn pki_dir() -> std::path::PathBuf {
 	config_dir().join("pki")
 }
 
-fn pending_or_default() -> PendingConfig {
-	if has_pending_config()
-		&& let Ok(pending) = read_pending_config()
-	{
-		return pending;
+fn pending_or_default() -> io::Result<PendingConfig> {
+	pending_or_default_from(read_pending_config())
+}
+
+fn pending_or_default_from(result: io::Result<PendingConfig>) -> io::Result<PendingConfig> {
+	match result {
+		Ok(pending) => Ok(pending),
+		Err(error) if error.kind() == io::ErrorKind::NotFound => {
+			Ok(PendingConfig { step: 0, caddy_config_path: String::new(), secret: String::new() })
+		},
+		Err(error) => Err(error),
 	}
-	PendingConfig { step: 0, caddy_config_path: String::new(), secret: String::new() }
 }
 
 fn validate_operator_secret(secret: &str) -> Result<String, String> {
@@ -455,6 +479,19 @@ mod tests {
 		})
 		.await
 		.unwrap();
+	}
+
+	#[test]
+	fn inaccessible_or_corrupt_pending_setup_is_not_replaced() {
+		assert_eq!(
+			pending_or_default_from(Err(io::Error::from(io::ErrorKind::NotFound)))
+				.unwrap()
+				.step,
+			0
+		);
+		for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::InvalidData] {
+			assert_eq!(pending_or_default_from(Err(io::Error::from(kind))).unwrap_err().kind(), kind);
+		}
 	}
 
 	#[tokio::test]
