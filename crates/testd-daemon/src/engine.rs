@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, broadcast, mpsc, oneshot, watch};
 use std::time::Duration;
@@ -24,7 +24,8 @@ use testd_core::validate;
 use crate::access::{Access, Decision, IssuedToken};
 use crate::http::{self, HttpContext, PeekedStream};
 use crate::launch::LaunchBook;
-use crate::registry::{Claim, DeregisterError, RegisterError, Registry};
+use crate::registry::{Claim, DeregisterError, RegisterError, Registry, UpstreamTls};
+use testd_pki::transport::{self, Identity};
 use crate::resolver::Resolver;
 
 /// Replies buffered for one connection before its writer task stalls the caller.
@@ -198,6 +199,8 @@ impl HostEngine {
 			secret: self.config.secret.clone(),
 			allow_remote_targets: self.config.allow_remote_targets,
 			local_token: self.local_token.clone(),
+			pki_dir: self.config.pki_dir.clone(),
+			identity: StdMutex::new(None),
 			connections,
 			#[cfg(test)]
 			registration_checked: StdMutex::new(None),
@@ -275,7 +278,9 @@ pub enum OperatorAction {
 }
 
 fn same_claim(left: &Claim, right: &Claim) -> bool {
-	left.connection == right.connection && left.registration == right.registration
+	left.connection == right.connection
+		&& left.registration == right.registration
+		&& left.transport.as_ref().map(|tls| &tls.root) == right.transport.as_ref().map(|tls| &tls.root)
 }
 
 /// Acquire after the registry lock and before making a claim mutation.
@@ -504,6 +509,8 @@ struct Shared {
 	/// Allow a remote leaf to name a target other than its own address.
 	allow_remote_targets: bool,
 	local_token: Option<String>,
+	pki_dir: std::path::PathBuf,
+	identity: StdMutex<Option<Arc<Identity>>>,
 	/// Authenticated connections the operator can act on.
 	connections: Arc<Connections>,
 	#[cfg(test)]
@@ -681,15 +688,57 @@ async fn dispatch(
 		.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "intake greeting timed out"))??;
 	let peeked = PeekedStream::new(first[0], stream);
 
-	if first[0] == b'{' {
-		handle_connection(peeked, addr, shared).await
-	} else {
-		http::handle(peeked, &http_ctx, addr).await
+	match first[0] {
+		0x16 => {
+			let identity = load_identity(Arc::clone(&shared)).await?;
+			let acceptor = tokio_rustls::TlsAcceptor::from(identity.server_config());
+			let stream = tokio::time::timeout(AUTH_TIMEOUT, acceptor.accept(peeked))
+				.await
+				.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "registration TLS handshake timed out"))??;
+			let material = stream
+				.get_ref()
+				.1
+				.export_keying_material([0; transport::PAIRING_BYTES], transport::PAIRING_LABEL, None)
+				.map_err(io::Error::other)?;
+			let tls = TlsSession { identity, verification: transport::pairing_code(material) };
+			handle_connection(stream, addr, shared, Some(tls)).await
+		},
+		b'{' if addr.ip().is_loopback() => handle_connection(peeked, addr, shared, None).await,
+		b'{' => Err(io::Error::new(io::ErrorKind::PermissionDenied, "network registration requires TLS")),
+		_ => http::handle(peeked, &http_ctx, addr).await,
 	}
 }
 
+async fn load_identity(shared: Arc<Shared>) -> io::Result<Arc<Identity>> {
+	tokio::task::spawn_blocking(move || {
+		/* Hold initialization across cancellation so two handshakes cannot create different roots. */
+		let mut identity = shared.identity.lock().expect("transport identity lock poisoned");
+		if let Some(identity) = &*identity {
+			return Ok(Arc::clone(identity));
+		}
+		let loaded = Identity::load(&shared.pki_dir, transport::HOST_NAME).map_err(io::Error::other)?;
+		*identity = Some(Arc::clone(&loaded));
+		Ok(loaded)
+	})
+	.await
+	.map_err(io::Error::other)?
+}
+
+struct TlsSession {
+	identity: Arc<Identity>,
+	verification: String,
+}
+
 /// Handle a single NDJSON client connection.
-async fn handle_connection(stream: PeekedStream, addr: SocketAddr, shared: Arc<Shared>) -> io::Result<()> {
+async fn handle_connection<S>(
+	stream: S,
+	addr: SocketAddr,
+	shared: Arc<Shared>,
+	tls: Option<TlsSession>,
+) -> io::Result<()>
+where
+	S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
 	let (reader, writer) = tokio::io::split(stream);
 	let mut reader = BufReader::new(reader);
 
@@ -706,6 +755,20 @@ async fn handle_connection(stream: PeekedStream, addr: SocketAddr, shared: Arc<S
 		Some(a) => a,
 		None => return Ok(()),
 	};
+	if let Some(label) = auth_msg.pairing {
+		if !auth_msg.token.is_empty() || auth_msg.request_token.is_some() {
+			reply(&out, Response::terminal_error("pairing must not carry a credential or token request")).await?;
+			return Ok(());
+		}
+		let Some(tls) = &tls else {
+			reply(&out, Response::terminal_error("pairing requires TLS")).await?;
+			return Ok(());
+		};
+		let result = pair_host(&shared, &label, addr, &tls.verification, &mut reader, &out).await;
+		drop(out);
+		let _ = writer.await;
+		return result;
+	}
 	let credential = match auth_msg.request_token {
 		Some(request) => {
 			if !auth_msg.token.is_empty() {
@@ -750,8 +813,28 @@ async fn handle_connection(stream: PeekedStream, addr: SocketAddr, shared: Arc<S
 				Err(error) => return Err(error),
 			};
 
+			let upstream = match (&request, &tls) {
+				(Request::RegisterTls { root, .. }, Some(tls)) => match tls.identity.mutual_client_config(root) {
+					Ok(client) => Some(UpstreamTls { root: root.clone(), client }),
+					Err(error) => {
+						reply(&out, Response::terminal_error(format!("invalid leaf TLS root: {error:#}"))).await?;
+						continue;
+					},
+				},
+				(Request::RegisterTls { .. }, None) | (Request::Register { .. }, Some(_)) => {
+					reply(
+						&out,
+						Response::terminal_error(
+							"network claims require TLS on both registration and application paths",
+						),
+					)
+					.await?;
+					continue;
+				},
+				_ => None,
+			};
 			match request {
-				Request::Register { domain, target, force } => {
+				Request::Register { domain, target, force } | Request::RegisterTls { domain, target, force, .. } => {
 					let domain = validate::normalize_bare_domain(&domain, &shared.tld);
 					if let Err(message) = validate::validate_domain(&domain, &shared.tld) {
 						if reply(&out, Response::terminal_error(message)).await.is_err() {
@@ -819,7 +902,8 @@ async fn handle_connection(stream: PeekedStream, addr: SocketAddr, shared: Arc<S
 						}
 						let before = regs.claim(&fqdn).cloned();
 						let mut transition = claim_transition(&shared).await;
-						let result = regs.register(connection, registration.clone(), force, &reserved);
+						let result =
+							regs.register_with_transport(connection, registration.clone(), upstream, force, &reserved);
 						let after = regs.claim(&fqdn).cloned();
 						let (change, detached) =
 							begin_changed_share_claim(transition.as_mut(), &mut regs, before.as_ref(), after.as_ref());
@@ -869,7 +953,9 @@ async fn handle_connection(stream: PeekedStream, addr: SocketAddr, shared: Arc<S
 								let reconciled = finish_share_claim_change(change).await;
 								let response = match cleanup.and(reconciled) {
 									Ok(()) => Response::Ok,
-									Err(error) => Response::error(format!("{fqdn} registered, but {error}")),
+									Err(error) => Response::AppliedWithError {
+										message: format!("{fqdn} registered, but {error}"),
+									},
 								};
 								if reply(&out, response).await.is_err() {
 									break;
@@ -892,7 +978,9 @@ async fn handle_connection(stream: PeekedStream, addr: SocketAddr, shared: Arc<S
 						let mut regs = shared.registrations.lock().await;
 						let before = regs.claim(&fqdn).cloned();
 						let mut transition = claim_transition(&shared).await;
-						let removed = regs.deregister(connection, &fqdn);
+						let removed = regs
+							.deregister(connection, &fqdn)
+							.map(|_| before.clone().expect("a successfully removed claim existed"));
 						let after = regs.claim(&fqdn).cloned();
 						let (change, detached) =
 							begin_changed_share_claim(transition.as_mut(), &mut regs, before.as_ref(), after.as_ref());
@@ -901,13 +989,15 @@ async fn handle_connection(stream: PeekedStream, addr: SocketAddr, shared: Arc<S
 					let cleanup = finish_changed_shares(&shared, detached).await;
 
 					let error = match removed {
-						Ok(registration) => match apply_with_change(&shared, change.clone()).await {
+						Ok(claim) => match apply_with_change(&shared, change.clone()).await {
 							Ok(()) => {
 								eprintln!("[dereg]  {fqdn}");
 								let reconciled = finish_share_claim_change(change).await;
 								let response = match cleanup.and(reconciled) {
 									Ok(()) => Response::Ok,
-									Err(error) => Response::error(format!("{fqdn} deregistered, but {error}")),
+									Err(error) => Response::AppliedWithError {
+										message: format!("{fqdn} deregistered, but {error}"),
+									},
 								};
 								if reply(&out, response).await.is_err() {
 									break;
@@ -918,7 +1008,13 @@ async fn handle_connection(stream: PeekedStream, addr: SocketAddr, shared: Arc<S
 								// Restore the entry if it could not be unpublished.
 								let mut regs = shared.registrations.lock().await;
 								if shared.connections.contains(connection) {
-									let _ = regs.register(connection, registration.clone(), false, &[]);
+									let _ = regs.register_with_transport(
+										connection,
+										claim.registration.clone(),
+										claim.transport.clone(),
+										false,
+										&[],
+									);
 								}
 								drop(regs);
 								let (message, restored) = rollback_error(&shared, e, change.clone()).await;
@@ -1075,6 +1171,32 @@ fn authenticate(shared: &Shared, token: &str, addr: SocketAddr) -> Option<Creden
 	None
 }
 
+async fn pair_host<R: AsyncBufRead + Unpin>(
+	shared: &Shared,
+	label: &str,
+	addr: SocketAddr,
+	verification: &str,
+	reader: &mut R,
+	out: &mpsc::Sender<Response>,
+) -> io::Result<()> {
+	let (id, mut decision) = match shared.access.request_pairing(label, &addr.to_string(), verification.to_owned()) {
+		Ok(waiting) => waiting,
+		Err(message) => return reply(out, Response::terminal_error(message)).await,
+	};
+	let _cancel = PendingGuard { access: Arc::clone(&shared.access), id: id.clone() };
+	reply(out, Response::Pending { id }).await?;
+	let mut byte = [0; 1];
+	let response = tokio::select! {
+		decision = &mut decision => match decision {
+			Ok(Decision::Paired) => Response::Paired,
+			_ => Response::terminal_error("pairing was denied or cancelled"),
+		},
+		_ = reader.read(&mut byte) => return Ok(()),
+		_ = tokio::time::sleep(crate::access::REQUEST_TTL) => Response::terminal_error("pairing expired"),
+	};
+	reply(out, response).await
+}
+
 /// Wait for an operator to decide a token request on this connection. Returns
 /// the approved token, or `None` after telling the client why it got nothing.
 async fn request_access<R>(
@@ -1125,7 +1247,7 @@ where
 			eprintln!("[auth]   {} approved ({id})", addr.ip());
 			Ok(Some(issued))
 		},
-		Waited::Decided(Some(Decision::ApproveName)) => {
+		Waited::Decided(Some(Decision::ApproveName | Decision::Paired)) => {
 			let message = "the operator approved a name grant, not a token".to_owned();
 			reply(out, Response::error(message)).await?;
 			Ok(None)
@@ -1192,8 +1314,8 @@ async fn request_name_grant<R: AsyncBufRead + Unpin>(
 			eprintln!("[auth]   {} denied {fqdn} ({id})", addr.ip());
 			Ok(false)
 		},
-		Some(Decision::Approve(_)) => {
-			let message = "the operator approved a token, not a name grant".to_owned();
+		Some(Decision::Approve(_) | Decision::Paired) => {
+			let message = "the operator approved a different request, not a name grant".to_owned();
 			reply(out, Response::error(message)).await?;
 			Ok(false)
 		},
@@ -1386,6 +1508,8 @@ mod tests {
 				secret: String::new(),
 				allow_remote_targets: false,
 				local_token: None,
+				pki_dir: dir.path().join("pki"),
+				identity: StdMutex::new(None),
 				connections: Arc::new(Connections::default()),
 				registration_checked: StdMutex::new(None),
 			});
@@ -1396,13 +1520,13 @@ mod tests {
 				let (mut stream, peer) = listener.accept().await.unwrap();
 				let mut first = [0];
 				stream.read_exact(&mut first).await.unwrap();
-				handle_connection(PeekedStream::new(first[0], stream), peer, serving)
+				handle_connection(PeekedStream::new(first[0], stream), peer, serving, None)
 					.await
 					.unwrap();
 			}));
 			let (reader, mut writer) = TcpStream::connect(address).await.unwrap().into_split();
 			let mut reader = BufReader::new(reader);
-			send(&mut writer, &Auth { token: token.token, request_token: None })
+			send(&mut writer, &Auth { token: token.token, ..Auth::default() })
 				.await
 				.unwrap();
 			assert!(matches!(recv::<_, Response>(&mut reader).await.unwrap(), Some(Response::Ok)));
@@ -1460,7 +1584,7 @@ mod tests {
 			stream.read_to_string(&mut response).await.unwrap();
 			assert!(response.starts_with("HTTP/1.1 200"), "{response}");
 			let mut stream = BufReader::new(TcpStream::connect(local).await.unwrap());
-			send(stream.get_mut(), &Auth { token: "local-token".into(), request_token: None })
+			send(stream.get_mut(), &Auth { token: "local-token".into(), ..Auth::default() })
 				.await
 				.unwrap();
 			assert!(matches!(recv::<_, Response>(&mut stream).await.unwrap(), Some(Response::Ok)));

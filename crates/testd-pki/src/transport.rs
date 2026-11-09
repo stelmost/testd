@@ -7,12 +7,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
 use rustls::sign::CertifiedKey;
 use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, ServerConfig, SignatureScheme};
 use sha2::{Digest, Sha256};
 
-use crate::{Ca, ExtendedKeyUsagePurpose, LEAF_LIFETIME_HOURS, leaf_params};
+use crate::{Ca, ExtendedKeyUsagePurpose, Issuer, KeyPair, LEAF_LIFETIME_HOURS, generate_root, leaf_params, pem_to_der};
 
 pub const HOST_NAME: &str = "testd-host.test";
 pub const LEAF_NAME: &str = "testd-leaf.test";
@@ -21,9 +21,23 @@ pub const PAIRING_BYTES: usize = 16;
 
 /// The CA remains local; transport leaves rotate without changing the trust pin.
 pub struct Identity {
-	ca: Ca,
+	authority: Mutex<Authority>,
 	name: &'static str,
 	cached: Mutex<Option<(Instant, Arc<CertifiedKey>)>>,
+}
+
+enum Authority {
+	Persistent(Box<Ca>),
+	Ephemeral { root: CertificateDer<'static>, issuer: Box<Issuer<'static, KeyPair>> },
+}
+
+impl Authority {
+	fn root(&self) -> Result<CertificateDer<'static>> {
+		match self {
+			Self::Persistent(ca) => ca.root_cert_der(),
+			Self::Ephemeral { root, .. } => Ok(root.clone()),
+		}
+	}
 }
 
 impl fmt::Debug for Identity {
@@ -37,13 +51,29 @@ impl fmt::Debug for Identity {
 
 impl Identity {
 	pub fn load(dir: &Path, name: &'static str) -> Result<Arc<Self>> {
-		let identity = Arc::new(Self { ca: Ca::load_or_init(dir)?, name, cached: Mutex::new(None) });
+		Self::new(Authority::Persistent(Box::new(Ca::load_or_init(dir)?)), name)
+	}
+
+	/// Leaf forwarders have connection-scoped private keys, never files or copied host signing keys.
+	pub fn ephemeral(name: &'static str) -> Result<Arc<Self>> {
+		let (pem, issuer) = generate_root()?;
+		Self::new(Authority::Ephemeral { root: pem_to_der(&pem)?, issuer: Box::new(issuer) }, name)
+	}
+
+	fn new(authority: Authority, name: &'static str) -> Result<Arc<Self>> {
+		let identity = Arc::new(Self { authority: Mutex::new(authority), name, cached: Mutex::new(None) });
 		identity.key()?;
 		Ok(identity)
 	}
 
 	pub fn root_der(&self) -> Result<Vec<u8>> {
-		Ok(self.ca.root_cert_der()?.as_ref().to_vec())
+		Ok(self
+			.authority
+			.lock()
+			.expect("transport authority lock poisoned")
+			.root()?
+			.as_ref()
+			.to_vec())
 	}
 
 	pub fn key(&self) -> Result<Arc<CertifiedKey>> {
@@ -56,9 +86,18 @@ impl Identity {
 		}
 		let mut params = leaf_params(self.name)?;
 		params.extended_key_usages.push(ExtendedKeyUsagePurpose::ClientAuth);
-		let (mut chain, key) = self.ca.mint_der_with_params(params)?;
-		/* Bootstrap clients obtain this public root, but must confirm the TLS-bound pairing code before pinning it. */
-		chain.push(self.ca.root_cert_der()?);
+		let authority = self.authority.lock().expect("transport authority lock poisoned");
+		let (mut chain, key) = match &*authority {
+			Authority::Persistent(ca) => ca.mint_der_with_params(params)?,
+			Authority::Ephemeral { issuer, .. } => {
+				let key = KeyPair::generate()?;
+				let certificate = params.signed_by(&key, issuer.as_ref())?;
+				let private = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der()));
+				(vec![certificate.der().clone()], private)
+			},
+		};
+		/* Bootstrap clients must confirm the TLS-bound code before trusting this public root. */
+		chain.push(authority.root()?);
 		let key = rustls::crypto::ring::sign::any_supported_type(&key)?;
 		let key = Arc::new(CertifiedKey::new(chain, key));
 		*cached = Some((Instant::now(), Arc::clone(&key)));
@@ -195,6 +234,10 @@ pub fn pairing_config() -> Arc<ClientConfig> {
 			.with_custom_certificate_verifier(Arc::new(PairingVerifier))
 			.with_no_client_auth(),
 	)
+}
+
+pub fn pairing_code(material: [u8; PAIRING_BYTES]) -> String {
+	covo::encode(&material)
 }
 
 pub fn fingerprint(bytes: &[u8]) -> String {

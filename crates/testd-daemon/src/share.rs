@@ -190,6 +190,7 @@ struct ClaimBinding {
 	domain: String,
 	connection: u64,
 	target: String,
+	root: Option<Vec<u8>>,
 }
 
 impl ClaimBinding {
@@ -198,6 +199,7 @@ impl ClaimBinding {
 			domain: claim.registration.domain.clone(),
 			connection: claim.connection,
 			target: claim.registration.target.clone(),
+			root: claim.transport.as_ref().map(|transport| transport.root.clone()),
 		}
 	}
 }
@@ -415,14 +417,14 @@ struct Active {
 }
 
 enum ProviderResource {
-	Process(Box<Child>),
+	Process { child: Box<Child>, alias: Option<String> },
 	Tailscale { alias: String },
 }
 
 impl ProviderResource {
 	fn alias(&self) -> Option<&str> {
 		match self {
-			Self::Process(_) => None,
+			Self::Process { alias, .. } => alias.as_deref(),
 			Self::Tailscale { alias } => Some(alias),
 		}
 	}
@@ -583,7 +585,7 @@ impl Shares {
 			},
 		};
 		let startup = match &mut share.resource {
-			ProviderResource::Process(child) => child.try_wait().context("check the provider after startup"),
+			ProviderResource::Process { child, .. } => child.try_wait().context("check the provider after startup"),
 			ProviderResource::Tailscale { .. } => Ok(None),
 		};
 		match startup {
@@ -634,11 +636,11 @@ impl Shares {
 			if registry.contains(alias) {
 				return Err((PublishFailure::AliasConflict, Box::new(share)));
 			}
-			registry.set_alias(alias, &share.binding.target);
+			registry.set_claim_alias(alias, &share.binding.domain);
 		}
 		let url = share.url.clone();
 		let child_identity = match &share.resource {
-			ProviderResource::Process(_) => Some(Arc::clone(&share.identity)),
+			ProviderResource::Process { .. } => Some(Arc::clone(&share.identity)),
 			ProviderResource::Tailscale { .. } => None,
 		};
 		let previous = state.entries.insert(name.to_owned(), ShareLifecycle::Active(share));
@@ -718,7 +720,7 @@ impl Shares {
 				if !Arc::ptr_eq(&share.identity, &identity) {
 					return;
 				}
-				let ProviderResource::Process(child) = &mut share.resource else { return };
+				let ProviderResource::Process { child, .. } = &mut share.resource else { return };
 				match child.try_wait() {
 					Ok(None) => reported_failure = false,
 					Ok(Some(status)) => {
@@ -1020,7 +1022,17 @@ impl Shares {
 		if *cancellation.borrow() {
 			bail!("share start for {name} was cancelled");
 		}
-		let args = provider.start_args(target);
+		/* Secure claims go through the edge so providers never bypass leaf TLS or receive host private keys. */
+		let upstream = if start.owner.root.is_some() {
+			self.front
+				.as_ref()
+				.context("secure shares require the local routing edge")?
+				.plain_addr
+				.to_string()
+		} else {
+			target.clone()
+		};
+		let args = provider.start_args(&upstream);
 		let mut child = spawn_with_retry(binary, &args, true)
 			.await
 			.with_context(|| format!("start {} (install it, or set TESTD_TUNNEL to its path)", binary.display()))?;
@@ -1038,12 +1050,21 @@ impl Shares {
 				return Err(error);
 			},
 		};
+		let alias = if start.owner.root.is_some() {
+			Some(
+				url.strip_prefix("https://")
+					.context("provider returned a non-HTTPS URL")?
+					.to_owned(),
+			)
+		} else {
+			None
+		};
 		Ok(Active {
 			identity: Arc::clone(&start.identity),
 			binding: start.owner.clone(),
 			provider: *provider,
 			url,
-			resource: ProviderResource::Process(Box::new(child)),
+			resource: ProviderResource::Process { child: Box::new(child), alias },
 		})
 	}
 
@@ -1188,7 +1209,7 @@ impl Shares {
 	/// Kill a child, or run the provider's cleanup command.
 	async fn release(&self, share: StoppingShare) -> Result<()> {
 		match share.resource {
-			ProviderResource::Process(mut child) => {
+			ProviderResource::Process { mut child, .. } => {
 				return stop_child(&mut child).await.context("stop provider process");
 			},
 			ProviderResource::Tailscale { .. } => {},

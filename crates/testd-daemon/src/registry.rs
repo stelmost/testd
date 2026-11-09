@@ -7,6 +7,7 @@
 //! A claim carries no identity; the connection is the whole owner.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use testd_core::Registration;
 
@@ -15,6 +16,14 @@ use testd_core::Registration;
 pub struct Claim {
 	pub registration: Registration,
 	pub connection: u64,
+	pub transport: Option<UpstreamTls>,
+}
+
+/// The leaf identity and host client certificate bound to one live claim.
+#[derive(Debug, Clone)]
+pub struct UpstreamTls {
+	pub root: Vec<u8>,
+	pub client: Arc<rustls::ClientConfig>,
 }
 
 /// Why a registration was rejected.
@@ -54,7 +63,7 @@ pub struct Registry {
 	claims: HashMap<String, Claim>,
 	/// Extra names the edge answers, such as a tailnet name for a share. They
 	/// have no owning connection: the share manager adds and removes them.
-	aliases: HashMap<String, Registration>,
+	aliases: HashMap<String, Claim>,
 	next_connection: u64,
 }
 
@@ -97,6 +106,17 @@ impl Registry {
 		force: bool,
 		reserved: &[&str],
 	) -> Result<Registered, RegisterError> {
+		self.register_with_transport(connection, registration, None, force, reserved)
+	}
+
+	pub fn register_with_transport(
+		&mut self,
+		connection: u64,
+		registration: Registration,
+		transport: Option<UpstreamTls>,
+		force: bool,
+		reserved: &[&str],
+	) -> Result<Registered, RegisterError> {
 		if reserved.contains(&registration.domain.as_str()) {
 			return Err(RegisterError::Reserved);
 		}
@@ -109,7 +129,7 @@ impl Registry {
 		};
 
 		self.claims
-			.insert(registration.domain.clone(), Claim { registration, connection });
+			.insert(registration.domain.clone(), Claim { registration, connection, transport });
 		Ok(Registered { displaced })
 	}
 
@@ -172,8 +192,25 @@ impl Registry {
 
 	/// Point the edge at `target` for `domain` without a client claim.
 	pub fn set_alias(&mut self, domain: &str, target: &str) {
-		self.aliases
-			.insert(domain.to_owned(), Registration { domain: domain.to_owned(), target: target.to_owned() });
+		self.aliases.insert(
+			domain.to_owned(),
+			Claim {
+				registration: Registration { domain: domain.to_owned(), target: target.to_owned() },
+				connection: 0,
+				transport: None,
+			},
+		);
+	}
+
+	/// A provider alias keeps the source claim's authenticated upstream, not merely its address.
+	pub fn set_claim_alias(&mut self, alias: &str, domain: &str) {
+		let mut claim = self
+			.claims
+			.get(domain)
+			.expect("source claim checked before publishing an alias")
+			.clone();
+		claim.registration.domain = alias.to_owned();
+		self.aliases.insert(alias.to_owned(), claim);
 	}
 
 	/// Drop an alias. Returns whether it existed.
@@ -184,7 +221,7 @@ impl Registry {
 	/// Names the edge answers on a share's behalf. They are not registrations,
 	/// so the dashboard lists them as shares instead of as active names.
 	pub fn aliases(&self) -> Vec<Registration> {
-		let mut names: Vec<Registration> = self.aliases.values().cloned().collect();
+		let mut names: Vec<Registration> = self.aliases.values().map(|claim| claim.registration.clone()).collect();
 		names.sort_by(|a, b| a.domain.cmp(&b.domain));
 		names
 	}
@@ -196,8 +233,8 @@ impl Registry {
 			.iter()
 			.map(|(domain, claim)| (domain.clone(), claim.registration.clone()))
 			.collect();
-		for (domain, registration) in &self.aliases {
-			merged.insert(domain.clone(), registration.clone());
+		for (domain, claim) in &self.aliases {
+			merged.insert(domain.clone(), claim.registration.clone());
 		}
 		let mut regs: Vec<Registration> = merged.into_values().collect();
 		regs.sort_by(|a, b| a.domain.cmp(&b.domain));
@@ -210,10 +247,11 @@ impl Registry {
 
 	/// Look up a single live registration. Aliases win over client claims.
 	pub fn get(&self, domain: &str) -> Option<Registration> {
-		self.aliases
-			.get(domain)
-			.cloned()
-			.or_else(|| self.claims.get(domain).map(|claim| claim.registration.clone()))
+		self.route(domain).map(|claim| claim.registration)
+	}
+
+	pub fn route(&self, domain: &str) -> Option<Claim> {
+		self.aliases.get(domain).or_else(|| self.claims.get(domain)).cloned()
 	}
 }
 

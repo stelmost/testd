@@ -168,7 +168,7 @@ impl Client {
 	}
 
 	async fn connect_token(addr: SocketAddr, token: &str) -> Self {
-		Self::connect_auth(addr, Auth { token: token.to_owned(), request_token: None }).await
+		Self::connect_auth(addr, Auth { token: token.to_owned(), ..Auth::default() }).await
 	}
 
 	async fn connect_auth(addr: SocketAddr, auth: Auth) -> Self {
@@ -1055,7 +1055,7 @@ async fn request_access(harness: &Harness, label: &str, names: &[&str]) -> (Clie
 	let (read, mut writer) = stream.into_split();
 	let names = names.iter().map(|name| (*name).to_owned()).collect();
 	let request_token = TokenRequest { label: label.to_owned(), names };
-	let auth = Auth { token: String::new(), request_token: Some(request_token) };
+	let auth = Auth { request_token: Some(request_token), ..Auth::default() };
 	send(&mut writer, &auth).await.unwrap();
 	let mut reader = BufReader::new(read);
 	match recv(&mut reader).await.unwrap().unwrap() {
@@ -1085,7 +1085,7 @@ async fn an_approved_request_issues_a_working_token() {
 
 	harness.access.revoke(&issued.id).unwrap();
 	assert!(
-		Client::try_connect_auth(harness.addr, Auth { token: issued.token, request_token: None })
+		Client::try_connect_auth(harness.addr, Auth { token: issued.token, ..Auth::default() })
 			.await
 			.is_none()
 	);

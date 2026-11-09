@@ -4,6 +4,11 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 
 ## [Unreleased]
 
+### Added
+
+- Native TLS 1.3 registration with explicit host pairing, independently derived verification codes, and saved per-endpoint trust
+- Mutually authenticated host-to-leaf application forwarding with connection-scoped in-memory leaf keys; dev servers can remain local HTTP
+
 ### Changed
 
 - The dashboard is served at `https://testd.test/` as well as `http://127.0.0.1:7737/`; the edge forwards the dashboard name only for loopback clients, and the loopback peer replaces the per-run URL token as the authority
@@ -22,6 +27,7 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 - macOS certificate actions preserve other installations' roots, and Windows resolver setup refuses conflicting unowned rules
 - Failed startup releases background listeners, and the setup dialog accepts another attempt after a start failure
 - Wrapped CLI commands stop their process trees; quick launches keep Stop responsive during rebinding and stalled host requests
+- TLS claims and provider aliases retain their upstream identity through rollback; failed rebinds preserve the previous forwarder, and grant withdrawal closes active leaf streams
 - WebSocket upgrades retain their connection-limit permits, IPv6 targets use brackets, and silent authentication peers no longer block failover
 - Dashboard and tray links include the configured HTTPS port, and quick-launch command parsing preserves Windows paths
 

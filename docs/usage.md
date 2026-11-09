@@ -48,7 +48,7 @@ Use two labels or more. `app.example.test` and `api.example.test` share a regist
 
 Labels may contain ASCII letters, digits, and hyphens, and may not start or end with a hyphen. Each label is at most 63 bytes, and the full name at most 253 bytes. Targets are a bare port, `host:port`, `ip:port`, or `[ipv6]:port`; port 0 and malformed names are rejected.
 
-The resolver answers registered names with the host's address, not the app target's. The edge speaks HTTP/1.1 and handles WebSocket upgrades, so HMR connections work. The app receives the original `Host` header plus `X-Forwarded-For` and `X-Forwarded-Proto`. The host-to-app hop is plain HTTP.
+The resolver answers registered names with the host's address, not the app target's. The edge speaks HTTP/1.1 and handles WebSocket upgrades, so HMR connections work. The app receives the original `Host` header plus `X-Forwarded-For` and `X-Forwarded-Proto`. For paired remote leaves, the host-to-leaf hop uses mutual TLS and the leaf reaches its local app over HTTP. Local-only direct registrations still use HTTP.
 
 ## How long a name lives
 
@@ -144,11 +144,12 @@ A public share is a public route to the app. A tailnet share is only as private 
 
 ## Access requests and tokens
 
-The host intake defaults to loopback. For a remote leaf, configure a reachable `[host] listen_addr` and restrict access; see [Advanced usage](advanced.md#remote-development).
+The host intake defaults to loopback. For a remote leaf, configure a reachable `[host] listen_addr` and restrict access. Pair by comparing the independently displayed codes on the host and leaf, approving on the host, and entering the host's code on the leaf. Pairing establishes host trust; publishing still needs a separate grant. The application must be local to the leaf, and the host must reach the leaf's dynamically allocated TLS listeners. See [Advanced usage](advanced.md#remote-development).
 
 A leaf with no credential for the selected profile asks for access, naming the names it wants:
 
 ```sh
+testd pair 192.168.1.5
 testd run --host 192.168.1.5 :3000
 ```
 

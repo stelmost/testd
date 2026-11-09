@@ -87,6 +87,54 @@ async fn a_share_requires_a_claim_not_just_an_edge_alias() {
 }
 
 #[tokio::test]
+async fn secure_public_shares_use_the_edge_and_keep_the_claims_tls_identity() {
+	use testd_daemon::registry::UpstreamTls;
+	use testd_pki::transport::{HOST_NAME, Identity, LEAF_NAME};
+
+	for provider in [Provider::Cloudflared, Provider::Ngrok] {
+		let dir = tempfile::tempdir().unwrap();
+		let arguments = dir.path().join("arguments");
+		let binary = script(
+			dir.path(),
+			"tunnel",
+			&format!(
+				"#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n\
+			 echo 'INF https://fixture.trycloudflare.com' >&2\n\
+			 echo '{{\"url\":\"https://fixture.ngrok-free.app\"}}' >&2\nexec sleep 30\n",
+				arguments.display(),
+			),
+		);
+		let host = Identity::ephemeral(HOST_NAME).unwrap();
+		let leaf = Identity::ephemeral(LEAF_NAME).unwrap();
+		let root = leaf.root_der().unwrap();
+		let registry = Arc::new(AsyncMutex::new(Registry::default()));
+		let shares = ManagedShares::new(provider, Some(binary), Some(front()), Arc::clone(&registry));
+		registry
+			.lock()
+			.await
+			.register_with_transport(
+				1,
+				testd_core::Registration { domain: "app.test".into(), target: "127.0.0.1:9443".into() },
+				Some(UpstreamTls { root: root.clone(), client: host.mutual_client_config(&root).unwrap() }),
+				false,
+				&[],
+			)
+			.unwrap();
+		let url = shares.start("app", "app.test", None).await.unwrap();
+		let alias = url.strip_prefix("https://").unwrap();
+		let route = registry.lock().await.route(alias).unwrap();
+		assert_eq!(route.registration.target, "127.0.0.1:9443");
+		assert_eq!(route.transport.unwrap().root, root);
+		let arguments = std::fs::read_to_string(arguments).unwrap();
+		assert!(arguments.contains("127.0.0.1:7740"), "{arguments}");
+		assert!(!arguments.contains("127.0.0.1:9443"), "{arguments}");
+		assert!(shares.stop("app").await.unwrap());
+		assert!(registry.lock().await.route(alias).is_none());
+		assert!(registry.lock().await.claim("app.test").is_some());
+	}
+}
+
+#[tokio::test]
 async fn a_cloudflared_share_reports_its_url_and_is_killed_on_stop() {
 	let dir = tempfile::tempdir().unwrap();
 	let provider = script(

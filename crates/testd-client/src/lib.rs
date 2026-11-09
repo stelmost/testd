@@ -5,7 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use tokio::io::BufReader;
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, BufReader};
+#[cfg(test)]
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc};
 
@@ -15,6 +16,11 @@ use testd_core::protocol::{self, Auth, ErrorDisposition, Request, Response, Toke
 pub mod listeners;
 pub mod supervisor;
 mod process;
+mod forwarder;
+mod transport;
+
+pub use transport::{Pairing, begin_pairing};
+use transport::Writer;
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(3);
 /// A host that does not answer must not stall a run or a failover attempt.
@@ -22,8 +28,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(130);
 
-type Reader = BufReader<tokio::net::tcp::OwnedReadHalf>;
-type Writer = tokio::net::tcp::OwnedWriteHalf;
+type Reader = BufReader<Box<dyn AsyncRead + Unpin + Send>>;
 
 /// The ordered reconnect list.
 fn hosts(config: &ClientConfig) -> Vec<String> {
@@ -36,14 +41,17 @@ fn hosts(config: &ClientConfig) -> Vec<String> {
 /// approved token is saved before the connection is used, so the next run does
 /// not ask again.
 async fn connect_host(config: &mut ClientConfig, host: &str, names: &[String]) -> Result<(Reader, Writer)> {
-	let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(host))
-		.await
-		.map_err(|_| anyhow::anyhow!("timed out connecting to host at {host}"))?
-		.with_context(|| format!("failed to connect to host at {host}"))?;
-
-	let (reader, mut writer) = stream.into_split();
-	let mut reader = BufReader::new(reader);
-	match authenticate(config, host, &mut reader, &mut writer, names).await {
+	let (mut reader, mut writer) = transport::open(host).await.map_err(|error| {
+		let may_retry = error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+			!matches!(error.kind(), std::io::ErrorKind::InvalidData | std::io::ErrorKind::PermissionDenied)
+		});
+		if may_retry {
+			anyhow::Error::new(ConnectFailure::unreachable(error))
+		} else {
+			anyhow::Error::new(ConnectFailure::rejected(error))
+		}
+	})?;
+	match authenticate(config, host, &mut reader, &mut writer.inner, names).await {
 		Ok(()) => Ok((reader, writer)),
 		Err(error) => {
 			let failure = if error.downcast_ref::<std::io::Error>().is_some() {
@@ -61,12 +69,12 @@ async fn authenticate(
 	config: &mut ClientConfig,
 	host: &str,
 	reader: &mut Reader,
-	writer: &mut Writer,
+	writer: &mut (impl AsyncWrite + Unpin),
 	names: &[String],
 ) -> Result<()> {
 	let asking = config.token.is_empty();
 	let request_token = asking.then(|| TokenRequest { label: client_label(), names: names.to_vec() });
-	let auth = Auth { token: config.token.clone(), request_token };
+	let auth = Auth { token: config.token.clone(), request_token, pairing: None };
 	tokio::time::timeout(RESPONSE_TIMEOUT, protocol::send(writer, &auth))
 		.await
 		.map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "authentication write timed out"))??;
@@ -101,7 +109,9 @@ async fn authenticate(
 			"auth failed: {message}\nif the credential is stale, remove {} (or unset TESTD_TOKEN) and run again",
 			testd_core::config::credential_path(&config.token_profile).display()
 		),
-		Response::Token { .. } => bail!("unexpected token response during auth"),
+		Response::Token { .. } | Response::Paired | Response::AppliedWithError { .. } => {
+			bail!("unexpected credential, pairing, or claim response during auth")
+		},
 		Response::Stopped { .. }
 		| Response::NameRevoked { .. }
 		| Response::GrantRevoked
@@ -111,7 +121,7 @@ async fn authenticate(
 	Ok(())
 }
 
-async fn read_response(reader: &mut Reader, timeout: Duration) -> Result<Response> {
+async fn read_response<R: AsyncBufRead + Unpin>(reader: &mut R, timeout: Duration) -> Result<Response> {
 	tokio::time::timeout(timeout, protocol::recv(reader))
 		.await
 		.map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "host response timed out"))??
@@ -237,14 +247,25 @@ pub(crate) fn entry_names(entries: &[Entry]) -> Vec<String> {
 /// Send a request and wait for its outcome. A registration can wait on a
 /// pending name grant, so the reply is not always the first frame back.
 async fn request(reader: &mut Reader, writer: &mut Writer, req: &Request) -> Result<()> {
-	tokio::time::timeout(RESPONSE_TIMEOUT, protocol::send(writer, req))
+	tokio::time::timeout(RESPONSE_TIMEOUT, writer.send(req))
 		.await
-		.map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "request write timed out"))??;
+		.map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "request write timed out"))?
+		.map_err(|error| {
+			if error.is::<transport::PreparationError>() {
+				anyhow::Error::new(ConnectFailure::rejected(error))
+			} else {
+				error
+			}
+		})?;
 	let mut timeout = RESPONSE_TIMEOUT;
 	loop {
 		let response = read_response(reader, timeout).await?;
+		if !matches!(response, Response::PendingGrant { .. }) {
+			writer.finish(&response);
+		}
 		match response {
 			Response::Ok => return Ok(()),
+			Response::AppliedWithError { message } => bail!("host error after applying the claim: {message}"),
 			Response::PendingGrant { id, domain } => {
 				timeout = APPROVAL_TIMEOUT;
 				eprintln!("[testd] [grant] the host is waiting for approval to grant {domain} (request {id})");
@@ -329,7 +350,7 @@ async fn maintain_registration(
 			result = connect_and_register(&entries, &mut config, force, next_host) => result,
 			() = stop.notified() => return LoopEnd::Stopped { writer: None, entries },
 		};
-		let (reader, writer, index) = match connection {
+		let (reader, mut writer, index) = match connection {
 			Ok(conn) => {
 				retrying = false;
 				conn
@@ -354,7 +375,7 @@ async fn maintain_registration(
 		};
 		next_host = (index + 1) % count;
 
-		match watch(reader, &stop, &mut entries).await {
+		match watch(reader, &mut writer, &stop, &mut entries).await {
 			Watch::Stopped => return LoopEnd::Stopped { writer: Some(writer), entries },
 			Watch::StoppedByHost => return LoopEnd::StoppedByHost,
 			Watch::Revoked => return LoopEnd::Revoked,
@@ -387,7 +408,7 @@ enum Watch {
 
 /// Read host frames until the connection drops, the caller stops the loop, or
 /// an operator stops the leaf or deletes its grant.
-async fn watch(mut reader: Reader, stop: &Notify, entries: &mut Vec<Entry>) -> Watch {
+async fn watch(mut reader: Reader, writer: &mut Writer, stop: &Notify, entries: &mut Vec<Entry>) -> Watch {
 	let (frames_tx, mut frames) = mpsc::channel(8);
 	// Reading happens in its own task: `protocol::recv` is not cancellation
 	// safe, so it must not race the stop signal directly.
@@ -408,6 +429,7 @@ async fn watch(mut reader: Reader, stop: &Notify, entries: &mut Vec<Entry>) -> W
 				},
 				Some(Response::GrantRevoked) => break Watch::GrantRevoked,
 				Some(Response::NameRevoked { domain }) => {
+					writer.revoke(&domain);
 					eprintln!("[testd] [grant] the host operator deleted the grant for {domain}");
 					entries.retain(|entry| !is_published_name(&entry.domain, &domain));
 					if entries.is_empty() {
@@ -428,8 +450,11 @@ async fn watch(mut reader: Reader, stop: &Notify, entries: &mut Vec<Entry>) -> W
 /// Best-effort deregister on a writer (reader may be dead).
 async fn deregister_best_effort(writer: &mut Writer, entries: &[Entry]) {
 	for entry in entries {
-		let _ = protocol::send(writer, &Request::Deregister { domain: entry.domain.clone() }).await;
+		let _ = writer.send(&Request::Deregister { domain: entry.domain.clone() }).await;
 		eprintln!("[testd] [dereg] {}", entry.domain);
+	}
+	if let Err(error) = writer.shutdown().await {
+		eprintln!("[testd] [warn] registration shutdown: {error}");
 	}
 }
 
@@ -561,8 +586,7 @@ mod tests {
 			}
 		});
 		let stream = TcpStream::connect(addr).await.unwrap();
-		let (reader, mut writer) = stream.into_split();
-		let mut reader = BufReader::new(reader);
+		let (mut reader, mut writer) = transport::split(stream, None);
 		let registration = Request::Register { domain: "app".into(), target: "3000".into(), force: false };
 		let error = tokio::time::timeout(Duration::from_secs(5), request(&mut reader, &mut writer, &registration))
 			.await

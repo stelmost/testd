@@ -1,4 +1,4 @@
-//! Client-host protocol over persistent TCP connections using NDJSON framing.
+//! Client-host protocol using NDJSON framing. Network connections require authenticated TLS.
 //!
 //! Connection lifecycle:
 //! 1. Connect → send [`Auth`] with a token, or ask the host to issue one
@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
 /// First message on a new connection: either present a token or ask for one.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Auth {
 	/// Bearer token. Empty when the client is asking for one instead.
 	#[serde(default, skip_serializing_if = "String::is_empty")]
@@ -28,6 +28,9 @@ pub struct Auth {
 	/// Ask the host to issue a token instead of presenting one.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub request_token: Option<TokenRequest>,
+	/// Bootstrap host trust without presenting or issuing a bearer token.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub pairing: Option<String>,
 }
 
 /// A client asking the host's operator for a credential.
@@ -42,7 +45,7 @@ pub struct TokenRequest {
 }
 
 /// Message sent from a dev client to the host daemon over an authenticated connection.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Request {
 	/// Register a domain. The registration stays alive as long as the connection is open.
@@ -52,6 +55,15 @@ pub enum Request {
 		/// Take the name from another connection.
 		#[serde(default)]
 		force: bool,
+	},
+	/// Register a mutually authenticated leaf TLS forwarder over an encrypted registration connection.
+	RegisterTls {
+		domain: String,
+		target: String,
+		#[serde(default)]
+		force: bool,
+		/// Public CA certificate for this leaf, bound to the authenticated connection and claim.
+		root: Vec<u8>,
 	},
 	/// Immediately evict a registration (graceful shutdown).
 	Deregister { domain: String },
@@ -73,6 +85,12 @@ pub enum ErrorDisposition {
 #[serde(tag = "type")]
 pub enum Response {
 	Ok,
+	/// The host operator approved the pairing session; the leaf must still confirm the independently shown code.
+	Paired,
+	/// The claim change committed, but provider cleanup failed. Clients retain the committed transport and report the error.
+	AppliedWithError {
+		message: String,
+	},
 	/// A token request is queued for the operator on the host.
 	Pending {
 		/// Request id shown in the dashboard and the CLI.

@@ -57,6 +57,9 @@ impl Daemon {
 		let mut tasks = Vec::new();
 		let config = load_host_config()?;
 		let tld = testd_core::config::host_tld().to_owned();
+		/* Registration still needs host PKI when an external front owns browser TLS. */
+		let pki_dir = config.pki_dir.clone();
+		tokio::task::spawn_blocking(move || testd_pki::Ca::load_or_init(&pki_dir).map(|_| ())).await??;
 
 		if config.secret.is_empty() {
 			eprintln!(

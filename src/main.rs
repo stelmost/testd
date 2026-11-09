@@ -65,6 +65,11 @@ enum Command {
 		#[arg(last = true)]
 		command: Vec<String>,
 	},
+	/// Verify matching TLS pairing codes and save trust for a remote host.
+	Pair {
+		/// Host address, optionally including its registration port.
+		host: String,
+	},
 	/// Run the host daemon in headless mode.
 	Host,
 	/// Print the authenticated URL for the local dashboard.
@@ -192,6 +197,7 @@ async fn main() -> anyhow::Result<()> {
 				testd_client::run(&entries, &command, force, config).await
 			}
 		},
+		Command::Pair { host } => pair(host).await,
 		Command::Host => host::run().await,
 		Command::Dashboard => dashboard(),
 		Command::Url { url } => url_action(&url),
@@ -207,6 +213,25 @@ async fn main() -> anyhow::Result<()> {
 		Command::ExportCaddyfile => export_caddyfile(),
 		Command::Uninstall { purge } => uninstall(purge),
 	}
+}
+
+async fn pair(host: String) -> anyhow::Result<()> {
+	let host = explicit_hosts(Some(host), None)
+		.context("give a host address to pair")?
+		.remove(0);
+	let pairing = testd_client::begin_pairing(&host).await?;
+	eprintln!("Pairing with {host}: {}", pairing.verification);
+	eprintln!("On the trusted host, open its dashboard or run `testd requests`.");
+	eprintln!(
+		"Compare the code for request {} and approve it with `testd approve {}`.",
+		pairing.request, pairing.request
+	);
+	eprintln!("To confirm host identity, enter the code shown ON THE HOST, not an unverified network message:");
+	let mut confirmation = String::new();
+	std::io::stdin().read_line(&mut confirmation)?;
+	pairing.confirm(&confirmation).await?;
+	println!("paired {host}; subsequent connections verify this host before sending credentials");
+	Ok(())
 }
 
 fn dashboard() -> anyhow::Result<()> {
@@ -617,20 +642,20 @@ async fn doctor(fix: bool, json: bool) -> anyhow::Result<i32> {
 	}
 
 	let pki_dir = config.pki_dir.clone();
-	if config.edge_enabled {
-		let validity =
-			if fix { testd_pki::Ca::load_or_init(&pki_dir).map(|_| ()) } else { testd_pki::check_validity(&pki_dir) };
-		match validity {
-			Ok(()) => checks.push(Check::ok("pki", "root and intermediate can issue a valid leaf".into())),
-			Err(error) => {
-				exit = exit.max(3);
-				checks.push(Check::fail(
-					"pki",
-					format!("{error:#}"),
-					"run `testd doctor --fix`; restore root.key if needed",
-				));
-			},
-		}
+	let validity =
+		if fix { testd_pki::Ca::load_or_init(&pki_dir).map(|_| ()) } else { testd_pki::check_validity(&pki_dir) };
+	match validity {
+		Ok(()) => {
+			checks.push(Check::ok("pki", "root and intermediate can issue transport and browser certificates".into()))
+		},
+		Err(error) => {
+			exit = exit.max(3);
+			checks.push(Check::fail(
+				"pki",
+				format!("{error:#}"),
+				"run `testd doctor --fix`; restore root.key if needed",
+			));
+		},
 	}
 	let root_cert = pki_dir.join("root.crt");
 	let root_pem = std::fs::read_to_string(&root_cert).ok();
@@ -960,6 +985,9 @@ fn requests() -> anyhow::Result<()> {
 					request.address,
 					age(request.requested_at)
 				);
+				if let Some(code) = request.verification {
+					println!("  Pairing code: {code} (compare with the leaf before approving)");
+				}
 			}
 		},
 	}

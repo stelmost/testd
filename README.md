@@ -83,15 +83,18 @@ testd run 10.0.0.5:myapp:3000 -- npm run dev   # custom target host
 
 ## Remote dev environments
 
-Registration and token issuance use plain TCP. Use a trusted network or a separately secured transport, such as an encrypted private network or SSH tunnel. Do not expose port 7737 to the public internet. The HTTPS edge encrypts browser traffic; it does not encrypt leaf registration traffic.
+Network registration and token issuance use TLS 1.3. Pair each host before sending credentials; application requests then use mutual TLS between the host and a connection-scoped leaf forwarder. The dev server can remain HTTP on the leaf. Do not expose port 7737 to the public internet.
 
 The host intake defaults to loopback. For a remote leaf, configure a reachable `[host] listen_addr` and restrict access; see [Advanced usage](docs/advanced.md#remote-development).
 
-From the VM, container, or WSL instance, run:
+From the VM, container, or WSL instance, pair once, then run:
 
 ```sh
+testd pair 192.168.1.5
 testd run --host 192.168.1.5 :3000
 ```
+
+Compare the pairing code with the independently displayed code in the host's Access card or `testd requests`. Approve that request on the host and enter the host's code on the leaf. Pairing saves host trust, not a publishing grant. Host identity changes require explicit re-pairing; there is no plaintext fallback or credential-based bypass.
 
 With no credential for the selected profile, `testd` asks the host for a grant and names the domains it wants; the token it gets covers those names. On the host, approve it:
 
@@ -104,7 +107,7 @@ The local dashboard's **Access** card does the same. The tray posts a notificati
 
 A name the token does not cover raises its own request the first time the leaf publishes it. The dashboard's **Access** card shows the requested names, and approving adds that one name to the leaf's grant without touching its other names.
 
-`testd run` accepts `--host`, `--hosts`, and `TESTD_HOSTS` for a one-off list, and reads `[profiles.<name>]` from `~/.config/testd/leaf.toml` for a named one. The host infers the proxy target from the client's connection IP and the port you passed. A remote leaf may only target its own address by default; set `[host] allow_remote_targets = true` to permit an explicit different host.
+`testd run` accepts `--host`, `--hosts`, and `TESTD_HOSTS` for a one-off list, and reads `[profiles.<name>]` from `~/.config/testd/leaf.toml` for a named one. Pair each endpoint in the list. A secure leaf forwards only to applications on its own machine: a bare port means loopback, and an explicit target must resolve to a local interface. The host must be able to reach the leaf's dynamically allocated TLS ports; registration alone does not provide NAT traversal. Permit the testd executable through the appropriate private-network firewall rather than exposing the dev server directly.
 
 For unattended clients that cannot wait for an approval, `testd init` also writes an operator secret into `[host] secret`. Present it as `TESTD_TOKEN` on the leaf:
 

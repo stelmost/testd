@@ -16,12 +16,12 @@ host machine
   ├─ HTTPS edge on :443
   └─ reverse proxy → app target
                          ▲
-                         │ plain TCP control connection
+                         │ TLS registration connection
 leaf (VM, container, WSL, remote box)
   └─ testd run, bearer token
 ```
 
-The browser never connects to the leaf. It resolves the name to the host, the host terminates TLS, and the host proxies to the target. The leaf keeps one outbound TCP connection open and registers names on it; the connection is the lifetime of those names.
+The browser never connects to the leaf. It resolves the name to the host, the host terminates browser TLS, and the host reaches remote applications through a mutually authenticated leaf TLS forwarder. The final leaf-to-app hop stays local HTTP. The leaf keeps one outbound registration connection open; that connection owns the names and forwarders.
 
 ## 1. Install
 
@@ -105,10 +105,11 @@ The host intake defaults to loopback. Configure a reachable `[host] listen_addr`
 On the other machine, point at the host:
 
 ```sh
+testd pair <host-lan-ip>
 testd run --host <host-lan-ip> :3000
 ```
 
-With no credential for the profile, the leaf asks for access. On the host, approve it:
+First compare the pairing code against the host's Access card or `testd requests`. Approve pairing on the host and enter the host's code on the leaf; this saves host trust without issuing a credential. Then `run` asks separately for the names its credential should cover. On the host, approve it:
 
 ```sh
 testd requests
@@ -117,7 +118,7 @@ testd approve <id>
 
 The token is saved on the leaf and reused. The app must listen on an address the host can reach; a server bound only to `127.0.0.1` on the remote machine is not reachable from the host.
 
-Registration traffic is plain TCP and carries a bearer token. Use a trusted network or an encrypted private network, and do not expose port 7737 to the internet. See [Security](security.md).
+Remote credentials are sent only after verifying the paired host over TLS 1.3. Application requests use mutual TLS to the leaf. The host must be able to reach the leaf's dynamically allocated TLS ports; pairing does not create a route through NAT. Do not expose port 7737 to the internet. See [Security](security.md).
 
 ## Where next
 

@@ -86,11 +86,15 @@ pub struct PendingView {
 	/// Names the operator is asked to grant.
 	pub names: Vec<String>,
 	pub requested_at: u64,
+	/// Computed by the host from its TLS session, never supplied by the leaf.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub verification: Option<String>,
 }
 
 /// The operator's answer to a request.
 #[derive(Debug)]
 pub enum Decision {
+	Paired,
 	Approve(IssuedToken),
 	/// A name was added to the grants of the leaf's existing token.
 	ApproveName,
@@ -100,6 +104,7 @@ pub enum Decision {
 /// What an approval produced, for callers that need the issued token.
 #[derive(Debug)]
 pub enum Approved {
+	Paired,
 	Token(IssuedToken),
 	Name,
 }
@@ -135,6 +140,8 @@ struct Pending {
 
 /// What approval of a request does.
 enum PendingKind {
+	/// Approve only this TLS session, without issuing any credential or grant.
+	Pairing { verification: String },
 	/// Issue a new token that carries the requested names.
 	Token,
 	/// Add one name to the grants of an existing token.
@@ -207,6 +214,22 @@ impl Access {
 		self.enqueue(&mut state, clean_label(label), address.to_owned(), names, PendingKind::Token)
 	}
 
+	pub fn request_pairing(
+		&self,
+		label: &str,
+		address: &str,
+		verification: String,
+	) -> Result<(String, oneshot::Receiver<Decision>), String> {
+		let mut state = self.state.lock().expect("access lock poisoned");
+		self.enqueue(
+			&mut state,
+			clean_label(label),
+			address.to_owned(),
+			Vec::new(),
+			PendingKind::Pairing { verification },
+		)
+	}
+
 	/// Queue a request for one more name on an existing token.
 	pub fn request_name(
 		&self,
@@ -277,6 +300,13 @@ impl Access {
 		}
 
 		match pending.kind {
+			PendingKind::Pairing { .. } => {
+				pending
+					.decision
+					.send(Decision::Paired)
+					.map_err(|_| "pairing connection closed".to_owned())?;
+				Ok(Approved::Paired)
+			},
 			PendingKind::Token => {
 				let token = new_token(&pending.label, pending.names.clone());
 				state.tokens.push(token.clone());
@@ -429,6 +459,10 @@ impl Access {
 				address: pending.address.clone(),
 				names: pending.names.clone(),
 				requested_at: pending.requested_at,
+				verification: match &pending.kind {
+					PendingKind::Pairing { verification } => Some(verification.clone()),
+					_ => None,
+				},
 			})
 			.collect();
 		requests.sort_by_key(|request| request.requested_at);

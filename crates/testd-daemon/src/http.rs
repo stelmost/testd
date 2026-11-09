@@ -828,6 +828,7 @@ mod tests {
 	fn rendered_project_links_include_the_https_port() {
 		let claims = [Claim {
 			connection: 1,
+			transport: None,
 			registration: Registration { domain: "app.test".into(), target: "127.0.0.1:3000".into() },
 		}];
 		let html = render_domains(&claims, &HashSet::new(), 8443);

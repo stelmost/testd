@@ -14,8 +14,10 @@ This page covers the operational security model. Vulnerability reporting is in [
 | Path | Transport | Trust |
 |---|---|---|
 | Browser to host edge | TLS, rustls with the ring provider | Browser trusts the testd root or a sharing provider |
-| Leaf to host intake | Plain TCP, NDJSON | Bearer credential in the clear; network must be trusted or separately encrypted |
-| Host to app target | Plain HTTP/1.1 | The app should not assume the upstream hop is encrypted |
+| Network leaf to host intake | TLS 1.3, NDJSON | Host CA pinned after explicit TLS-bound code comparison; bearer tokens sent only after verification |
+| Host to secure leaf | Mutual TLS 1.3 | Leaf CA bound to its authenticated registration; host client certificate required |
+| Leaf forwarder to app | Local HTTP/1.1 | Target must resolve to an interface on that leaf |
+| Local-only registration and direct targets | Loopback registration, HTTP/1.1 upstream | Local direct registrations do not gain encrypted remote target forwarding |
 | Dashboard | Loopback TCP, no TLS | Any local user; the loopback peer is the authority |
 | Control channel | Loopback TCP, no TLS | Same-user local access plus a per-run token |
 
@@ -29,7 +31,8 @@ The root CA and intermediate are created by the host. The root key stays on the 
 | Issued token | `tokens.json` on the host; `credentials/<profile>` on a leaf | The names in its grant; revocable |
 | Root CA key | `pki/root.key` | Can sign any certificate under the root |
 | Intermediate key | `pki/node.key` | Can issue leaf certificates |
-| Control token | `control.json` | Loopback dashboard and control channel for this daemon run |
+| Control token | `control.json` | Local launches and control channel for this daemon run |
+| Leaf forwarding keys | Memory only, per registration connection | Accept application connections from the paired host CA |
 
 `config.toml`, `tokens.json`, `credentials/<profile>`, and the private keys are written with user-only permissions on Unix. Treat any copy of them as a credential. A leaked operator secret can register any valid name; a leaked issued token can publish only its granted names.
 
@@ -39,11 +42,14 @@ To withdraw one leaf, revoke its token. To withdraw one name, delete that name's
 
 ## Registration network
 
-Leaf registration and token issuance use plain TCP. Tokens, labels, names, and targets are visible to anything on the path. The HTTPS edge encrypts browser traffic; it does not encrypt leaf traffic.
+Network registration and token issuance require TLS 1.3. Before connecting with a token, pair the host with `testd pair <endpoint>`. Both endpoints independently derive a 128-bit code using the TLS exporter. The operator compares their trusted displays, approves the host-side pairing request, and enters the host's code on the leaf. An echoed client-supplied secret is not accepted as proof of host identity. Pairing never carries or issues a bearer credential.
 
-- Use a trusted LAN, a VPN, or another encrypted network.
-- Do not expose intake port 7737 to the public internet.
-- Prefer a network that preserves the leaf's source address. A source-rewriting tunnel such as an SSH local forward makes a remote leaf appear local, which changes target inference and bypasses the remote-target check.
+The saved public CA pin is scoped to the endpoint and testd's TLS client, not the OS trust store. TLS certificate signatures and names are verified; a changed identity fails before authentication, without a plaintext retry or bypass through `TESTD_TOKEN`. Explicit re-pairing preserves the previous public pin. Ordinary certificate renewal under the pinned CA does not require pairing again.
+
+- Keep intake port 7737 restricted to the intended network; TLS does not turn it into a public ingress service.
+- Allow the host to reach the leaf's dynamically allocated application TLS listeners on the selected interface. Pairing does not provide NAT traversal.
+- Compare the host's code through a trusted host terminal or dashboard, not a message from the unverified connection.
+- Prefer networks that preserve peer addresses. Unpaired loopback endpoints retain the local-only protocol, and source-rewriting SSH forwards change that boundary; they are not a drop-in remote topology.
 - Treat a token copied into CI as a production credential for the names it covers.
 
 Issued tokens are scoped and revocable. The operator secret is broad and survives token changes. Use issued tokens wherever approval is possible, and reserve the secret for unattended bootstrap.
@@ -59,7 +65,7 @@ By default, a leaf that connects from a non-loopback address may only target its
 allow_remote_targets = true
 ```
 
-Enable it only for leaves you would already trust with that reach. Once enabled, a granted name can point at any target the host can reach, including services that are not otherwise exposed.
+Enable it only for leaves you would already trust with that reach. It relaxes the host's endpoint-address restriction; it does not disable TLS, leaf certificate verification, or the secure forwarder's local-application restriction. Local-only direct registrations can still name HTTP targets and do not provide encrypted remote forwarding. For a remote application, run a paired leaf beside it.
 
 ## The local dashboard
 
@@ -92,7 +98,7 @@ Firefox may use its own trust store and need a separate import. That is a browse
 
 ## Tunnels and exposure
 
-A share is an explicit exposure decision.
+A share is an explicit exposure decision. For secure leaf claims, providers route through the local edge, which preserves the claim's leaf TLS identity. Providers do not receive host signing keys.
 
 - `cloudflared` and `ngrok` create public URLs. The provider terminates TLS and forwards traffic to the app. Anyone with the URL can reach the app; the tunnel adds no authentication.
 - `tailscale serve` exposes the name to the tailnet. Its privacy depends on tailnet membership and ACLs.
@@ -119,7 +125,8 @@ The daemon bounds work so a buggy or hostile local client cannot exhaust it with
 - 256 simultaneous intake connections
 - 64 KiB NDJSON frames
 - 512 edge connections total, 64 per source address
-- 32 pending access requests, each with a two-minute lifetime
+- 32 pending access or pairing requests, each with a two-minute lifetime
+- 64 application TLS endpoints per leaf connection, with 64 simultaneous incoming connections per endpoint
 - 1024 cached edge certificates
 - 32 KiB HTTP request heads and 256 KiB bodies
 

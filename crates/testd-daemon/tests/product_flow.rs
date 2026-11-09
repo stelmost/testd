@@ -149,7 +149,7 @@ struct Client {
 impl Client {
 	async fn connect(address: SocketAddr, token: &str) -> (Self, Response) {
 		let (reader, mut writer) = TcpStream::connect(address).await.unwrap().into_split();
-		send(&mut writer, &Auth { token: token.into(), request_token: None })
+		send(&mut writer, &Auth { token: token.into(), ..Auth::default() })
 			.await
 			.unwrap();
 		let mut reader = BufReader::new(reader);

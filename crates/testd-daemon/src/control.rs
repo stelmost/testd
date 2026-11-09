@@ -516,6 +516,10 @@ async fn handle(
 				Request::Shares { .. } => Response::listing(shares.list().await),
 				Request::Requests { .. } => Response::requests(access.pending()),
 				Request::Approve { id, .. } => match access.approve(&id) {
+					Ok(Approved::Paired) => {
+						eprintln!("[access] approved host pairing ({id})");
+						Response::ok()
+					},
 					Ok(Approved::Token(token)) => {
 						eprintln!(
 							"[access] approved {} ({})",

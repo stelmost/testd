@@ -367,15 +367,15 @@ async fn handle(handler: Handler, request: Request<Incoming>) -> Response<Body> 
 			return text(StatusCode::NOT_FOUND, "The dashboard is loopback-only.");
 		}
 		let target = addr.to_string();
-		return proxy(handler, request, &target).await;
+		return proxy(handler, request, &target, None).await;
 	}
 
-	let target = match handler.ctx.registrations.lock().await.get(&host) {
-		Some(registration) => registration.target,
+	let claim = match handler.ctx.registrations.lock().await.route(&host) {
+		Some(claim) => claim,
 		None => return text(StatusCode::NOT_FOUND, &format!("No live registration for {host}.")),
 	};
-
-	proxy(handler, request, &target).await
+	let tls = claim.transport.map(|transport| transport.client);
+	proxy(handler, request, &claim.registration.target, tls).await
 }
 
 /// On-demand TLS permission endpoint for an external front such as Caddy.
@@ -409,7 +409,12 @@ fn dashboard_client_is_local(handler: &Handler, headers: &HeaderMap) -> bool {
 	}
 }
 
-async fn proxy(handler: Handler, request: Request<Incoming>, target: &str) -> Response<Body> {
+async fn proxy(
+	handler: Handler,
+	request: Request<Incoming>,
+	target: &str,
+	tls: Option<Arc<rustls::ClientConfig>>,
+) -> Response<Body> {
 	let mut request = request;
 	let client_upgrade = if is_upgrade(&request) { Some(hyper::upgrade::on(&mut request)) } else { None };
 
@@ -456,7 +461,7 @@ async fn proxy(handler: Handler, request: Request<Incoming>, target: &str) -> Re
 	*upstream.version_mut() = Version::HTTP_11;
 	*upstream.headers_mut() = headers;
 
-	let (mut sender, connection) = match connect_upstream(target, handler.ctx.upstream_timeout).await {
+	let (mut sender, connection) = match connect_upstream(target, tls, handler.ctx.upstream_timeout).await {
 		Ok(pair) => pair,
 		Err(response) => return response,
 	};
@@ -494,21 +499,36 @@ type ConnectionFuture = Pin<Box<dyn Future<Output = Result<(), hyper::Error>> + 
 #[allow(clippy::result_large_err)]
 async fn connect_upstream(
 	target: &str,
+	tls: Option<Arc<rustls::ClientConfig>>,
 	timeout: Duration,
 ) -> Result<(hyper::client::conn::http1::SendRequest<Incoming>, ConnectionFuture), Response<Body>> {
-	let connect = tokio::time::timeout(timeout, TcpStream::connect(target)).await;
-	let stream = match connect {
-		Ok(Ok(stream)) => stream,
-		Ok(Err(e)) => return Err(bad_gateway(target, &e.to_string())),
-		Err(_) => return Err(text(StatusCode::GATEWAY_TIMEOUT, &format!("upstream {target} timed out"))),
+	let connecting = async {
+		let stream = TcpStream::connect(target).await?;
+		stream.set_nodelay(true)?;
+		let stream: Box<dyn UpstreamStream> = match tls {
+			Some(config) => {
+				let connector = tokio_rustls::TlsConnector::from(config);
+				let name = rustls::pki_types::ServerName::try_from(testd_pki::transport::LEAF_NAME)
+					.expect("static leaf TLS name");
+				Box::new(connector.connect(name, stream).await?)
+			},
+			None => Box::new(stream),
+		};
+		hyper::client::conn::http1::Builder::new()
+			.handshake(TokioIo::new(stream))
+			.await
+			.map(|(sender, connection)| (sender, Box::pin(connection.with_upgrades()) as ConnectionFuture))
+			.map_err(std::io::Error::other)
 	};
-	stream.set_nodelay(true).ok();
-
-	match hyper::client::conn::http1::Builder::new().handshake(TokioIo::new(stream)).await {
-		Ok((sender, connection)) => Ok((sender, Box::pin(connection.with_upgrades()))),
-		Err(e) => Err(bad_gateway(target, &e.to_string())),
+	match tokio::time::timeout(timeout, connecting).await {
+		Ok(Ok(pair)) => Ok(pair),
+		Ok(Err(error)) => Err(bad_gateway(target, &error.to_string())),
+		Err(_) => Err(text(StatusCode::GATEWAY_TIMEOUT, &format!("upstream {target} timed out"))),
 	}
 }
+
+trait UpstreamStream: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<S: AsyncRead + AsyncWrite + Unpin + Send> UpstreamStream for S {}
 
 fn upgrade_response(
 	mut response: Response<Incoming>,

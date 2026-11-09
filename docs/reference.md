@@ -31,13 +31,14 @@ testd <command> [options]
 |---|---|
 | `init` | Prepare this machine as a host; idempotent |
 | `run` | Register names, optionally wrap a command, deregister on exit |
+| `pair` | Compare TLS-bound codes and save trust for a host endpoint |
 | `host` | Run the host daemon in the foreground |
 | `dashboard` | Print the authenticated local dashboard URL |
 | `url` | Handle a `testd://` action |
 | `doctor` | Check host setup; optionally repair |
 | `share` | Start, stop, or list tunnels for registered names |
 | `requests` | List waiting access requests |
-| `approve` | Approve one request and issue its token |
+| `approve` | Approve pairing, issue a token, or extend a name grant |
 | `deny` | Deny one request |
 | `tokens` | List issued tokens, or revoke one |
 | `export-caddyfile` | Write the managed Caddyfile for an external front |
@@ -78,6 +79,14 @@ Entries are `:port`, `name:port`, or `host:name:port`. A trailing `.test` on a n
 | `--node-profile <name>` | Node profile from `leaf.toml`. Env: `TESTD_PROFILE` |
 
 `--host` and `--hosts` entries without a port get `:7737`. Addresses from the environment or `leaf.toml` must include a port.
+
+### pair
+
+```text
+testd pair <host>[:port]
+```
+
+Establishes a bootstrap TLS 1.3 connection without sending a credential. Compare its code with the independently computed code on the trusted host, approve the pairing request there, and enter that host code on the leaf. Saves the host CA in `trusted-hosts/<endpoint-hash>.crt`; does not install OS trust or issue a publishing token. Pairing a changed identity requires the same explicit confirmation and retains the old public pin in a fingerprinted `.previous.crt` file. There is no automatic trust or plaintext fallback for network endpoints.
 
 ### host
 
@@ -150,7 +159,7 @@ testd tokens
 testd tokens --revoke <id>
 ```
 
-All require a running daemon. `requests` prints the id, label, requested names, address, and age. The label is `user@host:project` when the requested names carry a project. Requests expire after two minutes. Token secrets are never printed.
+All require a running daemon. `requests` prints the id, label, requested names, address, age, and the independently computed verification code for pairing requests. The label is `user@host:project` when the requested names carry a project. Requests expire after two minutes. Token secrets are never printed.
 
 ### export-caddyfile
 

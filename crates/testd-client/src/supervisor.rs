@@ -584,6 +584,13 @@ struct Live {
 	/// never be mistaken for one.
 	revoked: mpsc::UnboundedReceiver<String>,
 	closed: oneshot::Receiver<()>,
+	reader_task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for Live {
+	fn drop(&mut self) {
+		self.reader_task.abort();
+	}
 }
 
 impl Live {
@@ -591,7 +598,7 @@ impl Live {
 		let (responses_tx, responses) = mpsc::channel(8);
 		let (revoked_tx, revoked) = mpsc::unbounded_channel();
 		let (closed_tx, closed) = oneshot::channel();
-		tokio::spawn(async move {
+		let reader_task = tokio::spawn(async move {
 			while let Ok(Some(response)) = protocol::recv::<_, Response>(&mut reader).await {
 				// Host-initiated frames are never replies to a request.
 				let forwarded = match response {
@@ -608,19 +615,22 @@ impl Live {
 			}
 			let _ = closed_tx.send(());
 		});
-		Self { writer, responses, revoked, closed }
+		Self { writer, responses, revoked, closed, reader_task }
 	}
 
 	/// Send one request and wait for its outcome. A registration can wait on a
 	/// pending name grant, so the reply is not always the first frame back.
 	async fn request(&mut self, request: &Request) -> Result<Response> {
-		protocol::send(&mut self.writer, request).await?;
+		self.writer.send(request).await?;
 		loop {
 			match self.responses.recv().await.context("host closed the connection")? {
 				Response::PendingGrant { id, domain } => {
 					eprintln!("[testd] [grant] the host is waiting for approval to grant {domain} (request {id})");
 				},
-				response => return Ok(response),
+				response => {
+					self.writer.finish(&response);
+					return Ok(response);
+				},
 			}
 		}
 	}
@@ -729,7 +739,7 @@ async fn session_loop(
 			continue;
 		};
 
-		let Live { writer, responses, revoked: revoked_names, closed } = connection;
+		let Live { writer, responses, revoked: revoked_names, closed, .. } = connection;
 		let mut disconnected = false;
 		tokio::select! {
 			_ = &mut *closed => {
@@ -738,6 +748,7 @@ async fn session_loop(
 			},
 			revoked_name = revoked_names.recv() => match revoked_name {
 				Some(host_name) => {
+					writer.revoke(&host_name);
 					// The host names the fqdn; `desired` keys are the client's
 					// spellings of the same names.
 					let dropped: Vec<String> = desired
@@ -775,6 +786,10 @@ async fn session_loop(
 								desired.insert(domain, target);
 								let _ = respond.send(Ok(()));
 							},
+							Ok(Response::AppliedWithError { message }) => {
+								desired.insert(domain, target);
+								let _ = respond.send(Err(message));
+							},
 							Ok(Response::Error { message, .. }) => {
 								let _ = respond.send(Err(message));
 							},
@@ -782,7 +797,7 @@ async fn session_loop(
 								let _ = respond.send(Err("host returned an unexpected response".into()));
 							},
 							Err(e) => {
-								disconnected = true;
+								disconnected = !e.is::<crate::transport::PreparationError>();
 								let _ = respond.send(Err(e.to_string()));
 							},
 						}
@@ -801,13 +816,16 @@ async fn send_request(
 	responses: &mut mpsc::Receiver<Response>,
 	request: &Request,
 ) -> Result<Response> {
-	protocol::send(writer, request).await?;
+	writer.send(request).await?;
 	loop {
 		match responses.recv().await.context("host closed the connection")? {
 			Response::PendingGrant { id, domain } => {
 				eprintln!("[testd] [grant] the host is waiting for approval to grant {domain} (request {id})");
 			},
-			response => return Ok(response),
+			response => {
+				writer.finish(&response);
+				return Ok(response);
+			},
 		}
 	}
 }
@@ -825,6 +843,9 @@ async fn reregister(live: &mut Live, desired: &mut HashMap<String, String>, even
 		let request = Request::Register { domain: domain.clone(), target: target.clone(), force: false };
 		match live.request(&request).await {
 			Ok(Response::Ok) => {},
+			Ok(Response::AppliedWithError { message }) => {
+				send_state(events, &domain, &target, EntryState::Confirmed, Some(message)).await;
+			},
 			Ok(Response::Error { message, .. }) => {
 				desired.remove(&domain);
 				send_state(events, &domain, &target, EntryState::Configured, Some(message)).await;
@@ -845,6 +866,9 @@ async fn deregister_all(
 		let _ = send_request(writer, responses, &request).await;
 	}
 	desired.clear();
+	if let Err(error) = writer.shutdown().await {
+		eprintln!("[testd] [warn] registration shutdown: {error}");
+	}
 }
 
 #[cfg(test)]
@@ -868,6 +892,7 @@ mod tests {
 				.iter()
 				.map(|request| match request {
 					Request::Register { domain, target, .. } => format!("register {domain} {target}"),
+					Request::RegisterTls { domain, target, .. } => format!("register_tls {domain} {target}"),
 					Request::Deregister { domain } => format!("deregister {domain}"),
 				})
 				.collect()

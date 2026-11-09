@@ -118,12 +118,14 @@ The browser report records engine/user agent, candidate/root hashes, certificate
 | Configuration, private state, local defaults, DNS-only setup | `tests/cli.rs`, core config tests | Installed packages, permissions, actual GUI setup |
 | Authentication, name ownership, disconnect, revocation, rollback | Engine, protocol, registry, and `product_flow.rs` tests | Platform workflows and local-user authority boundaries |
 | DNS answers and malformed/unknown names | DNS unit tests and real loopback UDP fixtures | OS resolver routing |
-| TLS validation, proxy routing, forwarding, and failures | Edge, PKI, and product-flow tests | Installed OS/browser trust |
+| TLS validation, pairing, proxy routing, forwarding, and failures | Edge, PKI, `native_tls.rs`, and product-flow tests | Installed OS/browser trust |
 | Preserve unowned integration and remove only proven-owned state | Setup ownership/resolver/trust fixtures | Shared trust hooks, concurrent privileged changes, complete macOS/Windows ownership |
 | Dashboard, quick launches, lifecycle, and local request protections | Engine/launch tests, `tests/host/`, Bun dashboard fixtures | Actual tray/browser, local-user dashboard authorization |
 | Shares, provider exits, and revocation | Fake-provider lifecycle and reconciliation tests | Real providers, network-pause controls, crash recovery |
 | Packaging, rollback, and recovery reports | Python release/harness fixtures and protected artifact checks | Provenance, signing, installed upgrade/uninstall on each platform |
 | Browser fixture protocols and reports | Bun fixture tests and opt-in Playwright | Each claimed OS/browser combination |
+
+`native_tls.rs` runs the real CLI against an isolated component host: matching and mismatched pairing codes, no credential issuance during pairing, identity replacement, plaintext downgrade attempts, mutual-TLS application requests and upgrades, and rollback retaining TLS identity. Its resolver cannot touch the system, and candidate homes are private fixtures. It does not validate firewall configuration or actual network continuity.
 
 `product_flow.rs` composes registration, DNS, and TLS on ephemeral loopback sockets. Only its test client trusts the root, and its resolver wrapper forbids system integration. It is component evidence, not a full installed daemon, browser, or GUI. Explicit network-exposure/pause controls and dashboard authorization remain unfinished; tests of local defaults do not establish them.
 

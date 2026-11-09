@@ -47,6 +47,8 @@ path = "src/main.rs"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
 
 [dependencies]
 anyhow = "1"

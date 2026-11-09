@@ -778,9 +778,11 @@
 		renderAccessList('request-list', state.requests, (request) => accessRow(
 			request.label,
 			(request.names.length ? request.names.join(', ') + ' · ' : '') +
-				request.address + ' · requested ' + ago(request.requested_at) + ' · ' + request.id,
+				request.address + ' · requested ' + ago(request.requested_at) + ' · ' + request.id +
+				(request.verification ? ' · Pairing code: ' + request.verification + ' · Compare with the leaf before approving' : ''),
 			[
-				actionButton('Approve', 'primary', () => requestAction('approve', request.id)),
+				actionButton(request.verification ? 'Approve pairing' : 'Approve', 'primary',
+					() => requestAction('approve', request.id)),
 				actionButton('Deny', 'danger', () => requestAction('deny', request.id)),
 			],
 		), 'No pending requests', 'A leaf asking for a token or a name appears here.');

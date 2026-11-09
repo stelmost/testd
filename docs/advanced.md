@@ -9,7 +9,17 @@ description: 'Remote development, profiles, grants, quick launches, tunnels, ext
 
 The host intake defaults to loopback. To accept remote leaves, set `[host] listen_addr` to a reachable address. A specific non-loopback intake bind also starts a loopback listener on the same port for the dashboard and local launches. A `0.0.0.0:7737` bind includes loopback but exposes the intake on every IPv4 interface; if used, restrict port 7737 with a firewall.
 
-A remote leaf registers over the host's intake port. With no credential for the selected profile, it asks for access and prints a request. On the host:
+Pair the host before registering from a leaf:
+
+```sh
+testd pair 192.168.1.5
+```
+
+The leaf and host independently derive a 128-bit verification code from their TLS session. Read the host's code in its dashboard Access card or `testd requests`, compare it with the leaf, approve the pairing request on the host, and enter the host's code on the leaf. Do not confirm an echoed code received from an unverified network message. Pairing requests expire after two minutes.
+
+The leaf saves the host CA in `trusted-hosts/<endpoint-hash>.crt`, scoped to that endpoint and to testd, not installed into the OS trust store. Ordinary transport certificate renewal preserves this pin. A changed host identity fails before authentication; explicitly run `testd pair` again only after verifying the change. Re-pairing preserves the previous public pin as a fingerprinted `.previous.crt` file. Pair every endpoint selected through a node profile or `--hosts`.
+
+Network registration uses TLS 1.3, even when `TESTD_TOKEN` supplies a credential. It never falls back to plaintext. A remote leaf with no credential for the selected profile separately asks for publishing access. On the host:
 
 ```sh
 testd requests
@@ -18,11 +28,7 @@ testd approve <id>
 
 The leaf saves the issued token in `~/.config/testd/credentials/<profile>` and reuses it. Later runs do not ask again unless the token is revoked or the host state is reset.
 
-The host infers the target from the leaf's connection address and the port given in the entry. Use an explicit target when that address is wrong:
-
-```sh
-testd run 10.0.0.5:app.example:3000
-```
+A bare application port is reached through the leaf's loopback interface. An explicit target must resolve to an address on the leaf itself; run the leaf beside the application rather than adding an unencrypted third-machine hop. Existing local-only registrations can still name direct targets.
 
 A remote leaf may only target its own address by default. To allow a different target, set:
 
@@ -33,9 +39,11 @@ allow_remote_targets = true
 
 This turns an issued name into a possible proxy into the host's loopback or another network. Enable it only for leaves you would already trust with that reach.
 
-The host-to-app connection is plain HTTP. The app must listen on an interface the host can reach, and any firewall between them must allow the port.
+For a secure leaf, application requests use mutual TLS from the host to the leaf forwarder, then HTTP to the local application. Leaf signing keys exist only in memory for that registration connection. The host authenticates the leaf's advertised CA through the encrypted registration; the leaf accepts application connections only with a client certificate from its paired host CA. Host root and intermediate private keys never leave the host.
 
-Registration and token traffic are plain TCP. Use a trusted LAN, a VPN, or another encrypted transport. A source-address-rewriting tunnel such as an SSH local forward makes the leaf look local, which changes target inference and the remote-target check; prefer a network that preserves the leaf's address. Never expose port 7737 to the public internet.
+The leaf binds one dynamically allocated TLS listener per published entry on the interface used to reach the host. The host needs a return route and firewall permission to those listeners. Dev servers can listen on loopback; a successful registration does not establish NAT traversal. Each connection supports up to 64 application endpoints. Losing the registration or withdrawing a grant closes the affected forwarders, including open streams.
+
+Unpaired numeric loopback and `localhost` endpoints retain the local-only protocol, with a second check that the actual peer is loopback. Pairing a loopback endpoint explicitly selects TLS. A source-rewriting SSH forward changes apparent addresses and is not a drop-in remote-development topology. Never expose port 7737 to the public internet.
 
 If the host is rebuilt or `tokens.json` is lost, the leaf's stored credential is rejected. Remove the credential file and run again:
 
@@ -130,6 +138,8 @@ Running state is not persisted. Definitions live in `~/.config/testd/launches.js
 
 `cloudflared` uses a quick tunnel and needs no account. `ngrok` needs `ngrok config add-authtoken` once.
 
+Secure cloudflared and ngrok shares route through the local edge, which retains the leaf TLS identity and serves the provider URL as a claim-bound alias. Providers do not receive host signing keys, and requests keep the provider's original Host header.
+
 `tailscale serve --bg` cannot proxy a container or LAN address directly. `testd` points it at the host's plain edge listener and registers the tailnet name as an alias there, so the edge proxies to the real target. This needs the plain HTTP routing listener, which runs with or without the built-in TLS edge. If `tailscale serve` already has configuration on port 443, `testd` refuses to overwrite it.
 
 A `serve --bg` entry survives a daemon restart while the alias does not. On startup, `testd` clears any serve entry whose root handler points at its own edge and leaves every other entry alone.
@@ -165,7 +175,7 @@ The plain listener always runs. `edge_enabled` controls only the built-in TLS li
 
 `testd init` detects a Caddy install and offers to add an import to the global Caddyfile. `testd export-caddyfile` writes the managed Caddyfile and prints the import line. `testd doctor` checks the import and reloads Caddy when a global config is configured; `--fix` adds a missing import.
 
-The generated Caddyfile terminates TLS with Caddy's internal CA and proxies to `http_addr`. Browsers trust that CA, not the testd root. With `edge_enabled = false`, `doctor` skips the testd PKI and root checks and requires the external front's certificate to be trusted by the system. `trust_forwarded_for` must stay off unless a front you control sets the header; otherwise a client can spoof its source address. On the plain listener the dashboard name is served only with this on and a loopback first hop.
+The generated Caddyfile terminates TLS with Caddy's internal CA and proxies to `http_addr`. Browsers trust that CA, not the testd root. With `edge_enabled = false`, `doctor` still checks the PKI needed for registration TLS, but does not require the testd browser root to be installed; it requires the external front's certificate to be trusted by the system. `trust_forwarded_for` must stay off unless a front you control sets the header; otherwise a client can spoof its source address. On the plain listener the dashboard name is served only with this on and a loopback first hop.
 
 ## DNS resolution
 
@@ -243,7 +253,7 @@ Do not put secrets in `.testd.toml`, command lines, or logs. `TESTD_TOKEN` is vi
 - The connection is the lease. A claim lives exactly as long as the TCP connection that created it, so a crash or lost network releases the name without a cleanup job.
 - The token is durable permission. Re-approving a leaf on every run would be annoying, so tokens and grants persist across reconnects and can be revoked later.
 - Grants are per name. A token covers exact names, not a project wildcard or everything a machine can reach.
-- Registration is plain NDJSON over TCP. It is small and easy to debug, and it delegates transport security to a trusted network, VPN, or another encrypted link.
+- Network registration is NDJSON over pinned TLS 1.3; application forwarding to a secure leaf uses mutual TLS. Local-only registrations retain the loopback protocol.
 - The CA is local. A root installed once per browser machine plus short-lived leaf certificates gives private HTTPS without per-project certificate files.
 
 ## Clean up
