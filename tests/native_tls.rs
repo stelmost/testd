@@ -51,19 +51,14 @@ struct Host {
 	address: SocketAddr,
 	edge: Edge,
 	root: Vec<u8>,
-	reservation: std::net::TcpListener,
 	server: JoinHandle<()>,
 }
 
 impl Host {
 	async fn start() -> Self {
 		let directory = tempfile::tempdir().unwrap();
-		let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-		listener.set_nonblocking(true).unwrap();
+		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
 		let address = listener.local_addr().unwrap();
-		/* Keep the same socket reserved when the test swaps servers at the paired endpoint. */
-		let reservation = listener.try_clone().unwrap();
-		let listener = TcpListener::from_std(listener).unwrap();
 		let mut config: HostConfig = toml::from_str("").unwrap();
 		config.listen_addr = address;
 		config.pki_dir = directory.path().join("pki");
@@ -80,7 +75,7 @@ impl Host {
 			edge::start(context, Some("127.0.0.1:0".parse().unwrap()), "127.0.0.1:0".parse().unwrap(), &config.pki_dir)
 				.unwrap();
 		let server = tokio::spawn(async move { engine.serve(listener).await.unwrap() });
-		Self { _directory: directory, access, resolver, registrations, address, edge, root, reservation, server }
+		Self { _directory: directory, access, resolver, registrations, address, edge, root, server }
 	}
 
 	async fn pending(&self) -> PendingView {
@@ -97,7 +92,11 @@ impl Host {
 	}
 
 	async fn pair(&self, home: &Path) {
-		let mut child = candidate(home).args(["pair", &self.address.to_string()]).spawn().unwrap();
+		self.pair_at(home, self.address).await;
+	}
+
+	async fn pair_at(&self, home: &Path, address: SocketAddr) {
+		let mut child = candidate(home).args(["pair", &address.to_string()]).spawn().unwrap();
 		let request = self.pending().await;
 		let code = request.verification.unwrap();
 		self.access.approve(&request.id).unwrap();
@@ -164,10 +163,22 @@ fn candidate(home: &Path) -> Command {
 	command
 }
 
-async fn replace_paired_host(host: &mut Host) -> TcpListener {
-	host.server.abort();
-	assert!((&mut host.server).await.unwrap_err().is_cancelled());
-	TcpListener::from_std(host.reservation.try_clone().unwrap()).unwrap()
+async fn pair_through_proxy(host: &Host, home: &Path) -> TcpListener {
+	let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+	let address = listener.local_addr().unwrap();
+	let upstream = host.address;
+	/* Pair through one listener, then reuse it for the replacement without rebinding. */
+	let proxy = tokio::spawn(async move {
+		let (mut client, _) = listener.accept().await.unwrap();
+		let mut server = TcpStream::connect(upstream).await.unwrap();
+		tokio::io::copy_bidirectional(&mut client, &mut server).await.unwrap();
+		listener
+	});
+	host.pair_at(home, address).await;
+	tokio::time::timeout(WAIT, proxy)
+		.await
+		.expect("pairing proxy did not release its listener")
+		.unwrap()
 }
 
 async fn headers<S: tokio::io::AsyncRead + Unpin>(reader: &mut BufReader<S>) -> Vec<String> {
@@ -309,10 +320,10 @@ async fn incorrect_pairing_codes_cannot_install_host_trust_or_issue_credentials(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_changed_host_identity_is_rejected_before_credentials_are_sent() {
-	let mut host = Host::start().await;
+	let host = Host::start().await;
 	let home = tempfile::tempdir().unwrap();
-	host.pair(home.path()).await;
-	let listener = replace_paired_host(&mut host).await;
+	let listener = pair_through_proxy(&host, home.path()).await;
+	let address = listener.local_addr().unwrap();
 	let attacker = Identity::ephemeral(transport::HOST_NAME).unwrap();
 	let serving = tokio::spawn(async move {
 		let (stream, _) = listener.accept().await.unwrap();
@@ -322,7 +333,7 @@ async fn a_changed_host_identity_is_rejected_before_credentials_are_sent() {
 		WAIT,
 		candidate(home.path())
 			.env("TESTD_TOKEN", UNVERIFIED_TOKEN)
-			.args(["run", "--host", &host.address.to_string(), "web.fixture:3000"])
+			.args(["run", "--host", &address.to_string(), "web.fixture:3000"])
 			.output(),
 	)
 	.await
@@ -335,10 +346,10 @@ async fn a_changed_host_identity_is_rejected_before_credentials_are_sent() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_plaintext_server_cannot_downgrade_a_paired_connection() {
-	let mut host = Host::start().await;
+	let host = Host::start().await;
 	let home = tempfile::tempdir().unwrap();
-	host.pair(home.path()).await;
-	let listener = replace_paired_host(&mut host).await;
+	let listener = pair_through_proxy(&host, home.path()).await;
+	let address = listener.local_addr().unwrap();
 	let (finished, until_finished) = tokio::sync::oneshot::channel();
 	let serving = tokio::spawn(async move {
 		let (mut stream, _) = listener.accept().await.unwrap();
@@ -351,17 +362,15 @@ async fn a_plaintext_server_cannot_downgrade_a_paired_connection() {
 				.any(|bytes| bytes == UNVERIFIED_TOKEN.as_bytes())
 		);
 		stream.write_all(b"{\"type\":\"Ok\"}\n").await.unwrap();
-		tokio::select! {
-			biased;
-			accepted = listener.accept() => panic!("the client attempted plaintext fallback: {accepted:?}"),
-			_ = until_finished => {},
-		}
+		until_finished.await.unwrap();
+		let fallback = tokio::time::timeout(Duration::from_millis(200), listener.accept()).await;
+		assert!(fallback.is_err(), "the client attempted plaintext fallback: {fallback:?}");
 	});
 	let output = tokio::time::timeout(
 		WAIT,
 		candidate(home.path())
 			.env("TESTD_TOKEN", UNVERIFIED_TOKEN)
-			.args(["run", "--host", &host.address.to_string(), "web.fixture:3000"])
+			.args(["run", "--host", &address.to_string(), "web.fixture:3000"])
 			.output(),
 	)
 	.await
