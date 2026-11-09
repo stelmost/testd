@@ -96,11 +96,10 @@ impl Daemon {
 		let shares = Arc::new(crate::share::Shares::from_env(Some(front), engine.registrations()));
 		engine.set_shares(Arc::clone(&shares));
 
-		// `tailscale serve --bg` survives this process while the alias that made
-		// the name answer does not, so clear the leftovers off the startup path.
+		/* An edge target alone cannot prove ownership of a persistent serve entry. */
 		{
 			let shares = Arc::clone(&shares);
-			tasks.push(crate::task::BackgroundTask(tokio::spawn(async move { shares.reclaim().await })));
+			tasks.push(crate::task::BackgroundTask(tokio::spawn(async move { shares.warn_unowned_serves().await })));
 		}
 
 		// Shares are reconciled against their owning registration and target.

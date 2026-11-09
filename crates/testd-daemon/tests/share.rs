@@ -318,20 +318,24 @@ async fn an_ngrok_share_reports_its_url_from_a_log_record() {
 	shares.stop("app.example").await;
 }
 
-/// A fake `tailscale`: records the serve target, answers status, and marks the
-/// scoped stop. `serve status --json` reports one entry of ours and one foreign.
+/** Fake status retains a foreign :8443 handler and records changes to :443. */
 fn tailscale(dir: &Path) -> (PathBuf, PathBuf, PathBuf) {
 	let args = dir.join("serve-args");
+	let started = dir.join("serve-on");
 	let stopped = dir.join("serve-off");
 	let body = r#"#!/bin/sh
 if [ "$1" = "serve" ] && [ "$2" = "status" ]; then
-	echo '{"Web":{"node-a.tailnet.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:7740"}}},"node-a.tailnet.ts.net:8443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:9000"}}}}}'
+	if [ -e 'STARTED' ]; then
+		echo '{"Web":{"node-a.tailnet.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:7740"}}},"node-a.tailnet.ts.net:8443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:9000"}}}}}'
+	else
+		echo '{"Web":{"node-a.tailnet.ts.net:8443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:9000"}}}}}'
+	fi
 	exit 0
 fi
 case "$1" in
 	serve)
 		echo "$@" >> 'ARGS'
-		if [ "$3" = "off" ]; then touch 'STOPPED'; fi
+		if [ "$3" = "off" ]; then touch 'STOPPED'; rm -f 'STARTED'; else touch 'STARTED'; fi
 		exit 0 ;;
 	status)
 		echo '{"Self":{"DNSName":"node-a.tailnet.ts.net."}}'
@@ -340,6 +344,7 @@ esac
 exit 1
 "#
 	.replace("ARGS", &args.display().to_string())
+	.replace("STARTED", &started.display().to_string())
 	.replace("STOPPED", &stopped.display().to_string());
 	(script(dir, "tailscale", &body), args, stopped)
 }
@@ -379,10 +384,15 @@ async fn a_stopping_tailscale_share_cannot_remove_its_replacement() {
 	let dir = tempfile::tempdir().unwrap();
 	let stopping = dir.path().join("stopping");
 	let resume = dir.path().join("resume");
+	let started = dir.path().join("started");
 	let body = format!(
 		"#!/bin/sh\nif [ \"$1\" = status ]; then echo '{{\"Self\":{{\"DNSName\":\"node.ts.net.\"}}}}'; exit; fi\n\
-		if [ \"$1\" = serve ] && [ \"$2\" = status ]; then echo '{{\"Web\":{{\"node.ts.net:443\":{{\"Handlers\":{{\"/\":{{\"Proxy\":\"http://127.0.0.1:7740\"}}}}}}}}}}'; exit; fi\n\
-		if [ \"$3\" = off ]; then : > '{}'; while [ ! -e '{}' ]; do sleep 0.02; done; fi\nexit 0\n",
+		if [ \"$1\" = serve ] && [ \"$2\" = status ]; then \
+		if [ -e '{0}' ]; then echo '{{\"Web\":{{\"node.ts.net:443\":{{\"Handlers\":{{\"/\":{{\"Proxy\":\"http://127.0.0.1:7740\"}}}}}}}}}}'; \
+		else echo '{{\"Web\":{{}}}}'; fi; exit; fi\n\
+		if [ \"$3\" = off ]; then : > '{1}'; while [ ! -e '{2}' ]; do sleep 0.02; done; rm -f '{0}'; \
+		else : > '{0}'; fi\nexit 0\n",
+		started.display(),
 		stopping.display(),
 		resume.display()
 	);
@@ -541,28 +551,29 @@ async fn failed_tailscale_cleanup_blocks_replacement_and_reports_the_error() {
 }
 
 #[tokio::test]
-async fn a_restart_clears_the_serve_entry_it_left_behind() {
+async fn a_restart_does_not_remove_or_adopt_a_matching_unowned_serve_entry() {
 	let dir = tempfile::tempdir().unwrap();
 	let (provider, args_file, stopped) = tailscale(dir.path());
+	std::fs::write(dir.path().join("serve-on"), "preexisting").unwrap();
 	let shares = Shares::new(Provider::Tailscale, Some(provider), Some(front()));
 
-	shares.reclaim().await;
-
-	let args = std::fs::read_to_string(&args_file).unwrap();
-	assert!(args.contains("--https=443 off"), "the entry pointing at our edge is cleared: {args}");
-	assert!(!args.contains("--https=8443"), "another serve entry is left alone: {args}");
-	assert!(stopped.exists());
+	shares.warn_unowned_serves().await;
+	assert!(!args_file.exists(), "inspection must not run a serve mutation");
+	assert!(!stopped.exists(), "a matching edge target does not prove ownership");
+	let error = shares.start("app", "127.0.0.1:3000", None).await.unwrap_err();
+	assert!(error.to_string().contains("refusing to overwrite"), "{error}");
+	assert_eq!(std::fs::read_to_string(dir.path().join("serve-on")).unwrap(), "preexisting");
 }
 
 #[tokio::test]
-async fn a_sweep_leaves_a_live_share_alone() {
+async fn startup_inspection_leaves_a_live_share_alone() {
 	let dir = tempfile::tempdir().unwrap();
 	let (provider, _, stopped) = tailscale(dir.path());
 	let shares = Shares::new(Provider::Tailscale, Some(provider), Some(front()));
 	shares.start("app.example", "127.0.0.1:3000", None).await.unwrap();
 
-	shares.reclaim().await;
-	assert!(!stopped.exists(), "a live share's serve entry is not a leftover");
+	shares.warn_unowned_serves().await;
+	assert!(!stopped.exists(), "inspection must not stop a live share");
 
 	shares.stop("app.example").await;
 }

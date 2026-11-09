@@ -21,6 +21,7 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 
 - Quick launches save the project directory and show captured output, failed probes, and unsuccessful command exits
 - Process cleanup includes descendants after their parent exits; service termination stops wrapped commands, and daemon shutdown stops owned shares
+- Tailscale startup no longer deletes or adopts an unowned route merely because it points at the local edge; existing or ambiguous `:443` handlers block a new share
 - Busy registration reads no longer refuse live HTTPS names, and trusted external fronts preserve the browser's HTTPS scheme
 - Specific network intake binds keep a loopback dashboard and local launches; certificate status refreshes while the dashboard stays open
 - macOS resolver setup leaves conflicting files untouched, tray startup failures show recovery instructions, and setup repair buttons keep their labels

@@ -172,8 +172,8 @@ pub struct Shares {
 	front: Option<Front>,
 	registrations: Registrations,
 	state: Arc<Mutex<ShareState>>,
-	/// Serializes the startup sweep against a tailscale share starting.
-	reclaim: Arc<Mutex<()>>,
+	/// Serializes Tailscale status inspection, startup, and cleanup.
+	tailscale_actions: Arc<Mutex<()>>,
 	/// Any change to the active set, for live frontends.
 	revision: watch::Sender<u64>,
 }
@@ -462,7 +462,7 @@ impl Shares {
 			front,
 			registrations,
 			state: Arc::new(Mutex::new(ShareState::default())),
-			reclaim: Arc::new(Mutex::new(())),
+			tailscale_actions: Arc::new(Mutex::new(())),
 			revision: watch::channel(0).0,
 		}
 	}
@@ -945,18 +945,11 @@ impl Shares {
 		self.finish_detached(detached).await
 	}
 
-	/// Clear `serve` entries a previous run left behind.
-	///
-	/// `serve --bg` writes config that outlives this process, while the alias that
-	/// made the name answer does not; the leftover would answer with a 404 until
-	/// someone shares again. Only an entry whose root handler proxies to this
-	/// host's edge is ours, so every other serve entry is left alone.
-	pub async fn reclaim(&self) {
+	/** Report matching persistent serve entries without assuming they belong to testd. */
+	pub async fn warn_unowned_serves(&self) {
 		let Some(front) = &self.front else { return };
-		let _sweep = self.reclaim.lock().await;
-		// A live share owns its serve entry; the sweep must not mistake it for a
-		// leftover. The lock makes a start either finish before this check or wait
-		// for the sweep, so the two cannot interleave.
+		let _guard = self.tailscale_actions.lock().await;
+		/* Do not report a live share as an orphan while starting or stopping it. */
 		{
 			let state = self.state.lock().await;
 			if !state.entries.is_empty() {
@@ -971,20 +964,12 @@ impl Shares {
 		if !output.status.success() {
 			return;
 		}
-		for port in leftover_serves(&String::from_utf8_lossy(&output.stdout), &upstream) {
-			let args = vec!["serve".to_owned(), format!("--https={port}"), "off".to_owned()];
-			match run_briefly(&binary, &args, SWEEP_TIMEOUT).await {
-				Ok(Some(output)) if output.status.success() => {
-					eprintln!("[share]  cleared a leftover tailscale serve on :{port} pointing at {upstream}");
-				},
-				Ok(Some(output)) => eprintln!(
-					"[warn]   could not clear the leftover tailscale serve on :{port} ({}); run `{} serve reset`",
-					output.status,
-					binary.display()
-				),
-				Ok(None) => eprintln!("[warn]   the leftover tailscale serve on :{port} took too long to clear"),
-				Err(e) => eprintln!("[warn]   could not clear the leftover tailscale serve on :{port}: {e}"),
-			}
+		for port in serve_ports_pointing_at(&String::from_utf8_lossy(&output.stdout), &upstream) {
+			eprintln!(
+				"[warn]   tailscale serve :{port} points at {upstream}, but ownership is unknown; \
+				 left untouched. Inspect `{} serve status` before sharing",
+				binary.display()
+			);
 		}
 	}
 
@@ -1080,11 +1065,11 @@ impl Shares {
 		cancellation: &mut watch::Receiver<bool>,
 	) -> Result<Active> {
 		let ShareStart { name, .. } = start;
-		// A sweep that runs while serve config is being written would turn it off.
-		let _sweep = tokio::select! {
+		/* Keep startup inspection and serve changes ordered. */
+		let _guard = tokio::select! {
 			biased;
 			_ = wait_for_cancellation(cancellation) => bail!("share start for {name} was cancelled"),
-			guard = self.reclaim.lock() => guard,
+			guard = self.tailscale_actions.lock() => guard,
 		};
 		let front = self
 			.front
@@ -1096,7 +1081,6 @@ impl Shares {
 			_ = wait_for_cancellation(cancellation) => bail!("share start for {name} was cancelled"),
 			result = self.tailscale_host(binary) => result?,
 		};
-		let upstream = format!("http://{}", front.plain_addr);
 		let status_args = ["serve".to_owned(), "status".to_owned(), "--json".to_owned()];
 		let status = tokio::select! {
 			biased;
@@ -1110,7 +1094,7 @@ impl Shares {
 				}
 			},
 		};
-		if !can_take_over_443(&status, &upstream) {
+		if !is_443_available(&status) {
 			bail!("tailscale serve already has configuration on :443; refusing to overwrite it");
 		}
 		{
@@ -1214,7 +1198,7 @@ impl Shares {
 			},
 			ProviderResource::Tailscale { .. } => {},
 		}
-		let _sweep = self.reclaim.lock().await;
+		let _guard = self.tailscale_actions.lock().await;
 		let binary = self.binary_for(share.provider);
 		let front = self.front.as_ref().context("the tailscale front is missing during cleanup")?;
 		let upstream = format!("http://{}", front.plain_addr);
@@ -1228,7 +1212,7 @@ impl Shares {
 		if serde_json::from_str::<serde_json::Value>(&status).is_err() {
 			bail!("tailscale serve returned malformed status; leaving :443 alone");
 		}
-		if !leftover_serves(&status, &upstream).contains(&443) {
+		if !serve_ports_pointing_at(&status, &upstream).contains(&443) {
 			bail!("tailscale serve :443 changed; leaving it in place");
 		}
 		/* Scope cleanup to this serve port, leaving unrelated entries alone. */
@@ -1248,9 +1232,8 @@ pub fn status_host(status: &str) -> Option<String> {
 	if name.is_empty() { None } else { Some(name.to_owned()) }
 }
 
-/// Serve ports whose entire handler set is our root handler. A port with any
-/// additional handler is not ours to turn off.
-fn leftover_serves(status: &str, upstream: &str) -> Vec<u16> {
+/** Find exact edge routes; a matching target alone does not establish ownership. */
+fn serve_ports_pointing_at(status: &str, upstream: &str) -> Vec<u16> {
 	let Ok(value) = serde_json::from_str::<serde_json::Value>(status) else { return Vec::new() };
 	let Some(web) = value.get("Web").and_then(|web| web.as_object()) else { return Vec::new() };
 	let mut ports: Vec<u16> = Vec::new();
@@ -1278,24 +1261,40 @@ fn leftover_serves(status: &str, upstream: &str) -> Vec<u16> {
 	ports
 }
 
-/// Whether starting a root handler on :443 would leave someone else's handlers
-/// in place to be removed by the next `serve --https=443 off`.
-fn can_take_over_443(status: &str, upstream: &str) -> bool {
-	let Ok(value) = serde_json::from_str::<serde_json::Value>(status) else { return false };
-	let Some(web) = value.get("Web").and_then(|web| web.as_object()) else { return true };
-	web.iter()
-		.filter(|(host_port, _)| host_port.ends_with(":443"))
-		.all(|(_, entry)| {
-			let Some(handlers) = entry.get("Handlers").and_then(|handlers| handlers.as_object()) else {
+/** Do not adopt any existing :443 route, including an identical edge target. */
+fn is_443_available(status: &str) -> bool {
+	serde_json::from_str::<serde_json::Value>(status).is_ok_and(|value| serve_config_has_free_443(&value))
+}
+
+fn serve_config_has_free_443(value: &serde_json::Value) -> bool {
+	if value.is_null() {
+		return true;
+	}
+	let Some(config) = value.as_object() else { return false };
+	for field in ["TCP", "Web", "AllowFunnel"] {
+		let Some(value) = config.get(field) else { continue };
+		if value.is_null() {
+			continue;
+		}
+		let Some(entries) = value.as_object() else { return false };
+		for key in entries.keys() {
+			let port = if field == "TCP" { Some(key.as_str()) } else { key.rsplit_once(':').map(|(_, port)| port) };
+			if !port.and_then(|port| port.parse::<u16>().ok()).is_some_and(|port| port != 443) {
 				return false;
-			};
-			handlers.len() == 1
-				&& handlers
-					.get("/")
-					.and_then(|handler| handler.get("Proxy"))
-					.and_then(|proxy| proxy.as_str())
-					== Some(upstream)
-		})
+			}
+		}
+	}
+	for field in ["Foreground", "Services"] {
+		let Some(value) = config.get(field) else { continue };
+		if value.is_null() {
+			continue;
+		}
+		let Some(entries) = value.as_object() else { return false };
+		if !entries.values().all(serve_config_has_free_443) {
+			return false;
+		}
+	}
+	true
 }
 
 async fn stop_child(child: &mut Child) -> Result<()> {
@@ -1518,21 +1517,30 @@ mod tests {
 			"node-a.tailnet.ts.net:8443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:9000"}}},
 			"node-a.tailnet.ts.net:10000":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:7740"}}}
 		}}"#;
-		assert_eq!(leftover_serves(status, "http://127.0.0.1:7740"), vec![443, 10000]);
-		assert!(leftover_serves(status, "http://127.0.0.1:7741").is_empty());
-		assert!(leftover_serves("", "http://127.0.0.1:7740").is_empty());
-		assert!(leftover_serves(r#"{"Web":{}}"#, "http://127.0.0.1:7740").is_empty());
+		assert_eq!(serve_ports_pointing_at(status, "http://127.0.0.1:7740"), vec![443, 10000]);
+		assert!(serve_ports_pointing_at(status, "http://127.0.0.1:7741").is_empty());
+		assert!(serve_ports_pointing_at("", "http://127.0.0.1:7740").is_empty());
+		assert!(serve_ports_pointing_at(r#"{"Web":{}}"#, "http://127.0.0.1:7740").is_empty());
 	}
 
 	#[test]
-	fn a_foreign_handler_on_443_blocks_the_share() {
-		let upstream = "http://127.0.0.1:7740";
-		let ours = r#"{"Web":{"node.tail.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:7740"}}}}}"#;
-		let foreign = r#"{"Web":{"node.tail.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:7740"},"/api":{"Proxy":"http://127.0.0.1:9000"}}}}}"#;
-		assert!(can_take_over_443(ours, upstream));
-		assert!(!can_take_over_443(foreign, upstream));
-		assert!(can_take_over_443(r#"{"Web":{}}"#, upstream));
-		assert_eq!(leftover_serves(foreign, upstream), Vec::<u16>::new());
+	fn every_existing_or_ambiguous_handler_on_443_blocks_the_share() {
+		for status in [
+			r#"{"Web":{"node.tail.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:7740"}}}}}"#,
+			r#"{"Web":{"node.tail.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:9000"}}}}}"#,
+			r#"{"TCP":{"443":{"TCPForward":"127.0.0.1:9000"}}}"#,
+			r#"{"Foreground":{"other":{"TCP":{"443":{"HTTPS":true}}}}}"#,
+			r#"{"Services":{"other":{"Web":{"node.tail.ts.net:443":{}}}}}"#,
+			r#"{"AllowFunnel":{"node.tail.ts.net:443":true}}"#,
+			r#"{"TCP":"unrecognized"}"#,
+			r#"{"Web":{"bad-key":{}}}"#,
+			"not json",
+		] {
+			assert!(!is_443_available(status), "{status}");
+		}
+		for status in ["null", r#"{}"#, r#"{"Web":{}}"#, r#"{"TCP":{"8443":{}}}"#] {
+			assert!(is_443_available(status), "{status}");
+		}
 	}
 
 	#[test]

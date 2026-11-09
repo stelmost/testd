@@ -114,7 +114,9 @@ A share is an explicit exposure decision. For secure leaf claims, providers rout
 - `tailscale serve` exposes the name to the tailnet. Its privacy depends on tailnet membership and ACLs.
 - The provider sees the application traffic in both cases, including credentials the app sends.
 
-Stop a share when it is no longer needed. A share is bound to the owning connection and target; a reconnect or target change requires sharing again. Provider cleanup and crash recovery still require verification, and a running dev server and forgotten URL can outlive the reason for sharing.
+Stop a share when it is no longer needed. A share is bound to the owning connection and target; a reconnect or target change requires sharing again. Hard-crash recovery is not yet implemented: a provider or Tailscale route may outlive the daemon, and an empty share list does not prove cleanup. Inspect provider state after a crash. Startup warns about matching Tailscale edge routes but does not delete them or adopt an occupied `:443`.
+
+During an ordinary Tailscale stop, testd verifies the route's edge target, but does not yet have durable proof against an identical replacement. Do not change Tailscale serve configuration concurrently; review it independently if ownership is uncertain.
 
 The provider binary is spawned from `PATH` or `TESTD_TUNNEL`. A compromised binary runs with the daemon's privileges and can read the host state.
 

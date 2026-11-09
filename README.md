@@ -154,7 +154,7 @@ The daemon owns the tunnel, not the CLI process, so closing the terminal does no
 
 `tailscale serve` cannot proxy a container or LAN address directly, so `testd` points it at the host's plain edge listener instead and registers the tailnet name as an alias there. The edge then proxies to the real target, and the app sees the name it was registered under, exactly as a browser request would. This needs the plain HTTP routing listener; it works with the built-in TLS edge on or off.
 
-`serve --bg` keeps its config across restarts while the alias does not, so a host that stopped mid-share would leave the tailnet URL answering 404. On start, `testd` clears any serve entry whose root handler points at its own edge and leaves every other serve entry alone.
+`serve --bg` keeps its config across restarts while the alias does not. On startup, `testd` warns about matching routes but does not delete or adopt them: an edge target alone is not proof of ownership. An existing `:443` route blocks a new Tailscale share. Inspect the provider's state after a crash; an empty testd share list does not prove that a provider or route has stopped.
 
 Providers are spawned, never linked: no SDK, no account integration, no vendor API in the product. `testd` sets `TESTD_TUNNEL_PROVIDER` for a default other than `cloudflared`, and `TESTD_TUNNEL` to point at a provider binary outside `PATH`.
 

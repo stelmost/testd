@@ -142,7 +142,7 @@ Secure cloudflared and ngrok shares route through the local edge, which retains 
 
 `tailscale serve --bg` cannot proxy a container or LAN address directly. `testd` points it at the host's plain edge listener and registers the tailnet name as an alias there, so the edge proxies to the real target. This needs the plain HTTP routing listener, which runs with or without the built-in TLS edge. If `tailscale serve` already has configuration on port 443, `testd` refuses to overwrite it.
 
-A `serve --bg` entry survives a daemon restart while the alias does not. On startup, `testd` clears any serve entry whose root handler points at its own edge and leaves every other entry alone.
+A `serve --bg` entry survives a daemon restart while the alias does not. On startup, `testd` warns about matching edge routes but leaves them untouched; a matching target does not prove ownership. Existing `:443` configuration blocks a new share, even when it points at the same edge. Inspect provider state after a crash; an empty share list is not proof of cleanup.
 
 Overrides:
 
