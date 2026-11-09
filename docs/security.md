@@ -36,7 +36,9 @@ The root CA and intermediate are created by the host. The root key stays on the 
 | Setup credential | Memory and setup window session storage | One setup surface; not reusable in another setup session |
 | Leaf forwarding keys | Memory only, per registration connection | Accept application connections from the paired host CA |
 
-`config.toml`, `tokens.json`, `credentials/<profile>`, and the private keys are written with user-only permissions on Unix. Treat any copy of them as a credential. A leaked operator secret can register any valid name; a leaked issued token can publish only its granted names.
+`config.toml`, `tokens.json`, `credentials/<profile>`, `control.json`, and private keys are written with user-only permissions on Unix. On Windows, private files are created with a protected ACL granting access only to the owner, SYSTEM, and Administrators, including temporary files used for atomic replacement. Reads verify ownership and ACLs before using credentials, control data, saved host trust, or keys. Unowned files, links, broader ACLs, and filesystems without verifiable ACLs are refused rather than silently repaired or adopted. Private writes also refuse shared or redirected parent directories whose ownership and access cannot be verified.
+
+Back up existing files and their ACLs before manual permission repair. Restricting an already exposed file does not revoke a copied secret or key: rotate compromised credentials and rebuild exposed PKI. Treat any copy as a credential. A leaked operator secret can register any valid name; a leaked issued token can publish only its granted names.
 
 The operator secret cannot be revoked individually. To rotate it, write a new value into `[host] secret` and restart the daemon. Leaves that were admitted with the old secret must be updated. Issued tokens remain valid.
 

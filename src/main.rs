@@ -271,12 +271,12 @@ struct Existing {
 	secret: Option<String>,
 }
 
-fn read_existing() -> Existing {
-	let Some(table) = testd_core::config::read_config_table() else {
-		return Existing::default();
+fn read_existing() -> anyhow::Result<Existing> {
+	let Some(table) = testd_core::config::read_config_table()? else {
+		return Ok(Existing::default());
 	};
 	let host = table.get("host");
-	Existing {
+	Ok(Existing {
 		caddy_config_path: host
 			.and_then(|h| h.get("caddy_config_path"))
 			.and_then(|v| v.as_str())
@@ -287,7 +287,7 @@ fn read_existing() -> Existing {
 			.and_then(|v| v.as_str())
 			.filter(|v| !v.is_empty())
 			.map(str::to_owned),
-	}
+	})
 }
 
 fn certificate_summary(pem: &str) -> String {
@@ -299,7 +299,7 @@ fn certificate_summary(pem: &str) -> String {
 async fn init(caddyfile: Option<String>, yes: bool, resolver_now: bool) -> anyhow::Result<()> {
 	use testd_core::config::write_config_update;
 
-	let existing = read_existing();
+	let existing = read_existing()?;
 	let has_config = testd_core::config::config_exists();
 
 	// Host init.
@@ -361,7 +361,7 @@ async fn init(caddyfile: Option<String>, yes: bool, resolver_now: bool) -> anyho
 
 	if !caddy_config_path.is_empty() {
 		let managed = testd_core::config::config_dir().join("Caddyfile");
-		let content = testd_daemon::edge::caddyfile(tld, http_addr_from_config());
+		let content = testd_daemon::edge::caddyfile(tld, http_addr_from_config()?);
 		if let Some(parent) = managed.parent() {
 			std::fs::create_dir_all(parent)?;
 		}
@@ -873,8 +873,8 @@ fn finish_doctor(checks: Vec<Check>, exit: i32, json: bool) -> anyhow::Result<i3
 }
 
 /// The configured plain HTTP routing address, or the default.
-fn http_addr_from_config() -> std::net::SocketAddr {
-	read_existing_table()
+fn http_addr_from_config() -> anyhow::Result<std::net::SocketAddr> {
+	Ok(testd_core::config::read_config_table()?
 		.and_then(|table| {
 			table
 				.get("host")
@@ -882,11 +882,7 @@ fn http_addr_from_config() -> std::net::SocketAddr {
 				.and_then(|value| value.as_str())
 				.and_then(|value| value.parse().ok())
 		})
-		.unwrap_or_else(testd_core::config::default_http_addr)
-}
-
-fn read_existing_table() -> Option<toml::Table> {
-	testd_core::config::read_config_table()
+		.unwrap_or_else(testd_core::config::default_http_addr))
 }
 
 /// Resolve the explicit node list for one run.

@@ -175,7 +175,7 @@ pub fn dashboard_url() -> io::Result<Option<String>> {
 }
 
 fn dashboard_url_at(path: &Path) -> io::Result<Option<String>> {
-	let data = match std::fs::read(path) {
+	let data = match testd_core::private_file::read(path) {
 		Ok(data) => data,
 		Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
 		Err(e) => return Err(e),
@@ -201,7 +201,7 @@ pub fn client_config() -> Result<ClientConfig, String> {
 }
 
 fn client_config_at(path: &Path) -> Result<ClientConfig, String> {
-	let data = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+	let data = testd_core::private_file::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
 	let control: ControlFile = serde_json::from_slice(&data).map_err(|e| format!("parse {}: {e}", path.display()))?;
 	let host = control
 		.client_addr
@@ -327,7 +327,7 @@ fn revoke_token_at(path: &Path, id: &str) -> io::Result<Dispatch> {
 
 /// One request and one response over loopback. `None` means no daemon answered.
 fn with_control(path: &Path, build: impl FnOnce(String) -> Request) -> io::Result<Option<Response>> {
-	let data = match std::fs::read(path) {
+	let data = match testd_core::private_file::read(path) {
 		Ok(data) => data,
 		Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
 		Err(e) => return Err(e),

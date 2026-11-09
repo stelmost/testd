@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod naming;
+pub mod private_file;
 pub mod protocol;
 pub mod validate;
 

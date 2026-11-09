@@ -162,7 +162,7 @@ impl Access {
 
 	/// Load issued tokens from `path`. A missing file is an empty store.
 	pub fn load(path: PathBuf) -> io::Result<Self> {
-		let state = match std::fs::read(&path) {
+		let state = match testd_core::private_file::read(&path) {
 			Ok(data) => {
 				let file: TokenFile = serde_json::from_slice(&data)
 					.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}: {e}", path.display())))?;

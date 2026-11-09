@@ -4269,6 +4269,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml 1.1.8+spec-1.1.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4331,6 +4332,7 @@ dependencies = [
  "serde",
  "sha2",
  "tempfile",
+ "testd-core",
  "time",
  "x509-parser",
 ]

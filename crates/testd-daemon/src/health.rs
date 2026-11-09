@@ -161,10 +161,11 @@ pub fn set_auto_trust(pki_dir: &Path, allowed: bool) -> io::Result<()> {
 
 	std::fs::create_dir_all(pki_dir)?;
 	// Never truncate an existing path: it may be a link or a changed file.
-	match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+	match testd_core::private_file::create_new(&path) {
 		Ok(mut file) => {
 			use std::io::Write;
-			file.write_all(AUTO_TRUST_DISABLED_CONTENT)
+			file.write_all(AUTO_TRUST_DISABLED_CONTENT)?;
+			file.sync_all()
 		},
 		Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
 			if valid_trust_marker_exists(&path)? {
@@ -199,7 +200,7 @@ fn valid_trust_marker_exists(path: &Path) -> io::Result<bool> {
 			return Err(trust_marker_conflict(path));
 		}
 	}
-	let file = std::fs::File::open(path)?;
+	let file = testd_core::private_file::open(path)?;
 	#[cfg(unix)]
 	{
 		use std::os::unix::fs::MetadataExt;

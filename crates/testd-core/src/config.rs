@@ -383,6 +383,18 @@ mod tests {
 	}
 
 	#[test]
+	fn missing_config_is_distinct_from_unreadable_or_malformed_config() {
+		let directory = tempfile::tempdir().unwrap();
+		let path = directory.path().join("config.toml");
+		assert!(read_config_table_at(path.clone()).unwrap().is_none());
+		write_private(&path, b"[host]\nsecret = 'fixture'\n").unwrap();
+		assert_eq!(read_config_table_at(path.clone()).unwrap().unwrap()["host"]["secret"].as_str(), Some("fixture"));
+		write_private(&path, b"invalid = [").unwrap();
+		assert!(matches!(read_config_table_at(path), Err(ConfigError::Parse(_, _))));
+		assert!(matches!(read_config_table_at(directory.path().to_owned()), Err(ConfigError::Io(_, _))));
+	}
+
+	#[test]
 	fn config_template_escapes_windows_paths() {
 		let caddyfile = r"C:\Users\me\AppData\Roaming\caddy\Caddyfile";
 		let rendered = render_config(caddyfile, Some("s3cret"));
@@ -417,7 +429,7 @@ pub fn write_config_update(caddy_config_path: &str, secret: Option<&str>) -> io:
 	if !path.exists() {
 		return write_config_force(caddy_config_path, secret);
 	}
-	let text = std::fs::read_to_string(&path)?;
+	let text = crate::private_file::read_to_string(&path)?;
 	let table: toml::Table = toml::from_str(&text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 	let host = table.get("host").and_then(|host| host.as_table());
 	let caddy_same = host
@@ -481,7 +493,7 @@ pub fn find_project_config_path() -> Option<PathBuf> {
 /// Load leaf node profiles. A missing file is an empty config.
 pub fn load_leaf_config() -> Result<LeafConfig, ConfigError> {
 	let path = leaf_path();
-	let content = match std::fs::read_to_string(&path) {
+	let content = match crate::private_file::read_to_string(&path) {
 		Ok(content) => content,
 		Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(LeafConfig::default()),
 		Err(e) => return Err(ConfigError::Io(path, e)),
@@ -501,7 +513,7 @@ pub fn load_project_config() -> Result<Option<ProjectConfig>, ConfigError> {
 pub fn read_credential(profile: &str) -> Result<Option<String>, ConfigError> {
 	validate_profile_name(profile)?;
 	let path = credential_path(profile);
-	let token = match std::fs::read_to_string(&path) {
+	let token = match crate::private_file::read_to_string(&path) {
 		Ok(token) => token.trim().to_owned(),
 		Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
 		Err(e) => return Err(ConfigError::Io(path, e)),
@@ -556,7 +568,7 @@ fn write_private_with(path: &Path, write: impl FnOnce(&mut std::fs::File) -> io:
 		Ok(metadata) if !metadata.is_file() => {
 			return Err(io::Error::new(io::ErrorKind::InvalidInput, "private file must be a regular file"));
 		},
-		Ok(_) => {},
+		Ok(_) => crate::private_file::validate_existing(path)?,
 		Err(error) if error.kind() == io::ErrorKind::NotFound => {},
 		Err(error) => return Err(error),
 	}
@@ -564,7 +576,7 @@ fn write_private_with(path: &Path, write: impl FnOnce(&mut std::fs::File) -> io:
 		.parent()
 		.filter(|parent| !parent.as_os_str().is_empty())
 		.unwrap_or(Path::new("."));
-	let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+	let mut temporary = crate::private_file::temporary_in(parent)?;
 	#[cfg(unix)]
 	{
 		use std::os::unix::fs::PermissionsExt;
@@ -578,15 +590,25 @@ fn write_private_with(path: &Path, write: impl FnOnce(&mut std::fs::File) -> io:
 	Ok(())
 }
 
-/// Read the raw config table, if the file exists and parses.
-pub fn read_config_table() -> Option<toml::Table> {
-	let content = std::fs::read_to_string(config_path()).ok()?;
-	toml::from_str(&content).ok()
+/** Read the raw config table. A missing file is not an error. */
+pub fn read_config_table() -> Result<Option<toml::Table>, ConfigError> {
+	read_config_table_at(config_path())
 }
 
-/// The operator secret from the host config, when one is set.
-pub fn read_operator_secret() -> Option<String> {
-	table_operator_secret(&read_config_table()?)
+fn read_config_table_at(path: PathBuf) -> Result<Option<toml::Table>, ConfigError> {
+	let content = match crate::private_file::read_to_string(&path) {
+		Ok(content) => content,
+		Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+		Err(error) => return Err(ConfigError::Io(path, error)),
+	};
+	toml::from_str(&content)
+		.map(Some)
+		.map_err(|error| ConfigError::Parse(path, error))
+}
+
+/** The operator secret from the host config, when one is set. */
+pub fn read_operator_secret() -> Result<Option<String>, ConfigError> {
+	Ok(read_config_table()?.as_ref().and_then(table_operator_secret))
 }
 
 fn table_operator_secret(table: &toml::Table) -> Option<String> {
@@ -605,7 +627,7 @@ pub fn generate_operator_secret() -> io::Result<String> {
 /// Write the operator secret into an existing host config, preserving other keys.
 pub fn write_operator_secret(secret: &str) -> io::Result<()> {
 	let path = config_path();
-	let text = std::fs::read_to_string(&path)?;
+	let text = crate::private_file::read_to_string(&path)?;
 	let mut table: toml::Table = toml::from_str(&text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 	let host = table.entry("host").or_insert_with(|| toml::Value::Table(toml::Table::new()));
 	let toml::Value::Table(host) = host else {
@@ -642,7 +664,7 @@ pub fn has_pending_config() -> bool {
 /// Read the pending init state, if any.
 pub fn read_pending_config() -> io::Result<PendingConfig> {
 	let path = pending_config_path();
-	let content = std::fs::read_to_string(&path)?;
+	let content = crate::private_file::read_to_string(&path)?;
 	let table: toml::Table = toml::from_str(&content).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
 	let init = table
@@ -728,9 +750,10 @@ pub fn load_client_config(
 	let token = match std::env::var("TESTD_TOKEN").ok().filter(|value| !value.is_empty()) {
 		Some(token) => token,
 		// No credential is not an error: the client asks the host for a token.
-		None => read_credential(&token_profile)?
-			.or_else(|| node_operator_secret(&token_profile, &hosts))
-			.unwrap_or_default(),
+		None => match read_credential(&token_profile)? {
+			Some(token) => token,
+			None => node_operator_secret(&token_profile, &hosts)?.unwrap_or_default(),
+		},
 	};
 
 	Ok(ClientConfig { token, token_profile, hosts, node_profile })
@@ -745,9 +768,12 @@ fn local_host_addr() -> Vec<String> {
 }
 
 /// The operator secret in the host config is a credential on the node itself.
-fn node_operator_secret(token_profile: &str, hosts: &[String]) -> Option<String> {
-	let secret = load_host_config().ok()?.secret;
-	credential_from_node(token_profile, hosts, &secret)
+fn node_operator_secret(token_profile: &str, hosts: &[String]) -> Result<Option<String>, ConfigError> {
+	match load_host_config() {
+		Ok(config) => Ok(credential_from_node(token_profile, hosts, &config.secret)),
+		Err(ConfigError::NotFound(_) | ConfigError::MissingSection(_)) => Ok(None),
+		Err(error) => Err(error),
+	}
 }
 
 /// Offer the node's own secret only to the default profile and only for
@@ -803,7 +829,13 @@ pub fn validate_host_addr(value: &str) -> Result<(), ConfigError> {
 /// Read the host config file and extract the named section.
 fn load_config<T: serde::de::DeserializeOwned>(section: &str) -> Result<T, ConfigError> {
 	let path = config_dir().join("config.toml");
-	let content = std::fs::read_to_string(&path).map_err(|_| ConfigError::NotFound(path.clone()))?;
+	let content = crate::private_file::read_to_string(&path).map_err(|error| {
+		if error.kind() == io::ErrorKind::NotFound {
+			ConfigError::NotFound(path.clone())
+		} else {
+			ConfigError::Io(path.clone(), error)
+		}
+	})?;
 	let table: toml::Table = toml::from_str(&content).map_err(|e| ConfigError::Parse(path.clone(), e))?;
 
 	let section_value = table.get(section).ok_or(ConfigError::MissingSection(section.to_string()))?;

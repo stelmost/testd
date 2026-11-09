@@ -26,6 +26,7 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 - macOS resolver setup leaves conflicting files untouched, tray startup failures show recovery instructions, and setup repair buttons keep their labels
 - Name-grant deletion and registration share a lock, preventing a waiting registration from restoring withdrawn access
 - Private state is replaced atomically; failed quick-launch edits preserve live definitions, and unreadable launch files stop startup rather than being overwritten
+- Windows credentials, control data, and PKI keys use protected owner-scoped ACLs from creation; unsafe existing files and unverifiable parents are refused before use
 - macOS certificate actions preserve other installations' roots, and Windows resolver setup refuses conflicting unowned rules
 - Failed startup releases background listeners, and the setup dialog accepts another attempt after a start failure
 - Wrapped CLI commands stop their process trees; quick launches keep Stop responsive during rebinding and stalled host requests

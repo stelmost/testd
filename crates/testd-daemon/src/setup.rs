@@ -246,7 +246,21 @@ async fn handle_secret(writer: &mut (impl AsyncWriteExt + Unpin), body: &[u8]) -
 			Err(e) => return respond_json(writer, "400 Bad Request", &serde_json::json!({ "error": e })).await,
 		}
 	} else if request.regenerate || pending.secret.is_empty() {
-		let existing = if request.regenerate { None } else { read_operator_secret() };
+		let existing = if request.regenerate {
+			None
+		} else {
+			match read_operator_secret() {
+				Ok(secret) => secret,
+				Err(error) => {
+					return respond_json(
+						writer,
+						"500 Internal Server Error",
+						&serde_json::json!({ "error": error.to_string() }),
+					)
+					.await;
+				},
+			}
+		};
 		pending.secret = match existing {
 			Some(secret) => secret,
 			None => match generate_operator_secret() {

@@ -50,7 +50,7 @@ impl Ca {
 		let node_key_path = dir.join("node.key");
 
 		let (root_cert_pem, root_issuer) = if root_cert_path.exists() {
-			let cert = std::fs::read_to_string(&root_cert_path).context("read root certificate")?;
+			let cert = testd_core::private_file::read_to_string(&root_cert_path).context("read root certificate")?;
 			// The root key may have been moved into an offline seed; serving does not need it.
 			let issuer = match read_private(&root_key_path) {
 				Ok(key) => {
@@ -76,7 +76,7 @@ impl Ca {
 		};
 
 		let (node_cert_pem, node_issuer) = if node_cert_path.exists() && node_key_path.exists() {
-			let cert = std::fs::read_to_string(&node_cert_path).context("read node certificate")?;
+			let cert = testd_core::private_file::read_to_string(&node_cert_path).context("read node certificate")?;
 			let key = read_private(&node_key_path).context("read node key")?;
 			let key = KeyPair::from_pem(&key).context("parse node key")?;
 			let issuer = Issuer::from_ca_cert_pem(&cert, key).context("load node issuer")?;
@@ -243,7 +243,8 @@ pub fn check_validity(dir: &Path) -> Result<()> {
 	let minimum = time::OffsetDateTime::now_utc().unix_timestamp() + LEAF_LIFETIME_HOURS * 3600;
 	for name in ["root.crt", "node.crt"] {
 		let path = dir.join(name);
-		let pem = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+		let pem =
+			testd_core::private_file::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
 		anyhow::ensure!(
 			certificate_expiry(&pem)? > minimum,
 			"{} is expired or expiring; run testd doctor --fix and restart the daemon; restore root.key if needed",
@@ -267,7 +268,7 @@ fn backup_files(dir: &Path, names: &[&str]) -> Result<()> {
 	for name in names {
 		let path = dir.join(name);
 		if path.exists() {
-			write_private(&backup.join(name), &std::fs::read(path)?)?;
+			write_private(&backup.join(name), &testd_core::private_file::read(&path)?)?;
 		}
 	}
 	Ok(())
@@ -353,16 +354,21 @@ fn hex(bytes: &[u8]) -> String {
 	bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Read a key only after restricting access to it on Unix.
+/** Validate Windows ACLs before reading; preserve Unix's existing permission repair. */
 fn read_private(path: &Path) -> std::io::Result<String> {
-	use std::io::Read;
+	#[cfg(windows)]
+	return testd_core::private_file::read_to_string(path);
+	#[cfg(not(windows))]
+	{
+		use std::io::Read;
 
-	let mut file = std::fs::File::open(path)?;
-	#[cfg(unix)]
-	restrict_file_permissions(path, &file)?;
-	let mut content = String::new();
-	file.read_to_string(&mut content)?;
-	Ok(content)
+		let mut file = std::fs::File::open(path)?;
+		#[cfg(unix)]
+		restrict_file_permissions(path, &file)?;
+		let mut content = String::new();
+		file.read_to_string(&mut content)?;
+		Ok(content)
+	}
 }
 
 #[cfg(unix)]
@@ -390,7 +396,7 @@ fn restrict_file_permissions(path: &Path, file: &std::fs::File) -> std::io::Resu
 	file.set_permissions(permissions)
 }
 
-/// Write a secret file readable only by the current user.
+/** Protect private files before writing any key material. */
 fn write_private(path: &Path, content: &[u8]) -> Result<()> {
 	#[cfg(unix)]
 	{
@@ -409,9 +415,7 @@ fn write_private(path: &Path, content: &[u8]) -> Result<()> {
 		file.sync_all()?;
 	}
 	#[cfg(not(unix))]
-	{
-		std::fs::write(path, content)?;
-	}
+	testd_core::config::write_private(path, content).with_context(|| format!("write {}", path.display()))?;
 	Ok(())
 }
 

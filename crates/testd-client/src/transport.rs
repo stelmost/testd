@@ -132,7 +132,7 @@ fn read_root(host: &str) -> io::Result<Option<Vec<u8>>> {
 	if !metadata.is_file() || metadata.len() > protocol::MAX_FRAME_BYTES as u64 {
 		return Err(io::Error::new(io::ErrorKind::InvalidData, "host trust must be a regular CA certificate file"));
 	}
-	std::fs::read(path).map(Some)
+	testd_core::private_file::read(&path).map(Some)
 }
 
 /// First-contact TLS session. A successful host response alone never authorizes pinning its identity.
