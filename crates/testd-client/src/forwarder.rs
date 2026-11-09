@@ -230,9 +230,20 @@ mod tests {
 		})
 		.await
 		.expect("provisional forwarder was not cancelled");
-		let _released = TcpListener::bind(&target)
-			.await
-			.expect("provisional listener still holds its port");
+		/* The OS can release the cancelled listener slightly after the task finishes. */
+		let _released = tokio::time::timeout(Duration::from_secs(2), async {
+			loop {
+				match TcpListener::bind(&target).await {
+					Ok(listener) => break listener,
+					Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
+						tokio::time::sleep(Duration::from_millis(10)).await;
+					},
+					Err(error) => panic!("could not check the provisional listener: {error}"),
+				}
+			}
+		})
+		.await
+		.expect("provisional listener still holds its port");
 		assert!(TcpStream::connect(previous).await.is_ok());
 	}
 
