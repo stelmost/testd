@@ -27,7 +27,7 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 - macOS resolver setup leaves conflicting files untouched, tray startup failures show recovery instructions, and setup repair buttons keep their labels
 - Name-grant deletion and registration share a lock, preventing a waiting registration from restoring withdrawn access
 - Private state is replaced atomically; failed quick-launch edits preserve live definitions, and unreadable launch files stop startup rather than being overwritten
-- Windows credentials, control data, and PKI keys use protected owner-scoped ACLs from creation; unsafe existing files and unverifiable parents are refused before use
+- Windows credentials, control data, and PKI keys use protected owner-scoped ACLs from creation; owner-rights entries are accepted only for verified owners, while unsafe existing files and unverifiable parents are refused before use
 - Windows resolver and root removal require unchanged administrator-owned records; CLI uninstall remains blocked pending native validation
 - Windows elevation uses the system PowerShell and verifies a single in-memory helper-source snapshot before execution without exceeding the native command-line limit; helper and certificate staging files close before the elevated process reads them
 - macOS certificate actions preserve other installations' roots, and Windows resolver setup refuses conflicting unowned rules

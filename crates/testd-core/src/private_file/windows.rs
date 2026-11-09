@@ -16,7 +16,7 @@ use windows_sys::Win32::Security::Authorization::{
 use windows_sys::Win32::Security::{
 	ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetTokenInformation,
 	INHERIT_ONLY_ACE, IsValidAcl, IsValidSid, IsWellKnownSid, OWNER_SECURITY_INFORMATION, PSID, SECURITY_ATTRIBUTES,
-	TOKEN_QUERY, TOKEN_USER, TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid,
+	TOKEN_QUERY, TOKEN_USER, TokenUser, WinBuiltinAdministratorsSid, WinCreatorOwnerRightsSid, WinLocalSystemSid,
 };
 use windows_sys::Win32::Storage::FileSystem::{
 	BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
@@ -302,6 +302,9 @@ impl Security {
 	}
 
 	fn untrusted_access(&self, user: &User) -> io::Result<u32> {
+		if !trusted_sid(self.owner, user) {
+			return Err(denied("private object belongs to an untrusted owner"));
+		}
 		let mut access = 0;
 		/* SAFETY: Security retains the valid descriptor and GetAce checks every index. */
 		for index in 0..unsafe { (*self.acl).AceCount } as u32 {
@@ -318,7 +321,8 @@ impl Security {
 				ACCESS_ALLOWED_ACE_TYPE => {
 					let allowed = unsafe { &*ace.cast::<ACCESS_ALLOWED_ACE>() };
 					let sid = addr_of!(allowed.SidStart).cast_mut().cast();
-					if !trusted_sid(sid, user) {
+					/* OWNER RIGHTS resolves to the already verified owner, not to an arbitrary user. */
+					if !trusted_sid(sid, user) && unsafe { IsWellKnownSid(sid, WinCreatorOwnerRightsSid) } == 0 {
 						access |= allowed.Mask;
 					}
 				},
@@ -348,13 +352,12 @@ mod tests {
 	use super::*;
 	use windows_sys::Win32::Security::Authorization::SetNamedSecurityInfoW;
 	use windows_sys::Win32::Security::{
-		GetSecurityDescriptorControl, GetSecurityDescriptorDacl, PROTECTED_DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED,
+		GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
+		PROTECTED_DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED,
 	};
 
-	fn grant_everyone(path: &Path, rights: &str) {
-		let user = User::current().unwrap().text().unwrap();
-		let descriptor =
-			parse_descriptor(&format!("D:P(A;;FA;;;{user})(A;;FA;;;SY)(A;;FA;;;BA)(A;OICI;{rights};;;WD)")).unwrap();
+	fn set_acl(path: &Path, sddl: &str) {
+		let descriptor = parse_descriptor(sddl).unwrap();
 		let mut present = 0;
 		let mut defaulted = 0;
 		let mut acl = null_mut();
@@ -375,6 +378,44 @@ mod tests {
 				)
 			},
 			0
+		);
+	}
+
+	fn grant_everyone(path: &Path, rights: &str) {
+		let user = User::current().unwrap().text().unwrap();
+		set_acl(path, &format!("D:P(A;;FA;;;{user})(A;;FA;;;SY)(A;;FA;;;BA)(A;OICI;{rights};;;WD)"));
+	}
+
+	#[test]
+	fn owner_rights_acl_allows_only_a_verified_owner() {
+		let directory = tempfile::tempdir().unwrap();
+		let python_acl = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)";
+		set_acl(directory.path(), python_acl);
+		let nested = directory.path().join("created-inside-private-report");
+		std::fs::create_dir(&nested).unwrap();
+		let path = nested.join("credential");
+		crate::config::write_private(&path, b"fixture-token").unwrap();
+		assert_eq!(crate::private_file::read(&path).unwrap(), b"fixture-token");
+
+		let broad_acl = format!("{python_acl}(A;OICI;FA;;;WD)");
+		set_acl(&nested, &broad_acl);
+		assert_eq!(create_new(&nested.join("other")).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+	}
+
+	#[test]
+	fn owner_rights_never_make_an_untrusted_owner_safe() {
+		let descriptor = parse_descriptor("O:WDD:P(A;;FA;;;OW)").unwrap();
+		let mut owner = null_mut();
+		let mut acl = null_mut();
+		let mut present = 0;
+		let mut defaulted = 0;
+		/* SAFETY: the live descriptor owns the returned SID and ACL pointers. */
+		assert_ne!(unsafe { GetSecurityDescriptorOwner(descriptor.0, &mut owner, &mut defaulted) }, 0);
+		assert_ne!(unsafe { GetSecurityDescriptorDacl(descriptor.0, &mut present, &mut acl, &mut defaulted) }, 0);
+		let security = Security { _allocation: descriptor, owner, acl };
+		assert_eq!(
+			security.untrusted_access(&User::current().unwrap()).unwrap_err().kind(),
+			io::ErrorKind::PermissionDenied
 		);
 	}
 
