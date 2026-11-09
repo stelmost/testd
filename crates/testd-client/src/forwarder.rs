@@ -215,16 +215,25 @@ mod tests {
 			.await
 			.unwrap();
 		let Request::RegisterTls { target, .. } = replacement else { panic!("expected a TLS claim") };
+		let Some(Pending::Register { forwarder, .. }) = &forwarders.pending else {
+			panic!("missing provisional listener")
+		};
+		let task = forwarder.task.abort_handle();
+		assert!(!task.is_finished());
+		assert!(TcpListener::bind(&target).await.is_err(), "the provisional listener must reserve its port");
 		forwarders.finish(&Response::error("resolver update failed"));
 		assert_eq!(forwarders.active["app"].address, previous);
-		assert!(TcpStream::connect(previous).await.is_ok());
 		tokio::time::timeout(Duration::from_secs(2), async {
-			while TcpStream::connect(&target).await.is_ok() {
-				tokio::time::sleep(Duration::from_millis(10)).await;
+			while !task.is_finished() {
+				tokio::task::yield_now().await;
 			}
 		})
 		.await
-		.unwrap();
+		.expect("provisional forwarder was not cancelled");
+		let _released = TcpListener::bind(&target)
+			.await
+			.expect("provisional listener still holds its port");
+		assert!(TcpStream::connect(previous).await.is_ok());
 	}
 
 	#[tokio::test]
