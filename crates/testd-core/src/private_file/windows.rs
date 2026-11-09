@@ -115,7 +115,7 @@ fn parse_descriptor(sddl: &str) -> io::Result<LocalAllocation> {
 	Ok(LocalAllocation(descriptor))
 }
 
-fn path_wide(path: &Path) -> io::Result<Vec<u16>> {
+pub(super) fn path_wide(path: &Path) -> io::Result<Vec<u16>> {
 	let absolute = std::path::absolute(path)?;
 	let path: Vec<u16> = absolute.as_os_str().encode_wide().collect();
 	if path.contains(&0) {
@@ -431,6 +431,29 @@ mod tests {
 		assert_ne!(control & SE_DACL_PROTECTED, 0);
 		validate_file(temporary.as_file(), &User::current().unwrap()).unwrap();
 		assert!(crate::private_file::read(temporary.path()).unwrap().is_empty());
+	}
+
+	#[test]
+	fn atomic_private_writes_support_long_staging_and_destination_paths() {
+		let root = tempfile::tempdir().unwrap();
+		let length = root.path().as_os_str().encode_wide().count();
+		let directory = root.path().join("d".repeat(220usize.saturating_sub(length + 1).max(1)));
+		std::fs::create_dir(&directory).unwrap();
+		let staging_length = directory.as_os_str().encode_wide().count()
+			+ 1 + ".testd-private-".len()
+			+ crate::config::generate_operator_secret().unwrap().len();
+		assert!(staging_length >= 260);
+		let short = directory.join("issued");
+		let long = directory.join("s".repeat(70));
+		assert!(long.as_os_str().encode_wide().count() >= 260);
+
+		for path in [&short, &long] {
+			crate::config::write_private(path, b"first").unwrap();
+			assert_eq!(crate::private_file::read(path).unwrap(), b"first");
+			crate::config::write_private(path, b"replacement").unwrap();
+			assert_eq!(crate::private_file::read(path).unwrap(), b"replacement");
+		}
+		assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 2);
 	}
 
 	#[test]

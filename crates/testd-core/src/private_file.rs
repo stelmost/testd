@@ -85,6 +85,14 @@ pub fn temporary_in(directory: &Path) -> io::Result<tempfile::NamedTempFile> {
 	tempfile::NamedTempFile::new_in(directory)
 }
 
+#[cfg(windows)]
+pub(crate) fn verbatim_path(path: &Path) -> io::Result<std::path::PathBuf> {
+	use std::os::windows::ffi::OsStringExt;
+
+	let wide = windows::path_wide(path)?;
+	Ok(std::ffi::OsString::from_wide(&wide[..wide.len() - 1]).into())
+}
+
 pub(crate) fn validate_existing(path: &Path) -> io::Result<()> {
 	#[cfg(windows)]
 	drop(windows::open_private(path)?);

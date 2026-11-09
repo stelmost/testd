@@ -564,6 +564,9 @@ pub fn write_private(path: &Path, content: &[u8]) -> io::Result<()> {
 }
 
 fn write_private_with(path: &Path, write: impl FnOnce(&mut std::fs::File) -> io::Result<()>) -> io::Result<()> {
+	/* Tempfile's Windows persistence passes paths to Win32 without adding a long-path prefix. */
+	#[cfg(windows)]
+	let path = &crate::private_file::verbatim_path(path)?;
 	match std::fs::symlink_metadata(path) {
 		Ok(metadata) if !metadata.is_file() => {
 			return Err(io::Error::new(io::ErrorKind::InvalidInput, "private file must be a regular file"));
@@ -871,7 +874,7 @@ impl std::fmt::Display for ConfigError {
 			Self::InvalidProfile(value) => {
 				write!(f, "invalid profile {value:?}: use letters, digits, `.`, `-`, or `_`")
 			},
-			Self::Io(path, err) => write!(f, "failed to read {}: {err}", path.display()),
+			Self::Io(path, err) => write!(f, "failed to access {}: {err}", path.display()),
 			Self::Parse(path, err) => write!(f, "failed to parse {}: {err}", path.display()),
 		}
 	}
