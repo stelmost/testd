@@ -3171,6 +3171,7 @@ class PowerShellScriptTests(unittest.TestCase):
 		if not curl:
 			self.skipTest('curl is not installed')
 		script = state.powershell_quote(ROOT / 'tests/host/windows.ps1')
+		fixture = load('loopback_http_fixture', ROOT / 'tests/host/http-server.py')
 		with tempfile.TemporaryDirectory() as temporary:
 			if os.name != 'nt':
 				(pathlib.Path(temporary) / 'curl.exe').symlink_to(curl)
@@ -3186,7 +3187,7 @@ class PowerShellScriptTests(unittest.TestCase):
 							self.wfile.write(b'fixture-ok')
 						def log_message(self, *_):
 							pass
-					with http.server.HTTPServer(('127.0.0.1', 0), Handler) as server:
+					with fixture.LoopbackHTTPServer(('127.0.0.1', 0), Handler) as server:
 						server.timeout = 4
 						thread = threading.Thread(target=server.handle_request)
 						thread.start()
