@@ -233,8 +233,18 @@ class ReleaseTests(unittest.TestCase):
 	def test_windows_host_script_hands_curl_bodies_through_a_file(self):
 		"""PowerShell 5.1 breaks a native argument that holds spaces and quotes."""
 		script = (ROOT / 'tests/host/windows.ps1').read_text()
-		self.assertIn('--data-binary "@$bodyFile"', script)
+		self.assertIn('\'--data-binary\', "@$bodyFile"', script)
 		self.assertNotIn('--data $Body', script)
+
+	def test_dashboard_helpers_keep_owner_credentials_out_of_native_arguments(self):
+		windows = (ROOT / 'tests/host/windows.ps1').read_text()
+		unix = (ROOT / 'tests/host/lib.sh').read_text()
+		for script in (windows, unix):
+			self.assertIn('dashboard_token', script)
+			self.assertIn('curl', script)
+			self.assertIn('--config -', script)
+			self.assertNotIn('X-Testd-Token:', script)
+			self.assertNotIn('-H "Authorization:', script)
 
 	def test_windows_state_snapshot_does_not_remove_rules_or_roots(self):
 		script = (ROOT / 'tests/release/windows-system-state.ps1').read_text()
