@@ -1486,7 +1486,7 @@ fn untrust_root_windows(cert_pem: &str) -> io::Result<()> {
 	run_windows_helper("RemoveRoot", &[("Thumbprint", &sha1_hex(&der)), ("Fingerprint", &sha256_hex(&der))])
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[cfg(any(target_os = "windows", test))]
 fn sha256_hex(bytes: &[u8]) -> String {
 	use sha2::{Digest, Sha256};
 	Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
