@@ -1,4 +1,5 @@
 /target/
+/crates/testd-gui/target/
 .DS_Store
 /worktrees/
 # Web dependencies, output, and caches.

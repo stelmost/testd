@@ -30,7 +30,7 @@ gtk = '0.18'
 plist = '1'
 objc2 = '0.6'
 objc2-foundation = { version = '0.3', default-features = false, features = ['NSString', 'NSURL', 'NSThread'] }
-objc2-app-kit = { version = '0.3', default-features = false, features = ['NSAlert', 'NSWorkspace', 'NSApplication'] }
+objc2-app-kit = { version = '0.3', default-features = false, features = ['NSAlert', 'NSWorkspace', 'NSApplication', 'NSResponder'] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = '0.10'
