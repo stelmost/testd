@@ -475,6 +475,7 @@ async fn respond_with<W: AsyncWriteExt + Unpin>(
 	let mut header = format!(
 		"HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\
 		 X-Frame-Options: DENY\r\nX-Content-Type-Options: nosniff\r\n\
+		 Cache-Control: no-store\r\nReferrer-Policy: no-referrer\r\n\
 		 Content-Security-Policy: frame-ancestors 'none'\r\n",
 		body.len()
 	);

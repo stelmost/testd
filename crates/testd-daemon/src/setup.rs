@@ -1,9 +1,8 @@
-//! First-run setup, served to the GUI dialog on an ephemeral loopback port.
+//! First-run setup on an ephemeral loopback port.
 //!
 //! This is deliberately not part of the dashboard: without a config there is no
 //! dashboard, and the setup surface must not be reachable at the dashboard name.
-//! The Tauri app starts it, opens its URL, and starts the daemon once the page
-//! asks to finish.
+//! The tray opens its page and starts the daemon once the page asks to finish.
 
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -49,16 +48,38 @@ impl Setup {
 	pub fn wait(&mut self) -> Option<tokio::sync::oneshot::Sender<Result<String, String>>> {
 		self.finish.blocking_recv().map(|request| request.reply)
 	}
+
+	/// Wait for completion without blocking a runtime thread.
+	pub async fn next_finish(&mut self) -> Option<tokio::sync::oneshot::Sender<Result<String, String>>> {
+		self.finish.recv().await.map(|request| request.reply)
+	}
 }
 
 struct FinishRequest {
 	reply: tokio::sync::oneshot::Sender<Result<String, String>>,
 }
 
+#[derive(PartialEq, Eq)]
+enum FinishState {
+	Editing,
+	Complete,
+}
+
 struct State {
 	token: String,
 	stop: tokio::sync::watch::Sender<bool>,
 	finish: tokio::sync::mpsc::UnboundedSender<FinishRequest>,
+	finish_state: tokio::sync::Mutex<FinishState>,
+}
+
+impl State {
+	fn begin_finish(&self) -> Result<tokio::sync::MutexGuard<'_, FinishState>, &'static str> {
+		let state = self.finish_state.try_lock().map_err(|_| "setup is already starting testd")?;
+		if *state == FinishState::Complete {
+			return Err("setup has already completed; open the dashboard from the tray");
+		}
+		Ok(state)
+	}
 }
 
 /// Bind the setup listener on an ephemeral loopback port and start serving.
@@ -72,7 +93,7 @@ pub fn start(rt: &tokio::runtime::Handle) -> io::Result<Setup> {
 	let (stop, stop_rx) = tokio::sync::watch::channel(false);
 	let token = testd_core::config::generate_operator_secret()?;
 	let url = format!("http://{addr}/#token={token}");
-	let state = Arc::new(State { token, stop, finish });
+	let state = Arc::new(State { token, stop, finish, finish_state: tokio::sync::Mutex::new(FinishState::Editing) });
 	let task = crate::task::BackgroundTask(rt.spawn(serve(listener, state, stop_rx)));
 	Ok(Setup { url, addr, finish: finish_rx, _task: task })
 }
@@ -298,6 +319,10 @@ struct FinishBody {
 }
 
 async fn handle_finish(writer: &mut (impl AsyncWriteExt + Unpin), state: &State, body: &[u8]) -> io::Result<()> {
+	let mut finish_state = match state.begin_finish() {
+		Ok(guard) => guard,
+		Err(error) => return respond_json(writer, "409 Conflict", &serde_json::json!({ "error": error })).await,
+	};
 	let request: FinishBody = serde_json::from_slice(body).unwrap_or(FinishBody { secret: String::new() });
 	let secret = match validate_operator_secret(&request.secret) {
 		Ok(secret) => secret,
@@ -334,13 +359,17 @@ async fn handle_finish(writer: &mut (impl AsyncWriteExt + Unpin), state: &State,
 
 	match reply_rx.await {
 		Ok(Ok(url)) => {
-			respond_json(writer, "200 OK", &serde_json::json!({ "url": url })).await?;
+			*finish_state = FinishState::Complete;
+			let response = respond_json(writer, "200 OK", &serde_json::json!({ "url": url })).await;
 			let _ = state.stop.send(true);
-			Ok(())
+			response
 		},
-		Ok(Err(e)) => {
-			rollback_config(&secret);
-			respond_json(writer, "500 Internal Server Error", &serde_json::json!({ "error": e })).await
+		Ok(Err(error)) => {
+			let error = match rollback_config(&secret) {
+				Ok(()) => error,
+				Err(recovery) => format!("{error}; setup recovery is incomplete: {recovery}"),
+			};
+			respond_json(writer, "500 Internal Server Error", &serde_json::json!({ "error": error })).await
 		},
 		Err(_) => {
 			respond_json(writer, "503 Service Unavailable", &serde_json::json!({ "error": "the setup dialog is gone" }))
@@ -351,19 +380,30 @@ async fn handle_finish(writer: &mut (impl AsyncWriteExt + Unpin), state: &State,
 
 /// A config that the daemon cannot start with would strand the next launch in a
 /// failed start. Move it aside and keep the setup state, so a restart resumes.
-fn rollback_config(secret: &str) {
-	let config = testd_core::config::config_path();
-	if config.exists() {
-		let backup = config.with_file_name("config.toml.failed");
-		let _ = std::fs::remove_file(&backup);
-		if let Err(e) = std::fs::rename(&config, &backup) {
-			eprintln!("[warn]   could not move {} aside: {e}", config.display());
-		}
-	}
+fn rollback_config(secret: &str) -> Result<(), String> {
+	let backup = backup_failed_config(&testd_core::config::config_path());
 	let pending = PendingConfig { step: 2, caddy_config_path: String::new(), secret: secret.to_owned() };
-	if let Err(e) = write_pending_config(&pending) {
-		eprintln!("[warn]   could not restore the pending setup: {e}");
+	let pending = write_pending_config(&pending);
+	match (backup, pending) {
+		(Ok(()), Ok(())) => Ok(()),
+		(Err(error), Ok(())) => Err(format!("cannot retain failed config: {error}")),
+		(Ok(()), Err(error)) => Err(format!("cannot restore pending setup: {error}")),
+		(Err(backup), Err(pending)) => Err(format!("cannot retain failed config: {backup}; pending setup: {pending}")),
 	}
+}
+
+fn backup_failed_config(config: &Path) -> io::Result<()> {
+	let data = match testd_core::private_file::read(config) {
+		Ok(data) => data,
+		Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+		Err(error) => return Err(error),
+	};
+	let name = format!("config.toml.failed-{}", generate_operator_secret()?);
+	let backup = config.with_file_name(name);
+	let mut file = testd_core::private_file::create_new(&backup)?;
+	std::io::Write::write_all(&mut file, &data)?;
+	file.sync_all()?;
+	std::fs::remove_file(config)
 }
 
 fn pki_dir() -> std::path::PathBuf {
@@ -509,6 +549,45 @@ mod tests {
 		let unauthorized = "POST /api/setup/secret HTTP/1.1\r\nHost: 127.0.0.1\r\n\
 			X-Testd-Request: 1\r\nContent-Length: 2\r\n\r\n{}";
 		assert!(http(second.addr, unauthorized).await.starts_with("HTTP/1.1 401"));
+	}
+
+	#[tokio::test]
+	async fn concurrent_or_completed_finishes_cannot_change_configuration() {
+		let (stop, _) = tokio::sync::watch::channel(false);
+		let (finish, _) = tokio::sync::mpsc::unbounded_channel();
+		let state = State {
+			token: "fixture".into(),
+			stop,
+			finish,
+			finish_state: tokio::sync::Mutex::new(FinishState::Editing),
+		};
+		let mut guard = state.begin_finish().unwrap();
+		let mut response = Vec::new();
+		handle_finish(&mut response, &state, b"{}").await.unwrap();
+		assert!(response.starts_with(b"HTTP/1.1 409"));
+		*guard = FinishState::Complete;
+		drop(guard);
+		assert!(state.begin_finish().is_err());
+		*state.finish_state.lock().await = FinishState::Editing;
+		assert!(state.begin_finish().is_ok());
+	}
+
+	#[test]
+	fn failed_config_backups_never_replace_previous_recovery_data() {
+		let directory = tempfile::tempdir().unwrap();
+		let config = directory.path().join("config.toml");
+		let previous = directory.path().join("config.toml.failed");
+		testd_core::config::write_private(&config, b"new failed config").unwrap();
+		std::fs::write(&previous, b"old recovery data").unwrap();
+		backup_failed_config(&config).unwrap();
+		assert!(!config.exists());
+		assert_eq!(std::fs::read(previous).unwrap(), b"old recovery data");
+		let backup = std::fs::read_dir(directory.path())
+			.unwrap()
+			.map(|entry| entry.unwrap().path())
+			.find(|path| path.file_name().unwrap().to_string_lossy().starts_with("config.toml.failed-"))
+			.unwrap();
+		assert_eq!(testd_core::private_file::read(&backup).unwrap(), b"new failed config");
 	}
 
 	#[tokio::test]
