@@ -1,0 +1,27 @@
+#include <windows.h>
+
+1 ICON "icons/icon.ico"
+1 24 "app.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION TESTD_FILE_VERSION
+PRODUCTVERSION TESTD_FILE_VERSION
+BEGIN
+	BLOCK "StringFileInfo"
+	BEGIN
+		BLOCK "040904b0"
+		BEGIN
+			VALUE "CompanyName", "testd"
+			VALUE "FileDescription", "Testd native tray"
+			VALUE "FileVersion", TESTD_VERSION_STRING
+			VALUE "ProductVersion", TESTD_VERSION_STRING
+			VALUE "ProductName", "Testd"
+			VALUE "InternalName", "testd-gui"
+			VALUE "OriginalFilename", "testd-gui.exe"
+		END
+	END
+	BLOCK "VarFileInfo"
+	BEGIN
+		VALUE "Translation", 0x0409, 1200
+	END
+END

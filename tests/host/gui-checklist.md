@@ -18,12 +18,12 @@ Answer each item `p`, `f`, `n`, or `q`. Give a reason for every failure or inapp
 
 ## First run and setup
 
-- [ ] GUI-01: On a fresh user, launch the candidate. One setup dialog opens on an ephemeral loopback address, not the normal intake port or `testd.test`.
+- [ ] GUI-01: On a fresh user, launch the candidate. One setup tab opens in the default HTTP browser on an ephemeral loopback address, not the normal intake port or `testd.test`. The tray offers Continue setup and Exit.
 - [ ] GUI-02: Before resolver and certificate setup are complete, Finish is unavailable. Each setup card reports its actual success or failure.
 - [ ] GUI-03: The operator secret is generated, can be regenerated and copied, and a value shorter than 16 characters cannot finish setup. Do not include the secret in evidence.
-- [ ] GUI-04: Interrupt and reopen setup before finishing. The pending secret is retained unless Generate is selected.
+- [ ] GUI-04: Close the setup tab before finishing. The tray remains available, Continue setup reopens it, and the pending secret is retained unless Generate is selected. Exit stops the setup listener.
 - [ ] GUI-05: Temporarily occupy the edge port with a controlled loopback listener and select Finish. Setup reports the bind failure and the next launch resumes setup rather than claiming success.
-- [ ] GUI-06: Release the test listener and complete setup. The config and local root are created for this user, the daemon starts once, the dialog closes, and the dashboard opens.
+- [ ] GUI-06: Release the test listener and complete setup. The config and local root are created for this user, the daemon starts once, and the same browser tab navigates to the dashboard. Concurrent Finish requests do not create another daemon or overwrite recovery data.
 
 ## Local workflow and lifecycle
 
@@ -54,7 +54,9 @@ Answer each item `p`, `f`, `n`, or `q`. Give a reason for every failure or inapp
 - [ ] GUI-25: On Windows, observe the per-user installer and the UAC prompts for privileged setup. On macOS, observe the menu-bar and dock behavior. Record the actual platform and prompt count.
 - [ ] GUI-26: Install the candidate package, complete a trusted name, and verify any claimed upgrade preserves the expected secret, root, launch definitions, and login preference.
 - [ ] GUI-27: Stop launches and shares, disable the login item, uninstall the product integration, then remove the package. Verify the claimed cleanup and retain any reported conflicts.
-- [ ] GUI-28: Quit the tray and verify the candidate app, daemon, provider children, DNS and HTTPS listeners are stopped and the instance lock can be acquired again before confirming restoration.
+- [ ] GUI-28: Quit the tray and verify the candidate app, daemon, provider children, DNS and HTTPS listeners are stopped and the instance lock can be acquired again before confirming restoration. The current run's browser handoff and activation files are removed.
+- [ ] GUI-29: Test cold and warm default-browser opening, including an HTML file association pointing at an editor. The opener arguments contain a private file URI, not an administrative token. Test sandboxed browsers only when claimed; do not broaden file permissions to make them work.
+- [ ] GUI-30: With an open tray popup, change registrations, requests, shares, and launches; repeatedly open and close menus and invoke actions. Menu updates do not freeze or strand the tray, including Windows mouse-up, macOS full-screen, and Linux backend selection. For AppImage, verify its XWayland requirement where applicable and that bundled environment variables do not break the host browser.
 
 ## Coverage limits
 

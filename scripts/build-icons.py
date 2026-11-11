@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the Tauri bundle and tray icons from the canonical assets.
+"""Generate the native bundle and tray icons from the canonical assets.
 
 Sources live in assets/brand/:
   testd-app.png            1024px fat app icon for sizes below 128px
@@ -7,7 +7,7 @@ Sources live in assets/brand/:
   testd-tray-mask.png      alpha mask for the tray frame and `.t`
   testd-tray-plate-mask.png alpha mask for the plate knockout
 
-Writes src-tauri/icons/ without third-party dependencies.
+Writes crates/testd-gui/icons/ without third-party dependencies.
 """
 
 import os
@@ -18,9 +18,8 @@ import png
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.join(HERE, '..')
 ASSETS = os.path.join(REPO, 'assets', 'brand')
-ICONS = os.path.join(REPO, 'src-tauri', 'icons')
+ICONS = os.path.join(REPO, 'crates', 'testd-gui', 'icons')
 
-SQUARE_LOGOS = (30, 44, 71, 89, 107, 142, 150, 284, 310)
 TRAY_COLOR = (0, 0, 0)
 TRAY_DARK = (255, 255, 255)
 TRAY_ALERT = (215, 0, 21)
@@ -108,10 +107,6 @@ def write_app_set() -> None:
 
 	write_icns(os.path.join(ICONS, 'icon.icns'), source)
 	write_ico(os.path.join(ICONS, 'icon.ico'), (16, 24, 32, 48, 64, 128, 256), source)
-
-	for size in SQUARE_LOGOS:
-		png.write_rgba(os.path.join(ICONS, f'Square{size}x{size}Logo.png'), size, size, source(size))
-	png.write_rgba(os.path.join(ICONS, 'StoreLogo.png'), 50, 50, source(50))
 
 
 def load_mask(name: str) -> bytes:

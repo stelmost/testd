@@ -35,6 +35,11 @@ highlight = "all"
 deny = [
 	# rustls is the only TLS stack in the product.
 	{ name = "openssl" },
+	# The desktop uses native tray libraries, not an embedded webview/framework.
+	{ name = "tauri" },
+	{ name = "tauri-build" },
+	{ name = "tauri-runtime-wry" },
+	{ name = "wry" },
 ]
 
 [sources]

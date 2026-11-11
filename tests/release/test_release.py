@@ -19,6 +19,7 @@ import sys
 import tarfile
 import threading
 import time
+import tomllib
 from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import Mock, patch
 import json
@@ -145,7 +146,7 @@ class ReleaseTests(unittest.TestCase):
 		dependencies = (ROOT / '.github/actions/linux-dependencies/action.yml').read_text(encoding='utf-8')
 		self.assertIn('fedora)', dependencies)
 		self.assertIn('dnf install -y gcc gcc-c++', dependencies)
-		for package in ('webkit2gtk4.1-devel', 'libappindicator-gtk3-devel', 'unzip', 'systemd'):
+		for package in ('gtk3-devel', 'libappindicator-gtk3-devel', 'dbus-devel', 'unzip', 'systemd'):
 			self.assertIn(package, dependencies)
 
 	@unittest.skipIf(os.name == 'nt', 'not applicable: the site container fixture uses a Unix shell')
@@ -221,7 +222,11 @@ class ReleaseTests(unittest.TestCase):
 			self.assertIn("github.event_name == 'workflow_dispatch'", section)
 		bundle = workflow.split('\n  bundle:\n', 1)[1].split('\n  sbom:\n', 1)[0]
 		self.assertIn('steps.version.outputs.version', bundle)
-		self.assertIn('path: ~/.cargo/bin/cargo-tauri*', bundle)
+		self.assertIn('path: ~/.cargo/bin/cargo-packager*', bundle)
+		self.assertIn('cargo install cargo-packager --locked --version 0.11.8', bundle)
+		self.assertIn('cargo build --release -p testd-gui --locked', bundle)
+		self.assertIn('cargo packager --release --packages testd-gui', bundle)
+		self.assertNotIn('cargo tauri', bundle)
 		release_job = workflow.split('\n  release:\n', 1)[1]
 		condition = next(line.strip() for line in release_job.splitlines() if line.strip().startswith('if:'))
 		self.assertEqual(condition, "if: startsWith(github.ref, 'refs/tags/v')")
@@ -337,7 +342,7 @@ class ReleaseTests(unittest.TestCase):
 	def test_sbom_staging_is_independent_of_tool_filenames(self):
 		with tempfile.TemporaryDirectory() as temporary:
 			root = pathlib.Path(temporary)
-			for relative, name in [('.', 'testd'), ('src-tauri', 'testd-gui'), ('crates/testd-core', 'testd-core')]:
+			for relative, name in [('.', 'testd'), ('crates/testd-gui', 'testd-gui'), ('crates/testd-core', 'testd-core')]:
 				member = root / relative
 				member.mkdir(parents=True, exist_ok=True)
 				(member / 'Cargo.toml').write_text(f'[package]\nname = "{name}"\n')
@@ -346,6 +351,46 @@ class ReleaseTests(unittest.TestCase):
 			with patch.object(release, 'ROOT', root):
 				release.collect_sbom(root / 'staged')
 			self.assertEqual(len(list((root / 'staged').glob('*.cdx.json'))), 3)
+
+	def test_native_bundle_staging_keeps_public_names_and_ignores_nested_tool_executables(self):
+		version = workspace_version()
+		for platform, extensions in [('macos', ['.dmg']), ('linux', ['.AppImage', '.deb']), ('windows', ['.exe'])]:
+			with self.subTest(platform=platform), tempfile.TemporaryDirectory() as temporary:
+				root = pathlib.Path(temporary)
+				bundle = root / 'build/bundle'
+				(bundle / 'tool-cache').mkdir(parents=True)
+				(bundle / 'tool-cache/extra.exe').write_bytes(b'not the installer')
+				output = root / 'staged'
+				output.mkdir()
+				for extension in extensions:
+					(bundle / f'upstream{extension}').write_bytes(extension.encode())
+				args = SimpleNamespace(version=version, build_dir=root / 'build', output=output)
+				release.copy_bundles(args, platform, 'x64')
+				for extension in extensions:
+					suffix = '-setup' if platform == 'windows' else ''
+					self.assertEqual((output / f'Testd_{version}_x64{suffix}{extension}').read_bytes(), extension.encode())
+				with self.assertRaises(FileExistsError):
+					release.copy_bundles(args, platform, 'x64')
+
+	def test_packager_inherits_version_and_preserves_product_and_per_user_identity(self):
+		manifest = tomllib.loads((ROOT / 'crates/testd-gui/Cargo.toml').read_text())
+		self.assertEqual(manifest['package']['name'], 'testd-gui')
+		packager = manifest['package']['metadata']['packager']
+		self.assertNotIn('version', packager)
+		self.assertEqual(packager['product-name'], 'Testd')
+		self.assertEqual(packager['identifier'], 'dev.testd.host')
+		self.assertEqual(packager['deep-link-protocols'], [{'schemes': ['testd'], 'name': 'dev.testd.host'}])
+		hook = packager['nsis']['preinstall-section']
+		self.assertIn('!define BUNDLEID "${IDENTIFIER}"', hook)
+		self.assertIn('An existing testd URL handler points elsewhere', hook)
+		self.assertIn('Abort', hook)
+		self.assertIn('Exec={{exec}} %u', (ROOT / 'packaging/linux/testd.desktop').read_text())
+		self.assertEqual(packager['nsis']['installer-mode'], 'currentUser')
+		self.assertNotIn('appdata-paths', packager['nsis'])
+		self.assertNotIn('tauri', manifest['dependencies'])
+		self.assertIn('libgtk-3-0 | libgtk-3-0t64', packager['deb']['depends'])
+		self.assertIn('libayatana-appindicator3.so.1', packager['appimage']['libs'])
+		self.assertRegex(packager['appimage']['linuxdeploy-plugins']['gtk'], r'/[0-9a-f]{40}/')
 
 	def test_archive_paths_cannot_escape_the_report_directory(self):
 		for path in ['../private', '/etc/passwd', 'C:/Windows/file', '..\\private']:

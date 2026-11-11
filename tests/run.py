@@ -1544,14 +1544,17 @@ def prepare(args):
 			break
 	if args.gui and SYSTEM == 'Linux':
 		if not shutil.which('pkg-config'):
-			missing.append('pkg-config and GTK/WebKit development packages (see .github/actions/linux-dependencies)')
+			missing.append('pkg-config and native GTK/AppIndicator packages (see .github/actions/linux-dependencies)')
 		else:
-			for library in ('gtk+-3.0', 'webkit2gtk-4.1'):
+			for library in ('gtk+-3.0', 'dbus-1'):
 				if subprocess.run(['pkg-config', '--exists', library], timeout=30).returncode:
 					missing.append(f'GUI development library: {library}')
+			indicators = ('ayatana-appindicator3-0.1', 'appindicator3-0.1')
+			if all(subprocess.run(['pkg-config', '--exists', library], timeout=30).returncode for library in indicators):
+				missing.append('GUI development library: Ayatana AppIndicator or AppIndicator')
 	for requirement in missing:
 		print(f'Missing: {requirement}')
-	print('Native GUI builds also require Xcode on macOS or Visual Studio C++ tools and WebView2 on Windows.'
+	print('Native GUI builds also require Xcode on macOS or Visual Studio C++ tools and the Windows SDK on Windows.'
 		if args.gui else 'GUI checks are opt-in with --gui; ci always includes them.')
 	print('This command only checks prerequisites; it does not install tools. '
 		'See tests/README.md for setup commands.')

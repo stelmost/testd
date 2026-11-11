@@ -6,23 +6,25 @@
 - Python 3.12 or newer for release tooling and reports; Bun for browser fixtures
 - `cargo-cyclonedx` for workspace SBOM generation
 - `cargo-deny` for dependency checks; tests use native Cargo
-- `tauri-cli` and the platform's Tauri prerequisites for the tray app: Xcode command-line tools on macOS, WebKitGTK/GTK on Linux, MSVC on Windows
-- On Fedora/RHEL, `qt5-qttools` provides `qtpaths`, which the Linux AppImage bundler needs
+- `cargo-packager` 0.11.8 for tray artifacts: `cargo install cargo-packager --locked --version 0.11.8`
+- Native tray prerequisites: Xcode command-line tools on macOS, GTK3/AppIndicator and D-Bus development libraries on Linux, MSVC and the Windows SDK on Windows; no embedded WebKit or WebView2
 
 ## Build
 
 From the repository root:
 
 ```sh
-cargo build --release -p testd   # CLI and daemon
-cargo tauri build                # tray app
+cargo build --release -p testd      # CLI and daemon
+cargo build --release -p testd-gui  # native tray
+cargo packager --release --packages testd-gui --formats default \
+  --out-dir "$PWD/target/release/bundle"
 ```
 
-The workspace includes `testd-gui`. On a machine without GTK/WebKit, add `--exclude testd-gui` to workspace test and clippy commands. CI installs the Tauri system prerequisites and checks the full workspace.
+The workspace includes `testd-gui` under `crates/`. On a machine without native GTK development libraries, add `--exclude testd-gui` to workspace test and clippy commands. CI installs the native tray prerequisites and checks the full workspace. Packaging consumes the already built executable; it does not compile another runtime or mutate the binary. Explicitly select `app,dmg` on macOS, `appimage,deb` on Linux, or `nsis` on Windows for release artifacts.
 
 ## Icons
 
-`src-tauri/icons/` is generated; its sources live in `assets/brand/`. Regenerate the bundle and tray icons with:
+`crates/testd-gui/icons/` is generated; its sources live in `assets/brand/`. Regenerate the bundle and tray icons with:
 
 ```sh
 python3 scripts/build-icons.py
@@ -126,7 +128,7 @@ Each `ci-summary-*` artifact contains `ci-summary.json`, with source/OS/Python m
 
 ### Reproduce the unprivileged suite locally
 
-Install the [prerequisites](#prerequisites), including the native Tauri build libraries/compiler even if you only want to run `ci`. Python 3.12 or newer is supported; hosted CI currently uses 3.14, while its minimum-runtime fixtures use 3.12. Ensure the rustup shims and Bun are on `PATH`; a distro-provided `cargo` cannot interpret `+stable`. On Linux/macOS, load `source "$HOME/.cargo/env"` in the current shell if needed; on Windows, reopen PowerShell after installation. Prepare the shared tools and checkout dependencies once:
+Install the [prerequisites](#prerequisites), including the native tray build libraries/compiler even if you only want to run `ci`. Python 3.12 or newer is supported; hosted CI currently uses 3.14, while its minimum-runtime fixtures use 3.12. Ensure the rustup shims and Bun are on `PATH`; a distro-provided `cargo` cannot interpret `+stable`. On Linux/macOS, load `source "$HOME/.cargo/env"` in the current shell if needed; on Windows, reopen PowerShell after installation. Prepare the shared tools and checkout dependencies once:
 
 ```sh
 rustup toolchain install stable 1.90.0 --profile minimal
@@ -420,7 +422,7 @@ Run them on real machines, not inside the dev container. A macOS, Linux, and Win
 | `tests/host/linux.sh` | resolver route, CA trust, edge TLS, loopback dashboard, DNS A records, token requests, issued tokens, local registration, sharing, quick launches, URL actions, doctor state checks, launch-at-login entry, systemd unit |
 | `tests/host/macos.sh` | Unprivileged edge, dashboard, DNS, registration, sharing, quick launches, doctor state, and launch-at-login checks; resolver and trust checks are blocked |
 | `tests/host/windows.ps1` | Unprivileged edge, dashboard, DNS, registration, sharing, quick launches, and launch-at-login checks; NRPT and root trust checks are blocked |
-| `tests/host/gui-checklist.md` | setup dialog, tray, dashboard window, click-to-open, single instance, quick launches, certificate controls, URL actions, packaging/signing |
+| `tests/host/gui-checklist.md` | browser setup/handoff, native tray, dashboard tab, click-to-open, single instance, quick launches, certificate controls, URL actions, packaging/signing |
 
 The Linux and macOS scripts share their core checks in `tests/host/common.sh` and their helpers in `tests/host/lib.sh`; the platform scripts add the resolver, trust, and init-system sections.
 
@@ -502,11 +504,7 @@ The Windows snapshot helper verifies NRPT rules and machine roots without deleti
 
 ### Launch at login
 
-The tray enables launch at login once, on its first start, through
-`tauri-plugin-autostart`, and then exposes a **Launch at login** checkbox. The
-checkbox asks the plugin for the current state after every click, so a failed
-enable or disable corrects itself on the rebuild rather than drifting from the
-OS.
+The tray enables launch at login once after successful daemon startup through `auto-launch`, then exposes a **Launch at login** checkbox. Queries and changes run off the native event-loop thread. Failures are reported and an unavailable state is not presented as a false unchecked preference. The existing app name and initialization marker are retained. Changed entries or entries pointing elsewhere are preserved and reported rather than silently replaced. AppImage entries target the persistent image, not its mounted inner executable.
 
 | OS | Artifact | Check |
 |---|---|---|
@@ -636,7 +634,7 @@ Run each in every browser you support: Chrome, Firefox, Safari, Edge.
 
 1. `https://app.example.test` loads with no certificate interstitial or bypass. The leaf is issued by `testd intermediate`, chains to `testd root`, carries `app.example.test` in its SAN, and expires within 24 hours.
 2. Wait for the leaf to be re-minted, or restart the daemon: a reload still shows a valid certificate with a newer validity window. When the browser suite started the host, use the page's restart button.
-3. The tray's `testd.test → dashboard` row opens the dashboard window, or `testd dashboard` prints the URL. The page lists the live name. `testd.test` is served by the edge for loopback clients only.
+3. The tray's `testd.test → dashboard` row opens the local dashboard in the default browser through a private handoff file, or `testd dashboard` prints the authenticated URL. The page lists the live name. `testd.test` is served by the edge for loopback clients only.
 4. WebSocket: a dev server using HMR websockets connects over `wss` and survives 60 seconds idle.
 5. SSE and a 100 MB upload complete without a truncated response.
 6. Cookies: two names in one project (`app.example.test`, `api.example.test`) share a cookie set on `.example.test`, exactly as `app.example.com` and `api.example.com` would.
@@ -659,7 +657,7 @@ A free release is a version tag, CLI archives, public tray bundles, workspace SB
 - [ ] Enable GitHub private vulnerability reporting for the public repository
 - [ ] Run the release-validation suites above and retain reports for every claimed platform/browser
 - [ ] `scripts/release-sbom.sh` and attach the SBOMs to the release
-- [ ] Finalize the dated changelog entry; synchronize all package and Tauri bundle versions, and refresh `Cargo.lock` when dependencies change
+- [ ] Finalize the dated changelog entry; synchronize all Cargo package versions; packaging inherits the GUI package version, and refresh `Cargo.lock` when dependencies change
 - [ ] Run `testd doctor --json` against a clean VM and keep the output
 - [ ] Verify the documented fresh-install path reaches a trusted HTTPS name, including Linux port privileges
 
@@ -674,12 +672,18 @@ cargo build --release --bin testd
 Tray app (per platform):
 
 ```sh
-cargo tauri build
+cargo build --release -p testd-gui --locked
+cargo packager --release --packages testd-gui --formats default \
+  --out-dir "$PWD/target/release/bundle"
 ```
+
+Use the explicit release formats from the CI matrix, and a fresh output directory for each candidate. Package files are placed directly in `target/release/bundle/`; `scripts/release.py` stages their stable public names without collecting nested tool executables.
 
 Artifacts: CLI `.tar.gz` (Linux/macOS) or `.zip` (Windows), `.dmg` containing `.app` (macOS), `.exe` (Windows NSIS), `.AppImage`/`.deb` (Linux). CI builds macOS Apple Silicon and Intel, Linux x86-64, and Windows x86-64.
 
-Windows ships the NSIS installer only. It installs per user into `%LOCALAPPDATA%\Testd` and asks for no elevation. Tauri's MSI is always per machine (`Program Files`, HKLM uninstall key, UAC prompt) with no option to make it per user, so it is not produced; `src-tauri/tauri.windows.conf.json` narrows the Windows target list. An enterprise deployment that needs a machine-wide install can build one with `cargo tauri build --bundles msi` and install that `.msi` by hand.
+The pinned upstream GTK AppImage helper selects X11; a Wayland session therefore needs XWayland for that artifact. The native executable/deb retains ordinary GTK backend selection. Validate the actual desktop/tray host and host-browser handoff before claiming support; packaging alone is not native desktop evidence.
+
+Windows ships only NSIS, configured in `crates/testd-gui/Cargo.toml` to install per user into `%LOCALAPPDATA%\Testd` without installer elevation. Resolver and trust changes retain their separate native authorization prompts. No MSI or machine-wide deployment is claimed. Preserve the actual installer/shortcut/URL-handler identity when validating upgrades; a matching visible product name alone is not evidence.
 
 Removing the app does not remove the machine trust root or the DNS route. CLI uninstall is blocked on macOS and Windows until system ownership can be verified; do not remove unowned state. On Linux, run `testd uninstall` before removing the app; add `--purge` to delete the local config directory after system cleanup succeeds.
 
@@ -696,7 +700,7 @@ Notarization, Authenticode, and the Homebrew tap have their own runbooks:
 
 This repository does not ship an updater. Releases are installed by the user: the archive, `brew upgrade`, or the system package manager. The binaries never check for a new version.
 
-A Linux container can build and test the CLI and run `cargo tauri build`, but
+A Linux container can build/test the CLI and native tray and run `cargo packager`, but
 cannot produce notarized or Authenticode-signed artifacts.
 
 ### Publish
@@ -801,37 +805,36 @@ xcrun notarytool store-credentials testd-notary \
 
 #### Build and sign
 
+Use a clean worktree and fresh bundle directory. Build only the `.app` first so the disk image is created from the signed bundle, not from an earlier unsigned copy:
+
 ```sh
-cargo tauri build --bundles app,dmg
+cargo build --release -p testd-gui --locked
+cargo packager --release --packages testd-gui --formats app \
+  --out-dir "$PWD/target/release/bundle"
+APP=target/release/bundle/Testd.app
+DMG=target/release/bundle/Testd-signed.dmg
 ```
 
-Sign inside out: nested binaries and frameworks first, then the bundle. `cargo tauri build` signs with the identity it finds when `APPLE_SIGNING_IDENTITY` is set; otherwise sign manually:
+Back up existing signed artifacts before replacing signatures. Sign nested binaries/frameworks first if any are added, then sign and verify the app. Create the disk image only afterward:
 
 ```sh
 codesign --force --options runtime --timestamp \
-  --sign "Developer ID Application: Your Name (TEAMID1234)" \
-  target/release/bundle/macos/Testd.app
-codesign --force --options runtime --timestamp \
-  --sign "Developer ID Application: Your Name (TEAMID1234)" \
-  target/release/bundle/dmg/Testd_0.1.0_aarch64.dmg
+  --sign "Developer ID Application: Your Name (TEAMID1234)" "$APP"
+codesign --verify --deep --strict --verbose=2 "$APP"
+codesign -d --entitlements - "$APP"
+hdiutil create -volname Testd -srcfolder "$APP" -format UDZO "$DMG"
+codesign --force --timestamp \
+  --sign "Developer ID Application: Your Name (TEAMID1234)" "$DMG"
 ```
 
-Verify the signature and the hardened runtime before submitting:
-
-```sh
-codesign --verify --deep --strict --verbose=2 target/release/bundle/macos/Testd.app
-codesign -d --entitlements - target/release/bundle/macos/Testd.app
-```
-
-No entitlements are required: the app is not sandboxed, uses no JIT, and shells out only through Tauri's process API. Keep it that way; every entitlement is a notarization review question.
+The app is not sandboxed, embeds no webview, and uses no JIT; it requires no added entitlements. Runtime system changes still use the existing authorization helpers. Package metadata is in `crates/testd-gui/Cargo.toml`; do not assume the former Tauri signing environment variable configures cargo-packager.
 
 #### Notarize
 
 ```sh
-xcrun notarytool submit target/release/bundle/dmg/Testd_0.1.0_aarch64.dmg \
-  --keychain-profile testd-notary --wait
-xcrun stapler staple target/release/bundle/dmg/Testd_0.1.0_aarch64.dmg
-xcrun stapler validate target/release/bundle/dmg/Testd_0.1.0_aarch64.dmg
+xcrun notarytool submit "$DMG" --keychain-profile testd-notary --wait
+xcrun stapler staple "$DMG"
+xcrun stapler validate "$DMG"
 ```
 
 `--wait` prints the submission id and the result. Keep the id in the release notes. Notarize the `.dmg` after signing the `.app` inside it, or notarize both; stapling the `.dmg` is what users download.
@@ -839,7 +842,7 @@ xcrun stapler validate target/release/bundle/dmg/Testd_0.1.0_aarch64.dmg
 #### Verify as a user would
 
 ```sh
-spctl -a -vv -t exec target/release/bundle/macos/Testd.app
+spctl -a -vv -t exec "$APP"
 ```
 
 Expect `accepted` and `source=Notarized Developer ID`. Also copy the `.dmg` to a clean account, mount it, and launch once: Gatekeeper must accept the first run without a right-click.

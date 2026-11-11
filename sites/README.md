@@ -66,8 +66,8 @@ CI builds and link-checks `dist/` on every run and does not deploy it; publicati
 - `sites/bin/site.sh`: entry point; picks the runtime and runs one action in a container
 - `sites/bin/entrypoint.sh`: installs dependencies in the container, then runs the action
 - `sites/bin/dev-servers.sh`: runs stock `vitepress dev` and `vite` inside the container
-- `src-tauri/icons/`: generated bundle and tray icons
-- `scripts/build-icons.py`: regenerates `src-tauri/icons/` from `assets/brand/`
+- `crates/testd-gui/icons/`: generated bundle and tray icons
+- `scripts/build-icons.py`: regenerates `crates/testd-gui/icons/` from `assets/brand/`
 - `tests/check-links.ts`: Link checker for the built tree
 - `dist/`: combined build output, served at the origin root
 
@@ -75,6 +75,6 @@ CI builds and link-checks `dist/` on every run and does not deploy it; publicati
 
 `assets/brand/testd-slim.svg` is the slim brand icon used on the product page and in larger placements; `testd-mark.svg` is its bare `t.` glyph. The product site imports the brand files through Vite, and the docs serve `assets/brand/` as their public directory, using `testd-app.png` for both the header logo and the favicon.
 
-`assets/brand/testd-app.png` is the 1024px fat app icon used below 128px, including the favicon and the docs header. `testd-app-large.png` is the 1024px thin render of `testd-slim.svg` used at 128px and above, so the dock and task switch keep the lighter mark. `testd-tray-mask.png` and `testd-tray-plate-mask.png` are the alpha masks for the tray variants. `scripts/build-icons.py` regenerates `src-tauri/icons/` from those sources; the generated files stay in the directory Tauri expects. `assets/social/og.png` is the social card, emitted at `/og.png` by the product Vite config.
+`assets/brand/testd-app.png` is the 1024px fat app icon used below 128px, including the favicon and the docs header. `testd-app-large.png` is the 1024px thin render of `testd-slim.svg` used at 128px and above, so the dock and task switch keep the lighter mark. `testd-tray-mask.png` and `testd-tray-plate-mask.png` are the alpha masks for the tray variants. `scripts/build-icons.py` regenerates `crates/testd-gui/icons/` from those sources; the native tray and packager use that directory. `assets/social/og.png` is the social card, emitted at `/og.png` by the product Vite config.
 
 The palette follows the Lapilli studio sheet: basalt `#141414`, paper `#F2EEE4`, lapilli `#E4542B`, ash `#8C8A83`. The footer uses the Direction 01 shard wordmark: the reversed file on the dark ground and the standard file on the light 404 page. Fonts are self-hosted through Fontsource: Archivo for text and JetBrains Mono for code.

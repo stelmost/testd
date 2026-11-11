@@ -179,16 +179,16 @@ jobs:
         include:
           - os: macos-15
             target: aarch64-apple-darwin
-            bundles: app,dmg
+            formats: app,dmg
           - os: macos-15-intel
             target: x86_64-apple-darwin
-            bundles: app,dmg
+            formats: app,dmg
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            bundles: appimage,deb
+            formats: appimage,deb
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            bundles: nsis
+            formats: nsis
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -214,17 +214,23 @@ jobs:
           if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then version="${GITHUB_REF_NAME#v}"; fi
           python scripts/release.py verify-version "$version"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-      # The CLI compiles from source on every target. Bump the cache key when
-      # moving to a new Tauri major.
-      - id: tauri-cli
+      - id: packager
         uses: actions/cache@v4
         with:
-          path: ~/.cargo/bin/cargo-tauri*
-          key: cargo-tauri-v2-${{ runner.os }}-${{ runner.arch }}
-      - if: steps.tauri-cli.outputs.cache-hit != 'true'
-        run: cargo install tauri-cli --locked --version '^2'
+          path: ~/.cargo/bin/cargo-packager*
+          key: cargo-packager-0.11.8-${{ runner.os }}-${{ runner.arch }}
+      - if: steps.packager.outputs.cache-hit != 'true'
+        run: cargo install cargo-packager --locked --version 0.11.8
       - run: cargo build --release --bin testd --locked --target ${{ matrix.target }}
-      - run: cargo tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+      - run: cargo build --release -p testd-gui --locked --target ${{ matrix.target }}
+      - name: Package native tray without a webview runtime
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: >-
+          cargo packager --release --packages testd-gui --target ${{ matrix.target }}
+          --formats ${{ matrix.formats }}
+          --binaries-dir "${{ github.workspace }}/target/${{ matrix.target }}/release"
+          --out-dir "${{ github.workspace }}/target/${{ matrix.target }}/release/bundle"
       - name: Package archives and validate bundle selection without installing
         run: >-
           python scripts/release.py package --version "${{ steps.version.outputs.version }}"

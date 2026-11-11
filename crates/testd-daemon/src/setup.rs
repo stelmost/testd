@@ -32,31 +32,76 @@ const MIN_SECRET_LEN: usize = 16;
 
 /// A running setup surface.
 pub struct Setup {
-	/// Loopback URL the dialog should open.
+	/// Loopback URL the protected browser handoff should open.
 	pub url: String,
 	/// The same address as `url`, for tests and callers that need it.
 	pub addr: SocketAddr,
-	finish: tokio::sync::mpsc::UnboundedReceiver<FinishRequest>,
-	_task: crate::task::BackgroundTask,
+	finish: tokio::sync::mpsc::UnboundedReceiver<Finish>,
+	state: Arc<State>,
+	task: Option<crate::task::BackgroundTask<io::Result<()>>>,
 }
 
 impl Setup {
-	/// Block until the dialog asks to finish.
-	///
-	/// Returns the channel the caller must use to report whether the daemon
-	/// started. Call this from outside a tokio runtime.
-	pub fn wait(&mut self) -> Option<tokio::sync::oneshot::Sender<Result<String, String>>> {
-		self.finish.blocking_recv().map(|request| request.reply)
+	/// Wait for startup, or report a failed listener rather than leaving a dead setup page.
+	pub async fn next_finish(&mut self) -> Result<Finish, String> {
+		let task = self.task.as_mut().ok_or_else(|| "the setup server has stopped".to_owned())?;
+		tokio::select! {
+			biased;
+			finish = self.finish.recv() => {
+				let finish = finish.ok_or_else(|| "the setup channel closed".to_owned())?;
+				if *self.state.stop.borrow() {
+					let _ = finish.complete(Err("the setup server is stopping".into())).await;
+					return Err("the setup server stopped unexpectedly".into());
+				}
+				Ok(finish)
+			},
+			result = &mut task.0 => {
+				self.task.take();
+				Err(match result {
+					Ok(Ok(())) => "the setup server stopped unexpectedly".into(),
+					Ok(Err(error)) => format!("setup listener failed: {error}"),
+					Err(error) => format!("setup server task failed: {error}"),
+				})
+			},
+		}
 	}
 
-	/// Wait for completion without blocking a runtime thread.
-	pub async fn next_finish(&mut self) -> Option<tokio::sync::oneshot::Sender<Result<String, String>>> {
-		self.finish.recv().await.map(|request| request.reply)
+	/// Stop admission and account for accepted operations before releasing the desktop instance guard.
+	pub async fn shutdown(&mut self) -> io::Result<()> {
+		let _ = self.state.stop.send(true);
+		self.finish.close();
+		let mut failures = Vec::new();
+		while let Some(finish) = self.finish.recv().await {
+			if let Err(error) = finish.complete(Err("setup was stopped before host startup".into())).await {
+				failures.push(error.to_string());
+			}
+		}
+		if let Some(mut task) = self.task.take() {
+			match (&mut task.0).await {
+				Ok(Ok(())) => {},
+				Ok(Err(error)) => failures.push(error.to_string()),
+				Err(error) => failures.push(error.to_string()),
+			}
+		}
+		if failures.is_empty() { Ok(()) } else { Err(io::Error::other(failures.join("; "))) }
 	}
 }
 
-struct FinishRequest {
+/// One startup request, retained until its HTTP response has finished writing.
+pub struct Finish {
 	reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+	delivered: tokio::sync::oneshot::Receiver<()>,
+}
+
+impl Finish {
+	pub async fn complete(self, result: Result<String, String>) -> io::Result<()> {
+		self.reply
+			.send(result)
+			.map_err(|_| io::Error::other("the setup response is no longer waiting"))?;
+		self.delivered
+			.await
+			.map_err(|_| io::Error::other("the setup response did not complete"))
+	}
 }
 
 #[derive(PartialEq, Eq)]
@@ -68,13 +113,19 @@ enum FinishState {
 struct State {
 	token: String,
 	stop: tokio::sync::watch::Sender<bool>,
-	finish: tokio::sync::mpsc::UnboundedSender<FinishRequest>,
+	finish: tokio::sync::mpsc::UnboundedSender<Finish>,
 	finish_state: tokio::sync::Mutex<FinishState>,
 }
 
 impl State {
-	fn begin_finish(&self) -> Result<tokio::sync::MutexGuard<'_, FinishState>, &'static str> {
-		let state = self.finish_state.try_lock().map_err(|_| "setup is already starting testd")?;
+	fn begin_change(&self) -> Result<tokio::sync::MutexGuard<'_, FinishState>, &'static str> {
+		if *self.stop.borrow() {
+			return Err("the setup server is stopping");
+		}
+		let state = self
+			.finish_state
+			.try_lock()
+			.map_err(|_| "another setup change is in progress")?;
 		if *state == FinishState::Complete {
 			return Err("setup has already completed; open the dashboard from the tray");
 		}
@@ -94,28 +145,46 @@ pub fn start(rt: &tokio::runtime::Handle) -> io::Result<Setup> {
 	let token = testd_core::config::generate_operator_secret()?;
 	let url = format!("http://{addr}/#token={token}");
 	let state = Arc::new(State { token, stop, finish, finish_state: tokio::sync::Mutex::new(FinishState::Editing) });
-	let task = crate::task::BackgroundTask(rt.spawn(serve(listener, state, stop_rx)));
-	Ok(Setup { url, addr, finish: finish_rx, _task: task })
+	let task = crate::task::BackgroundTask(rt.spawn(serve(listener, Arc::clone(&state), stop_rx)));
+	Ok(Setup { url, addr, finish: finish_rx, state, task: Some(task) })
 }
 
-async fn serve(listener: TcpListener, state: Arc<State>, mut stop: tokio::sync::watch::Receiver<bool>) {
+async fn serve(
+	listener: TcpListener,
+	state: Arc<State>,
+	mut stop: tokio::sync::watch::Receiver<bool>,
+) -> io::Result<()> {
+	let mut requests = tokio::task::JoinSet::new();
+	let mut failure = None;
 	loop {
 		tokio::select! {
+			biased;
 			_ = stop.changed() => break,
-			accepted = listener.accept() => {
-				let Ok((stream, peer)) = accepted else { break };
-				// The listener is already loopback-bound; this is belt and braces.
-				if !peer.ip().is_loopback() {
-					continue;
-				}
-				let state = Arc::clone(&state);
-				tokio::spawn(async move {
-					if let Err(e) = handle(stream, state).await {
-						eprintln!("[setup]  {e}");
-					}
-				});
+			accepted = listener.accept() => match accepted {
+				Ok((stream, peer)) if peer.ip().is_loopback() && requests.len() < 64 => {
+					let state = Arc::clone(&state);
+					requests.spawn(async move {
+						if let Err(error) = handle(stream, state).await { eprintln!("[setup] {error}"); }
+					});
+				},
+				Ok(_) => {},
+				Err(error) => { failure = Some(error); break; },
+			},
+			result = requests.join_next(), if !requests.is_empty() => {
+				if let Some(Err(error)) = result { failure = Some(io::Error::other(error)); break; }
 			},
 		}
+	}
+	drop(listener);
+	let _ = state.stop.send(true);
+	while let Some(result) = requests.join_next().await {
+		if let Err(error) = result {
+			failure.get_or_insert_with(|| io::Error::other(error));
+		}
+	}
+	match failure {
+		Some(error) => Err(error),
+		None => Ok(()),
 	}
 }
 
@@ -174,6 +243,17 @@ async fn handle(stream: TcpStream, state: Arc<State>) -> io::Result<()> {
 			.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "HTTP body timed out"))??
 	} else {
 		Vec::new()
+	};
+
+	let _change = if method == "POST" && path != "/api/setup/finish" {
+		match state.begin_change() {
+			Ok(guard) => Some(guard),
+			Err(error) => {
+				return respond_json(&mut writer, "409 Conflict", &serde_json::json!({ "error": error })).await;
+			},
+		}
+	} else {
+		None
 	};
 
 	match (method.as_str(), path.as_str()) {
@@ -319,7 +399,7 @@ struct FinishBody {
 }
 
 async fn handle_finish(writer: &mut (impl AsyncWriteExt + Unpin), state: &State, body: &[u8]) -> io::Result<()> {
-	let mut finish_state = match state.begin_finish() {
+	let mut finish_state = match state.begin_change() {
 		Ok(guard) => guard,
 		Err(error) => return respond_json(writer, "409 Conflict", &serde_json::json!({ "error": error })).await,
 	};
@@ -329,8 +409,17 @@ async fn handle_finish(writer: &mut (impl AsyncWriteExt + Unpin), state: &State,
 		Err(e) => return respond_json(writer, "400 Bad Request", &serde_json::json!({ "error": e })).await,
 	};
 
-	let mut pending = match pending_or_default() {
-		Ok(pending) => pending,
+	let prepare_secret = secret.clone();
+	match tokio::task::spawn_blocking(move || prepare_finish(&prepare_secret)).await {
+		Ok(Ok(())) => {},
+		Ok(Err(error)) => {
+			return respond_json(
+				writer,
+				"500 Internal Server Error",
+				&serde_json::json!({ "error": error.to_string() }),
+			)
+			.await;
+		},
 		Err(error) => {
 			return respond_json(
 				writer,
@@ -339,25 +428,19 @@ async fn handle_finish(writer: &mut (impl AsyncWriteExt + Unpin), state: &State,
 			)
 			.await;
 		},
-	};
-	pending.step = 3;
-	pending.caddy_config_path = configure_external_front();
-	pending.secret = secret.clone();
-	if let Err(e) = finish_pending_config(&pending) {
-		return respond_json(writer, "500 Internal Server Error", &serde_json::json!({ "error": e.to_string() })).await;
 	}
 
 	let (reply, reply_rx) = tokio::sync::oneshot::channel();
-	if state.finish.send(FinishRequest { reply }).is_err() {
-		return respond_json(
-			writer,
-			"503 Service Unavailable",
-			&serde_json::json!({ "error": "the setup dialog is gone" }),
-		)
-		.await;
+	let (delivery, delivered) = tokio::sync::oneshot::channel();
+	if state.finish.send(Finish { reply, delivered }).is_err() {
+		let error = match rollback_config(&secret) {
+			Ok(()) => "the setup owner is gone".to_owned(),
+			Err(recovery) => format!("the setup owner is gone; recovery is incomplete: {recovery}"),
+		};
+		return respond_json(writer, "503 Service Unavailable", &serde_json::json!({ "error": error })).await;
 	}
 
-	match reply_rx.await {
+	let response = match reply_rx.await {
 		Ok(Ok(url)) => {
 			*finish_state = FinishState::Complete;
 			let response = respond_json(writer, "200 OK", &serde_json::json!({ "url": url })).await;
@@ -372,10 +455,21 @@ async fn handle_finish(writer: &mut (impl AsyncWriteExt + Unpin), state: &State,
 			respond_json(writer, "500 Internal Server Error", &serde_json::json!({ "error": error })).await
 		},
 		Err(_) => {
-			respond_json(writer, "503 Service Unavailable", &serde_json::json!({ "error": "the setup dialog is gone" }))
+			respond_json(writer, "503 Service Unavailable", &serde_json::json!({ "error": "the setup owner is gone" }))
 				.await
 		},
-	}
+	};
+	let _ = delivery.send(());
+	response
+}
+
+fn prepare_finish(secret: &str) -> io::Result<()> {
+	let mut pending = pending_or_default()?;
+	pending.step = 3;
+	pending.caddy_config_path = configure_external_front();
+	pending.secret = secret.to_owned();
+	finish_pending_config(&pending)?;
+	Ok(())
 }
 
 /// A config that the daemon cannot start with would strand the next launch in a
@@ -393,16 +487,27 @@ fn rollback_config(secret: &str) -> Result<(), String> {
 }
 
 fn backup_failed_config(config: &Path) -> io::Result<()> {
-	let data = match testd_core::private_file::read(config) {
-		Ok(data) => data,
+	match std::fs::symlink_metadata(config) {
+		Ok(metadata) if metadata.is_file() => {},
+		Ok(_) => return Err(io::Error::other("failed config is linked or changed; left untouched")),
 		Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
 		Err(error) => return Err(error),
-	};
+	}
+	let mut original = testd_core::private_file::open(config)?;
+	let mut data = Vec::new();
+	std::io::Read::read_to_end(&mut original, &mut data)?;
 	let name = format!("config.toml.failed-{}", generate_operator_secret()?);
 	let backup = config.with_file_name(name);
 	let mut file = testd_core::private_file::create_new(&backup)?;
 	std::io::Write::write_all(&mut file, &data)?;
 	file.sync_all()?;
+	if !std::fs::symlink_metadata(config)?.is_file()
+		|| !testd_core::private_file::same_file(&original, &testd_core::private_file::open(config)?)?
+	{
+		return Err(io::Error::other(
+			"config changed during recovery; backup retained and current config left untouched",
+		));
+	}
 	std::fs::remove_file(config)
 }
 
@@ -552,6 +657,45 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn all_setup_mutations_are_excluded_during_a_transaction() {
+		let setup = start(&tokio::runtime::Handle::current()).unwrap();
+		let _change = setup.state.begin_change().unwrap();
+		let token = setup.url.split("#token=").nth(1).unwrap();
+		let request = format!(
+			"POST /api/setup/unknown HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+			Authorization: Bearer {token}\r\nX-Testd-Request: 1\r\nContent-Length: 2\r\n\r\n{{}}"
+		);
+		let response = http(setup.addr, &request).await;
+		assert!(response.starts_with("HTTP/1.1 409"));
+	}
+
+	#[tokio::test]
+	async fn shutdown_rejects_pending_startup_and_waits_for_its_response() {
+		let mut setup = start(&tokio::runtime::Handle::current()).unwrap();
+		let address = setup.addr;
+		let (reply, result) = tokio::sync::oneshot::channel();
+		let (delivery, delivered) = tokio::sync::oneshot::channel();
+		assert!(setup.state.finish.send(Finish { reply, delivered }).is_ok());
+		let task = tokio::spawn(async move { setup.shutdown().await });
+		assert!(result.await.unwrap().is_err());
+		assert!(!task.is_finished());
+		delivery.send(()).unwrap();
+		task.await.unwrap().unwrap();
+		assert!(TcpListener::bind(address).await.is_ok());
+	}
+
+	#[tokio::test]
+	async fn setup_owner_retains_the_surface_until_the_response_is_accounted_for() {
+		let (reply, result) = tokio::sync::oneshot::channel();
+		let (delivery, delivered) = tokio::sync::oneshot::channel();
+		let task = tokio::spawn(Finish { reply, delivered }.complete(Ok("fixture dashboard".into())));
+		assert_eq!(result.await.unwrap().unwrap(), "fixture dashboard");
+		assert!(!task.is_finished());
+		delivery.send(()).unwrap();
+		task.await.unwrap().unwrap();
+	}
+
+	#[tokio::test]
 	async fn concurrent_or_completed_finishes_cannot_change_configuration() {
 		let (stop, _) = tokio::sync::watch::channel(false);
 		let (finish, _) = tokio::sync::mpsc::unbounded_channel();
@@ -561,15 +705,28 @@ mod tests {
 			finish,
 			finish_state: tokio::sync::Mutex::new(FinishState::Editing),
 		};
-		let mut guard = state.begin_finish().unwrap();
+		let mut guard = state.begin_change().unwrap();
 		let mut response = Vec::new();
 		handle_finish(&mut response, &state, b"{}").await.unwrap();
 		assert!(response.starts_with(b"HTTP/1.1 409"));
 		*guard = FinishState::Complete;
 		drop(guard);
-		assert!(state.begin_finish().is_err());
+		assert!(state.begin_change().is_err());
 		*state.finish_state.lock().await = FinishState::Editing;
-		assert!(state.begin_finish().is_ok());
+		assert!(state.begin_change().is_ok());
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn failed_config_recovery_preserves_links_and_their_targets() {
+		let directory = tempfile::tempdir().unwrap();
+		let target = directory.path().join("other-config");
+		std::fs::write(&target, b"other state").unwrap();
+		let config = directory.path().join("config.toml");
+		std::os::unix::fs::symlink(&target, &config).unwrap();
+		assert!(backup_failed_config(&config).is_err());
+		assert!(std::fs::symlink_metadata(&config).unwrap().is_symlink());
+		assert_eq!(std::fs::read(target).unwrap(), b"other state");
 	}
 
 	#[test]

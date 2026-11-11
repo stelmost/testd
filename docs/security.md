@@ -32,8 +32,9 @@ The root CA and intermediate are created by the host. The root key stays on the 
 | Root CA key | `pki/root.key` | Can sign any certificate under the root |
 | Intermediate key | `pki/node.key` | Can issue leaf certificates |
 | Control token | `control.json` | Local launches and control channel for this daemon run |
-| Dashboard credential | `control.json`, then origin-scoped browser session storage | Local administration for this daemon run; distinct from registration and control tokens |
-| Setup credential | Memory and setup window session storage | One setup surface; not reusable in another setup session |
+| Dashboard credential | `control.json`, a live owner-private browser handoff, and origin-scoped session storage | Local administration for this daemon run; distinct from registration and control tokens |
+| Setup credential | Memory, a live owner-private browser handoff, and origin-scoped session storage | One setup surface; not reusable in another setup session |
+| Tray activation credential | `tray-control.json` | Early per-user tray activation only; no general command execution |
 | Leaf forwarding keys | Memory only, per registration connection | Accept application connections from the paired host CA |
 
 `config.toml`, `tokens.json`, `credentials/<profile>`, `control.json`, and private keys are written with user-only permissions on Unix. On Windows, private files are created with a protected ACL granting access only to the owner, SYSTEM, and Administrators, including temporary files used for atomic replacement. Reads verify ownership and ACLs before using credentials, control data, saved host trust, or keys. Unowned files, links, broader ACLs, and filesystems without verifiable ACLs are refused rather than silently repaired or adopted. Private writes also refuse redirected parents, untrusted owners, and parent access rules that let other users modify their contents or permissions.
@@ -75,11 +76,13 @@ Enable it only for leaves you would already trust with that reach. It relaxes th
 
 The dashboard is served on loopback and checks that the `Host` header is `localhost`, `127.0.0.1`, `[::1]`, or `testd.<tld>`. That check blocks DNS-rebinding pages from becoming local admin clients.
 
-Administration requires the per-run dashboard credential from the owner's private `control.json`. Tray and CLI dashboard links deliver it in a URL fragment; the page removes the credential from history and keeps it in origin-scoped session storage, not cookies shared across local ports. API and event requests use an Authorization header. An uncredentialed page contains no live names, launches, grants, or requests. The public stylesheet, liveness image, and public root certificate remain downloadable.
+Administration requires the per-run dashboard credential from the owner's private `control.json`. The tray delivers its fragment link through an owner-private HTML handoff file, not through browser-launcher arguments. The CLI still prints the authenticated URL for manual use. The page removes the credential from history and keeps it in origin-scoped session storage, not cookies shared across local ports. API and event requests use an Authorization header. An uncredentialed page contains no live names, launches, grants, or requests. The public stylesheet, liveness image, and public root certificate remain downloadable.
+
+The tray selects the default HTTP browser/profile, not the default HTML file editor. The browser and extensions with access to the page have local administration authority, including quick-launch process execution. Handoff files have owner-only access from creation and live only with their setup surface or daemon. They contain no operator secret or control credential. Ordinary cleanup removes only verified owned files; crash leftovers carry credentials invalidated by a new setup session or daemon run. Do not copy these files, pass the printed authenticated URL to a process-based opener, relax file permissions for sandboxed browsers, or replace this handoff with an unauthenticated loopback token endpoint.
 
 The credential is separate from the operator secret, issued leaf tokens, and local launch/control token. A restart creates a new credential; old sessions receive 401 and must be reopened through the tray or CLI. There is no account service or dashboard password. Treat a copied bootstrap link as an administrative credential for that daemon run.
 
-First-run setup has its own in-memory credential. Unauthenticated local callers cannot read or regenerate the operator secret, request privileged setup, or finish another user's setup surface.
+First-run setup has its own session credential, held in memory and its protected browser handoff. Unauthenticated local callers cannot read or regenerate the operator secret, request privileged setup, or finish another user's setup surface.
 
 A `POST` also needs `X-Testd-Request: 1`, which a cross-site form cannot set and a cross-origin fetch cannot pass without a preflight this server does not grant. That header is the CSRF boundary.
 
@@ -146,7 +149,9 @@ These are robustness limits, not authentication. Network exposure still needs a 
 
 ## Desktop integration
 
-The tray app registers the `testd://` scheme in release builds. The scheme accepts `fix/resolver` and `fix/certificate`; `testd url` forwards them to the running daemon or performs the repair directly. There is no general command channel over the scheme.
+The native tray app registers the `testd://` scheme on Windows/Linux in release builds; macOS declares it in the application bundle. The scheme accepts `fix/resolver` and `fix/certificate`; `testd url` forwards them to the running daemon or performs the repair directly. There is no general command channel over the scheme.
+
+A separate owner-authenticated early tray channel handles only setup activation and the two repair actions before the daemon is ready. It does not replace the daemon lock or adopt an already running headless daemon.
 
 The loopback control channel accepts typed commands authenticated by the per-run token in `control.json`: repairs, share start and stop, request decisions, and token revocation. It is not reachable off the machine. The token has no name scope, is accepted only by the daemon that wrote it, and does not appear in the token store.
 

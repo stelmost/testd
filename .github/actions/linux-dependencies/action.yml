@@ -1,4 +1,4 @@
-name: Linux Tauri dependencies
+name: Linux native tray dependencies
 description: Install the system libraries and bundling tools for the public tray
 runs:
   using: composite
@@ -12,14 +12,13 @@ runs:
         case "$ID" in
           ubuntu|debian)
             "${privilege[@]}" apt-get update
-            "${privilege[@]}" apt-get install -y pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
-              libjavascriptcoregtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
-              libdbus-1-dev patchelf
+            "${privilege[@]}" apt-get install -y pkg-config libgtk-3-dev libayatana-appindicator3-dev \
+              librsvg2-dev libdbus-1-dev patchelf
             ;;
           fedora)
             "${privilege[@]}" dnf install -y gcc gcc-c++ make pkgconf-pkg-config python3 curl wget file \
-              findutils gawk grep sed unzip xz zstd openssl openssl-devel webkit2gtk4.1-devel \
-              libappindicator-gtk3-devel librsvg2-devel libxdo-devel systemd patchelf
+              findutils gawk grep sed unzip xz zstd openssl openssl-devel gtk3-devel \
+              libappindicator-gtk3-devel librsvg2-devel dbus-devel systemd patchelf
             ;;
           *)
             printf 'Unsupported CI distribution: %s\n' "$ID" >&2
