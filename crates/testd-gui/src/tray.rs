@@ -1,5 +1,6 @@
 /*! Native tray presentation. Every value in Tray stays on the event-loop thread. */
 
+use std::cell::RefCell;
 use std::io::Cursor;
 
 use tray_icon::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -66,6 +67,25 @@ pub struct LaunchRow {
 	running: bool,
 }
 
+/* Native callbacks are Send + Sync; only the clicked value crosses that boundary, never the main-thread widget. */
+thread_local! {
+	static LOGIN_ITEM: RefCell<Option<CheckMenuItem>> = const { RefCell::new(None) };
+}
+
+fn publish_login_item(item: Option<CheckMenuItem>) {
+	LOGIN_ITEM.with(|current| current.replace(item));
+}
+
+pub fn clicked_login_preference() -> Option<bool> {
+	LOGIN_ITEM.with(|current| {
+		current
+			.borrow()
+			.as_ref()
+			.filter(|item| item.is_enabled())
+			.map(CheckMenuItem::is_checked)
+	})
+}
+
 pub struct Tray {
 	icon: TrayIcon,
 	state: State,
@@ -83,12 +103,8 @@ impl Tray {
 			.with_menu(Box::new(menu))
 			.with_menu_on_left_click(true)
 			.build()?;
+		publish_login_item(autostart.clone());
 		Ok(Self { icon, state, autostart })
-	}
-
-	pub fn login_preference(&self) -> Option<bool> {
-		self.state.autostart?;
-		self.autostart.as_ref().map(CheckMenuItem::is_checked)
 	}
 
 	pub fn update(&mut self, next: State) -> anyhow::Result<()> {
@@ -96,6 +112,7 @@ impl Tray {
 			let (menu, autostart) = build_menu(&next)?;
 			self.icon.set_menu(Some(Box::new(menu)));
 			self.autostart = autostart;
+			publish_login_item(self.autostart.clone());
 		}
 		if let Some(item) = &self.autostart {
 			item.set_enabled(next.autostart.is_some());
@@ -110,6 +127,12 @@ impl Tray {
 		}
 		self.state = next;
 		Ok(())
+	}
+}
+
+impl Drop for Tray {
+	fn drop(&mut self) {
+		publish_login_item(None);
 	}
 }
 

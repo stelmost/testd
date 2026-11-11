@@ -7,8 +7,6 @@ mod platform;
 mod private;
 mod tray;
 
-use std::io::Write;
-
 use anyhow::{Context, bail};
 use tao::event::{Event, StartCause, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
@@ -24,7 +22,7 @@ use host::Command;
 pub enum UiEvent {
 	State(tray::State),
 	Error(String),
-	Menu(MenuEvent),
+	Menu(MenuEvent, Option<bool>),
 	Stopped(Result<(), String>),
 }
 
@@ -103,8 +101,9 @@ fn run_desktop(
 	let proxy = event_loop.create_proxy();
 	MenuEvent::set_event_handler(Some({
 		let proxy = proxy.clone();
-		move |event| {
-			let _ = proxy.send_event(UiEvent::Menu(event));
+		move |event: MenuEvent| {
+			let preference = if event.id.as_ref() == "autostart" { tray::clicked_login_preference() } else { None };
+			let _ = proxy.send_event(UiEvent::Menu(event, preference));
 		}
 	}));
 	let mut receive = Some(receive);
@@ -139,7 +138,9 @@ fn run_desktop(
 					let _ = stop.send(true);
 				}
 			},
-			Event::UserEvent(UiEvent::Menu(event)) => handle_menu(event.id.as_ref(), tray.as_ref(), &commands, &stop),
+			Event::UserEvent(UiEvent::Menu(event, preference)) => {
+				handle_menu(event.id.as_ref(), preference, &commands, &stop)
+			},
 			Event::Opened { urls } => handle_urls(urls, &commands),
 			Event::UserEvent(UiEvent::Error(message)) => display_error(&message),
 			Event::UserEvent(UiEvent::Stopped(result)) => {
@@ -167,16 +168,9 @@ fn run_desktop(
 	Ok(())
 }
 
-fn handle_menu(id: &str, tray: Option<&tray::Tray>, commands: &mpsc::Sender<Command>, stop: &watch::Sender<bool>) {
+fn handle_menu(id: &str, preference: Option<bool>, commands: &mpsc::Sender<Command>, stop: &watch::Sender<bool>) {
 	trace(&format!("menu event: {id}"));
-	let command = if id == "autostart" {
-		/* Capture the clicked preference, not a later OS state that may have changed externally. */
-		tray.and_then(tray::Tray::login_preference)
-			.map(|enabled| if enabled { Command::EnableAutostart } else { Command::DisableAutostart })
-	} else {
-		Command::from_menu(id)
-	};
-	if let Some(command) = command {
+	if let Some(command) = Command::from_menu(id, preference) {
 		if matches!(command, Command::Quit) {
 			let _ = stop.send(true);
 		} else if let Err(error) = commands.try_send(command) {
@@ -227,13 +221,13 @@ pub(crate) fn trace(message: &str) {
 	let Some(path) = std::env::var_os("TESTD_TRAY_TRACE") else {
 		return;
 	};
-	let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) else {
-		return;
-	};
 	let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
 		return;
 	};
-	let _ = writeln!(file, "{:.3} {message}", now.as_secs_f64());
+	if let Err(error) = private::append_log(std::path::Path::new(&path), &format!("{:.3} {message}", now.as_secs_f64()))
+	{
+		eprintln!("[warn] private tray trace unavailable: {error}");
+	}
 }
 
 #[cfg(test)]

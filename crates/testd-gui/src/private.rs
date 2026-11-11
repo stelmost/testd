@@ -92,6 +92,31 @@ pub fn read(path: &Path) -> io::Result<Vec<u8>> {
 	Ok(data)
 }
 
+pub fn append_log(path: &Path, line: &str) -> io::Result<()> {
+	use std::io::Write;
+	let path = std::path::absolute(path)?;
+	directory(path.parent().ok_or_else(|| io::Error::other("the trace path has no parent"))?)?;
+	let mut file = match open(&path) {
+		Ok(original) => {
+			let mut options = std::fs::OpenOptions::new();
+			options.append(true);
+			#[cfg(unix)]
+			{
+				use std::os::unix::fs::OpenOptionsExt;
+				options.custom_flags(libc::O_NOFOLLOW);
+			}
+			let file = options.open(&path)?;
+			if !testd_core::private_file::same_file(&original, &file)? {
+				return Err(io::Error::other("the private trace file was replaced; left unchanged"));
+			}
+			file
+		},
+		Err(error) if error.kind() == io::ErrorKind::NotFound => testd_core::private_file::create_new(&path)?,
+		Err(error) => return Err(error),
+	};
+	writeln!(file, "{line}")
+}
+
 pub fn remove_owned(path: &Path, original: &File) -> io::Result<()> {
 	let current = match open(path) {
 		Ok(file) => file,
@@ -107,6 +132,17 @@ pub fn remove_owned(path: &Path, original: &File) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn diagnostic_logs_are_private_and_can_be_appended_without_replacement() {
+		let home = tempfile::tempdir().unwrap();
+		let path = home.path().join("tray.log");
+		append_log(&path, "first").unwrap();
+		let original = open(&path).unwrap();
+		append_log(&path, "second").unwrap();
+		assert_eq!(std::fs::read_to_string(&path).unwrap(), "first\nsecond\n");
+		assert!(testd_core::private_file::same_file(&original, &open(&path).unwrap()).unwrap());
+	}
 
 	#[test]
 	fn cleanup_preserves_replaced_files() {
@@ -130,8 +166,11 @@ mod tests {
 		let link = home.path().join("link");
 		symlink(&path, &link).unwrap();
 		assert!(open(&link).is_err());
+		assert!(append_log(&link, "private diagnostic").is_err());
 		std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
 		assert!(open(&path).is_err());
+		assert!(append_log(&path, "private diagnostic").is_err());
+		assert!(std::fs::read(&path).unwrap().is_empty());
 		let parent = home.path().join("shared");
 		std::fs::create_dir(&parent).unwrap();
 		std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o777)).unwrap();

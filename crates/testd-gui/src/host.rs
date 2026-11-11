@@ -34,8 +34,9 @@ pub enum Command {
 }
 
 impl Command {
-	pub fn from_menu(id: &str) -> Option<Self> {
+	pub fn from_menu(id: &str, requested_login: Option<bool>) -> Option<Self> {
 		match id {
+			"autostart" => Some(if requested_login? { Self::EnableAutostart } else { Self::DisableAutostart }),
 			"quit" => Some(Self::Quit),
 			"dashboard-open" => Some(Self::OpenPage),
 			"setup-dns" => Some(Self::Repair(Action::SetupResolver)),
@@ -489,11 +490,18 @@ mod tests {
 	}
 
 	#[test]
+	fn login_actions_keep_the_captured_checkbox_intent() {
+		assert!(matches!(Command::from_menu("autostart", Some(true)), Some(Command::EnableAutostart)));
+		assert!(matches!(Command::from_menu("autostart", Some(false)), Some(Command::DisableAutostart)));
+		assert!(Command::from_menu("autostart", None).is_none());
+	}
+
+	#[test]
 	fn menu_dispatch_rejects_headers_empty_values_and_unknown_actions() {
 		for id in ["domain:app.example.test", "launch:one", "quick-launches", "domain-stop:", "execute:sh"] {
-			assert!(Command::from_menu(id).is_none());
+			assert!(Command::from_menu(id, None).is_none());
 		}
-		assert!(matches!(Command::from_menu("domain-stop:app.example.test"), Some(Command::StopDomain(_))));
-		assert!(matches!(Command::from_menu("quit"), Some(Command::Quit)));
+		assert!(matches!(Command::from_menu("domain-stop:app.example.test", None), Some(Command::StopDomain(_))));
+		assert!(matches!(Command::from_menu("quit", None), Some(Command::Quit)));
 	}
 }
