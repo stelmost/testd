@@ -22,6 +22,8 @@ cargo packager --release --packages testd-gui --formats default \
 
 The workspace includes `testd-gui` under `crates/`. On a machine without native GTK development libraries, add `--exclude testd-gui` to workspace test and clippy commands. CI installs the native tray prerequisites and checks the full workspace. Packaging consumes the already built executable; it does not compile another runtime or mutate the binary. Explicitly select `app,dmg` on macOS, `appimage,deb` on Linux, or `nsis` on Windows for release artifacts.
 
+[Desktop integration library choices](docs/dependency-policy.md#desktop-integration-libraries) define the target-specific browser/dialog dependencies, retained GTK/Gio and macOS lookup, login serialization, and security checks that must not disappear during dependency updates.
+
 ## Icons
 
 `crates/testd-gui/icons/` is generated; its sources live in `assets/brand/`. Regenerate the bundle and tray icons with:

@@ -1,8 +1,7 @@
 use std::path::Path;
 
 use anyhow::Context;
-use objc2::MainThreadMarker;
-use objc2_app_kit::{NSAlert, NSWorkspace};
+use objc2_app_kit::NSWorkspace;
 use objc2_foundation::{NSString, NSURL};
 
 pub fn open_browser(file_url: &str) -> anyhow::Result<()> {
@@ -14,17 +13,6 @@ pub fn open_browser(file_url: &str) -> anyhow::Result<()> {
 	let path = application.path().context("the default browser has no application path")?;
 	open::with(file_url, path.to_string())?;
 	Ok(())
-}
-
-pub fn show_error(message: &str) {
-	let Some(main_thread) = MainThreadMarker::new() else {
-		return;
-	};
-	let _application = objc2_app_kit::NSApplication::sharedApplication(main_thread);
-	let alert = NSAlert::new(main_thread);
-	alert.setMessageText(&NSString::from_str("Testd"));
-	alert.setInformativeText(&NSString::from_str(message));
-	alert.runModal();
 }
 
 fn launch_agent_path() -> anyhow::Result<std::path::PathBuf> {

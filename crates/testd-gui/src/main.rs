@@ -214,7 +214,9 @@ fn display_error(error: &str) {
 	if let Err(error) = saved {
 		eprintln!("[warn] could not retain the desktop diagnostic: {error}");
 	}
-	platform::show_error(&message);
+	if let Err(error) = platform::show_error(&message) {
+		eprintln!("[warn] could not display the desktop diagnostic: {error:#}");
+	}
 }
 
 pub(crate) fn trace(message: &str) {

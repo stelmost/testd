@@ -99,6 +99,17 @@ class ReleaseTests(unittest.TestCase):
 		self.assertEqual(policy['bans']['wildcards'], 'deny')
 		self.assertIn({'name': 'openssl'}, policy['bans']['deny'])
 
+	def test_desktop_libraries_do_not_change_linux_runtime_requirements(self):
+		gui = tomllib.loads((ROOT / 'crates/testd-gui/Cargo.toml').read_text())
+		for dependency in ('webbrowser', 'native-dialog'):
+			self.assertNotIn(dependency, gui['dependencies'])
+			self.assertNotIn(dependency, gui['target']['cfg(target_os = "linux")']['dependencies'])
+		self.assertEqual(gui['target']['cfg(windows)']['dependencies']['webbrowser'], '=1.2.7')
+		self.assertEqual(gui['target']['cfg(any(windows, target_os = "macos"))']['dependencies']['native-dialog'],
+			'=0.9.7')
+		self.assertEqual(gui['dependencies']['auto-launch'], '0.5')
+		self.assertNotIn('interprocess', gui['dependencies'])
+
 	def test_default_and_ci_checks_use_the_declared_msrv(self):
 		workspace = release.tomllib.loads((ROOT / 'Cargo.toml').read_text())
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text()

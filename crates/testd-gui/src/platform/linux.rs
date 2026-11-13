@@ -46,10 +46,8 @@ fn restore_browser_variable(context: &gio::AppLaunchContext, variable: &str, ori
 	}
 }
 
-pub fn show_error(message: &str) {
-	if gtk::init().is_err() {
-		return;
-	}
+pub fn show_error(message: &str) -> anyhow::Result<()> {
+	gtk::init().context("cannot initialize GTK for the desktop diagnostic")?;
 	let dialog = gtk::MessageDialog::builder()
 		.message_type(gtk::MessageType::Error)
 		.buttons(gtk::ButtonsType::Ok)
@@ -58,6 +56,7 @@ pub fn show_error(message: &str) {
 		.build();
 	dialog.run();
 	dialog.close();
+	Ok(())
 }
 
 pub fn check_autostart(executable: &Path) -> anyhow::Result<()> {

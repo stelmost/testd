@@ -19,7 +19,25 @@ mod native;
 #[path = "platform/launch_agent.rs"]
 mod launch_agent;
 
-pub use native::{open_browser, show_error};
+pub use native::open_browser;
+#[cfg(target_os = "linux")]
+pub use native::show_error;
+
+#[cfg(any(windows, target_os = "macos"))]
+pub fn show_error(message: &str) -> anyhow::Result<()> {
+	/* Startup can fail before Tao creates the macOS application object. */
+	#[cfg(target_os = "macos")]
+	let main_thread = objc2::MainThreadMarker::new().context("desktop diagnostics require the main thread")?;
+	#[cfg(target_os = "macos")]
+	let _application = objc2_app_kit::NSApplication::sharedApplication(main_thread);
+	native_dialog::DialogBuilder::message()
+		.set_title("Testd")
+		.set_text(message.replace('\0', "�"))
+		.set_level(native_dialog::MessageLevel::Error)
+		.alert()
+		.show()
+		.context("could not display the native desktop diagnostic")
+}
 
 pub fn executable() -> anyhow::Result<PathBuf> {
 	let current = std::env::current_exe()?;

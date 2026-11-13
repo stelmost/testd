@@ -56,9 +56,10 @@ mod tests {
 	#[test]
 	fn login_paths_round_trip_as_plist_data_without_changing_the_filesystem_path() {
 		let home = tempfile::tempdir().unwrap();
-		let executable = home.path().join("A & B <é> \"testd-gui\"");
+		let directory = home.path().canonicalize().unwrap();
+		let executable = directory.join("A & B <é> \"testd-gui\"");
 		std::fs::write(&executable, b"fixture executable").unwrap();
-		let path = home.path().join("login.plist");
+		let path = directory.join("login.plist");
 		create(&path, &executable).unwrap();
 		check(&path, &executable).unwrap();
 		let value = Value::from_file(&path).unwrap();
@@ -72,9 +73,10 @@ mod tests {
 	#[test]
 	fn compatible_and_changed_entries_are_never_replaced() {
 		let home = tempfile::tempdir().unwrap();
-		let executable = home.path().join("testd-gui");
+		let directory = home.path().canonicalize().unwrap();
+		let executable = directory.join("testd-gui");
 		std::fs::write(&executable, b"fixture executable").unwrap();
-		let path = home.path().join("login.plist");
+		let path = directory.join("login.plist");
 		create(&path, &executable).unwrap();
 		let original = std::fs::read(&path).unwrap();
 		assert!(create(&path, &executable).is_err());
@@ -94,8 +96,9 @@ mod tests {
 	#[test]
 	fn missing_or_relative_executables_do_not_create_login_entries() {
 		let home = tempfile::tempdir().unwrap();
-		let path = home.path().join("login.plist");
-		for executable in [Path::new("relative"), &home.path().join("missing")] {
+		let directory = home.path().canonicalize().unwrap();
+		let path = directory.join("login.plist");
+		for executable in [Path::new("relative"), &directory.join("missing")] {
 			assert!(create(&path, executable).is_err());
 			assert!(!path.exists());
 		}

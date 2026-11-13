@@ -71,8 +71,19 @@ fn handoff_page(destination: &str) -> anyhow::Result<String> {
 }
 
 pub fn open(file_url: &str) -> anyhow::Result<()> {
+	/* Never give a library's launcher or diagnostics a credential-bearing destination. */
+	let uri = Url::parse(file_url).map_err(|_| anyhow::anyhow!("invalid browser handoff URI"))?;
+	if uri.scheme() != "file"
+		|| !uri.username().is_empty()
+		|| uri.password().is_some()
+		|| uri.query().is_some()
+		|| uri.fragment().is_some()
+		|| file_url.contains('"')
+	{
+		bail!("the browser launcher requires a credential-free file URI");
+	}
 	/* Select the HTTP handler: the default HTML file handler may be an editor. */
-	crate::platform::open_browser(file_url).context("could not open the default browser; use the tray to retry")
+	crate::platform::open_browser(uri.as_str()).context("could not open the default browser; use the tray to retry")
 }
 
 #[cfg(test)]
@@ -80,6 +91,21 @@ mod tests {
 	use super::*;
 
 	const TOKEN: &str = "fixture-owner-credential";
+
+	#[test]
+	fn launch_rejects_credentials_before_invoking_any_platform_library() {
+		for input in [
+			format!("http://127.0.0.1/#token={TOKEN}"),
+			format!("https://foreign.example/{TOKEN}"),
+			format!("file:///private/handoff.html#token={TOKEN}"),
+			format!("file:///private/handoff.html?token={TOKEN}"),
+			format!("javascript:{TOKEN}"),
+			format!("file:///private/\"{TOKEN}.html"),
+		] {
+			let error = open(&input).unwrap_err().to_string();
+			assert!(!error.contains(TOKEN));
+		}
+	}
 
 	#[test]
 	fn launch_argument_has_no_credential_and_the_owned_file_is_removed() {

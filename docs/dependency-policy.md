@@ -1,11 +1,37 @@
 ---
 title: Dependency policy
-description: 'Advisory exceptions and MSRV constraints accepted by the dependency gate.'
+description: 'Desktop integration library choices, advisory exceptions, and MSRV constraints.'
 ---
 
-# Dependency advisory exceptions
+# Dependency policy
 
 `cargo deny check` remains the dependency policy gate. Vulnerability advisories are not exempted.
+
+## Desktop integration libraries
+
+The native tray uses narrowly scoped libraries rather than restoring an application framework. Versions whose platform behavior is relied on are pinned; review that behavior, MSRV, and the target-filtered dependency graph before upgrading them.
+
+| Surface | Choice | Reason |
+|---|---|---|
+| Windows browser launch | [`webbrowser` 1.2.7](https://crates.io/crates/webbrowser/1.2.7), Rust 1.85 | Resolves the HTTP browser command and preserves its arguments without falling back to the HTML file association |
+| Windows/macOS error dialogs | [`native-dialog` 0.9.7](https://crates.io/crates/native-dialog/0.9.7), Rust 1.85 | Delegates MessageBox/NSAlert handling to a maintained fallible API; testd retains recovery text and private diagnostics |
+| Linux browser launch and errors | Existing Gio/GTK | Selects the HTTP handler with a per-launch environment and keeps dialogs available without Zenity/KDialog/YAD |
+| macOS browser launch | Existing NSWorkspace lookup and `open` | Selects the HTTP handler explicitly and reports lookup failure instead of silently choosing another browser |
+| Login registration | `auto-launch` 0.5 plus macOS `plist` serialization | Keeps per-user identities, LaunchAgent behavior, existing opt-out state, and portable AppImage paths |
+| Installed URL associations | `cargo-packager` metadata | Keeps declarations owned by the package; portable runtime registration still validates existing state |
+| Early coordination | Existing Tokio/fs2 plus testd's authenticated protocol | Preserves configuration-directory identity, bounded activation, allowed actions, and shutdown policy |
+
+For the currently locked release-target graph, Windows adds `webbrowser`, `native-dialog`, `formatx`, and `wfd`; macOS adds `native-dialog` and `formatx`; Linux adds no normal/build package. The all-target lockfile also includes unused backends, so its growth is not a count of shipped runtime dependencies.
+
+Only a validated, credential-free file URI reaches browser-launch libraries. The authenticated loopback destination stays inside the owner-private handoff. A failed launch is reported for tray retry; no fallback passes the authenticated URL to a process, exposes a public credential endpoint, or relaxes file permissions.
+
+`webbrowser` is Windows-only here. Its Linux fallbacks can select an HTML editor, and its macOS default lookup uses HTTPS with a Safari fallback. Those do not preserve testd's strict HTTP-handler policy. Its `hardened` feature rejects file URIs and is incompatible with this handoff. The pinned Windows implementation has a 512-UTF-16-unit association-command buffer; unusually long registered browser commands remain a native compatibility test case, not a silently supported claim.
+
+`native-dialog` is Windows/macOS-only here because its Linux backend requires an external dialog program. `rfd` 0.18 requires Rust 1.92, above this workspace's 1.90 MSRV, and older GTK backends introduce their own GTK thread. Testd keeps GTK on the native event-loop thread and retains early macOS application initialization for errors before Tao starts.
+
+No new IPC or URI-registration library is selected merely to shorten wrappers. `interprocess` is a maintained transport option but does not replace testd's authorization, startup queue, or resource ownership. The inspected `sysuri` release overwrites/removes associations without testd's ownership checks. These policies, private-file validation, and setup/daemon lifecycles remain application code.
+
+Native browser selection, sandboxed file access, early dialogs, login, and package upgrade/uninstall behavior still require the [desktop and browser validation](https://github.com/LapilliWorks/testd/blob/master/DEVELOPING.md#release-validation) gates. Library MSRVs and successful type checks are not native acceptance evidence.
 
 ## GTK3 procedural macros
 
