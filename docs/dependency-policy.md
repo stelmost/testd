@@ -31,6 +31,12 @@ These three advisory IDs are listed explicitly in `deny.toml`; other advisory ch
 
 Remove these exceptions once notifications use zbus 6 and the standalone crates no longer appear in the resolved graph. Reassess the exceptions on every notification dependency update. Upstream migration: [zbus issue 2043](https://github.com/z-galaxy/zbus/issues/2043).
 
+## Launch-at-login serialization
+
+Linux and Windows retain `auto-launch` 0.5 and their existing per-user registration. On macOS, the library still queries/disables the existing LaunchAgent, but testd creates it with the already selected `plist` serializer. The executable remains a raw filesystem path; XML escaping belongs only in serialization. The published `auto-launch` 0.6 still interpolates XML, so upgrading it would not fix paths containing `&`, `<`, or `>`.
+
+The LaunchAgent keeps `dev.testd.host`, `ProgramArguments`, and `RunAtLoad`, along with the existing opt-out marker and validation of compatible/changed entries. Creation uses an owner-private temporary file and atomic no-replace persistence; it does not migrate to SMAppService or load a different login service. File-format tests run without AppKit, but do not replace an actual macOS logout/login observation.
+
 ## Notification MSRV
 
 The daemon requires `notify-rust` 4.18 for notification action callbacks on macOS and Windows. That release requires Rust 1.89, within the workspace MSRV of Rust 1.90. Release-validation and CI checks use Rust 1.90.

@@ -15,6 +15,10 @@ mod native;
 #[path = "platform/windows.rs"]
 mod native;
 
+#[cfg(any(target_os = "macos", all(test, unix)))]
+#[path = "platform/launch_agent.rs"]
+mod launch_agent;
+
 pub use native::{open_browser, show_error};
 
 pub fn executable() -> anyhow::Result<PathBuf> {
@@ -43,8 +47,6 @@ fn autostart() -> anyhow::Result<AutoLaunch> {
 	}
 	#[cfg(target_os = "linux")]
 	let path = desktop_exec(path);
-	#[cfg(target_os = "macos")]
-	let path = path.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
 	#[cfg(windows)]
 	let path = format!("\"{path}\"");
 	let mut builder = AutoLaunchBuilder::new();
@@ -87,6 +89,10 @@ pub fn enable_autostart_once() -> anyhow::Result<bool> {
 pub fn enable_autostart() -> anyhow::Result<bool> {
 	let manager = autostart()?;
 	if !login_enabled(&manager)? {
+		#[cfg(target_os = "macos")]
+		native::enable_autostart(std::path::Path::new(manager.get_app_path()))
+			.context("cannot enable launch at login")?;
+		#[cfg(not(target_os = "macos"))]
 		manager
 			.enable()
 			.map_err(|error| anyhow::anyhow!("cannot enable launch at login: {error}"))?;

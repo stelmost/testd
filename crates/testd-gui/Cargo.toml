@@ -40,6 +40,7 @@ windows-sys = { version = '0.61', features = ['Win32_Foundation', 'Win32_UI_Shel
 embed-resource = '3.0.12'
 
 [dev-dependencies]
+plist = '1'
 tempfile = { workspace = true }
 
 [package.metadata.packager]

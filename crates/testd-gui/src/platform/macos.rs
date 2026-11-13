@@ -27,28 +27,19 @@ pub fn show_error(message: &str) {
 	alert.runModal();
 }
 
-pub fn check_autostart(executable: &Path) -> anyhow::Result<()> {
+fn launch_agent_path() -> anyhow::Result<std::path::PathBuf> {
 	let home = std::env::var_os("HOME").context("HOME is not set")?;
 	let directory = std::path::PathBuf::from(home).join("Library/LaunchAgents");
 	crate::private::directory(&directory)?;
-	let Some(data) = crate::private::read_entry(&directory.join("dev.testd.host.plist"))? else {
-		return Ok(());
-	};
-	let value = plist::Value::from_reader(std::io::Cursor::new(data))?;
-	let entry = value
-		.as_dictionary()
-		.context("the existing login entry is not a dictionary; left unchanged")?;
-	anyhow::ensure!(
-		entry.len() == 3
-			&& entry.get("Label").and_then(plist::Value::as_string) == Some("dev.testd.host")
-			&& entry.get("RunAtLoad").and_then(plist::Value::as_boolean) == Some(true)
-			&& entry
-				.get("ProgramArguments")
-				.and_then(plist::Value::as_array)
-				.is_some_and(|arguments| arguments.len() == 1 && arguments[0].as_string() == executable.to_str()),
-		"the existing login entry was changed or points elsewhere; left unchanged"
-	);
-	Ok(())
+	Ok(directory.join("dev.testd.host.plist"))
+}
+
+pub fn check_autostart(executable: &Path) -> anyhow::Result<()> {
+	super::launch_agent::check(&launch_agent_path()?, executable)
+}
+
+pub fn enable_autostart(executable: &Path) -> anyhow::Result<()> {
+	super::launch_agent::create(&launch_agent_path()?, executable)
 }
 
 pub fn register_scheme(_executable: &Path) -> anyhow::Result<()> {
