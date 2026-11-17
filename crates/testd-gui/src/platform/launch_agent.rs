@@ -55,7 +55,7 @@ mod tests {
 
 	#[test]
 	fn login_paths_round_trip_as_plist_data_without_changing_the_filesystem_path() {
-		let home = tempfile::tempdir().unwrap();
+		let home = crate::private::test_directory();
 		let directory = home.path().canonicalize().unwrap();
 		let executable = directory.join("A & B <é> \"testd-gui\"");
 		std::fs::write(&executable, b"fixture executable").unwrap();
@@ -72,7 +72,7 @@ mod tests {
 
 	#[test]
 	fn compatible_and_changed_entries_are_never_replaced() {
-		let home = tempfile::tempdir().unwrap();
+		let home = crate::private::test_directory();
 		let directory = home.path().canonicalize().unwrap();
 		let executable = directory.join("testd-gui");
 		std::fs::write(&executable, b"fixture executable").unwrap();
@@ -95,7 +95,7 @@ mod tests {
 
 	#[test]
 	fn missing_or_relative_executables_do_not_create_login_entries() {
-		let home = tempfile::tempdir().unwrap();
+		let home = crate::private::test_directory();
 		let directory = home.path().canonicalize().unwrap();
 		let path = directory.join("login.plist");
 		for executable in [Path::new("relative"), &directory.join("missing")] {

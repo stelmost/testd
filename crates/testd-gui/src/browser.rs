@@ -109,7 +109,7 @@ mod tests {
 
 	#[test]
 	fn launch_argument_has_no_credential_and_the_owned_file_is_removed() {
-		let home = tempfile::tempdir().unwrap();
+		let home = crate::private::test_directory();
 		let destination = format!("http://127.0.0.1:7737/#token={TOKEN}");
 		let handoff = Handoff::new(home.path(), &destination).unwrap();
 		assert!(!handoff.file_url().contains(TOKEN));

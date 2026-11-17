@@ -186,7 +186,7 @@ mod tests {
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 	async fn duplicate_start_delegates_without_taking_over_and_cleanup_preserves_the_lock_file() {
-		let home = tempfile::tempdir().unwrap();
+		let home = crate::private::test_directory();
 		let (commands, mut receive) = mpsc::channel(4);
 		let runtime = tokio::runtime::Handle::current();
 		let guard = acquire(home.path(), Activation::ContinueSetup, &runtime, commands.clone())

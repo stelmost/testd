@@ -130,12 +130,27 @@ pub fn remove_owned(path: &Path, original: &File) -> io::Result<()> {
 }
 
 #[cfg(test)]
+pub fn test_directory() -> tempfile::TempDir {
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::PermissionsExt;
+		/* Fixture privacy must not depend on the developer's umask. */
+		tempfile::Builder::new()
+			.permissions(std::fs::Permissions::from_mode(0o700))
+			.tempdir()
+			.unwrap()
+	}
+	#[cfg(not(unix))]
+	tempfile::tempdir().unwrap()
+}
+
+#[cfg(test)]
 mod tests {
 	use super::*;
 
 	#[test]
 	fn diagnostic_logs_are_private_and_can_be_appended_without_replacement() {
-		let home = tempfile::tempdir().unwrap();
+		let home = test_directory();
 		let path = home.path().join("tray.log");
 		append_log(&path, "first").unwrap();
 		let original = open(&path).unwrap();
@@ -146,7 +161,7 @@ mod tests {
 
 	#[test]
 	fn cleanup_preserves_replaced_files() {
-		let home = tempfile::tempdir().unwrap();
+		let home = test_directory();
 		directory(home.path()).unwrap();
 		let path = home.path().join("private");
 		let original = testd_core::private_file::create_new(&path).unwrap();
@@ -160,7 +175,7 @@ mod tests {
 	#[test]
 	fn shared_files_redirected_paths_and_writable_parents_are_refused() {
 		use std::os::unix::fs::{PermissionsExt, symlink};
-		let home = tempfile::tempdir().unwrap();
+		let home = test_directory();
 		let path = home.path().join("private");
 		let _file = testd_core::private_file::create_new(&path).unwrap();
 		let link = home.path().join("link");
