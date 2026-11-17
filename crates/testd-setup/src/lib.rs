@@ -8,8 +8,12 @@ use std::path::Path;
 
 #[cfg(target_os = "linux")]
 mod linux_resolver;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 mod ownership;
+#[cfg(any(target_os = "macos", all(test, unix)))]
+mod macos;
+#[cfg(target_os = "macos")]
+mod macos_trust;
 #[cfg(any(target_os = "windows", test))]
 mod windows_helper;
 #[cfg(target_os = "windows")]
@@ -455,7 +459,7 @@ fn shell_quote(value: &str) -> String {
 /// Remove the OS resolver configuration for `.<tld>`.
 pub fn teardown_os_resolver(tld: &str) -> io::Result<()> {
 	#[cfg(target_os = "macos")]
-	return teardown_macos(tld);
+	return macos_resolver::teardown(tld);
 
 	#[cfg(target_os = "linux")]
 	return linux_resolver::teardown(tld, Elevation::Sudo);
@@ -465,24 +469,6 @@ pub fn teardown_os_resolver(tld: &str) -> io::Result<()> {
 
 	#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 	Err(io::Error::new(io::ErrorKind::Unsupported, "unsupported platform for DNS resolver teardown"))
-}
-
-#[cfg(target_os = "macos")]
-fn teardown_macos(tld: &str) -> io::Result<()> {
-	let path = format!("/etc/resolver/{tld}");
-	let status = silent_command("sudo").args(["rm", "-f", &path]).status()?;
-	if !status.success() {
-		return Err(io::Error::other(format!("sudo rm {path} failed")));
-	}
-	let status = silent_command("sudo").args(["dscacheutil", "-flushcache"]).status()?;
-	if !status.success() {
-		return Err(io::Error::other("sudo dscacheutil -flushcache failed"));
-	}
-	let status = silent_command("sudo").args(["killall", "-HUP", "mDNSResponder"]).status()?;
-	if !status.success() {
-		return Err(io::Error::other("sudo killall -HUP mDNSResponder failed"));
-	}
-	Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -670,18 +656,6 @@ mod tests {
 	}
 
 	#[test]
-	fn testd_root_names_accept_legacy_and_pronounceable_suffixes() {
-		let suffix = covo::encode(b"test");
-		assert!(is_testd_root_cn("testd root"));
-		assert!(is_testd_root_cn(&format!("testd root {suffix}")));
-		assert!(!is_testd_root_cn("testd root testing"));
-		assert!(!is_testd_root_cn("testd root testing-extra"));
-		assert!(!is_testd_root_cn("testd root 0123abcd"));
-		assert!(!is_testd_root_cn("testd root ragiba fihula visuba"));
-		assert!(!is_testd_root_cn("testd intermediate"));
-	}
-
-	#[test]
 	fn trust_removal_requires_a_certificate_before_elevation() {
 		for pem in ["", " \t\n"] {
 			assert_eq!(untrust_root(pem).unwrap_err().kind(), io::ErrorKind::InvalidInput);
@@ -701,17 +675,6 @@ mod tests {
 		assert!(roots[1].pem.contains("BwgJ"));
 		assert_eq!(roots[0].hash.len(), 40);
 		assert_ne!(roots[0].hash, roots[1].hash);
-	}
-
-	#[test]
-	fn macos_root_selection_leaves_other_installations_alone() {
-		let roots = vec![
-			MacRoot { hash: "ours".into(), pem: "our certificate".into() },
-			MacRoot { hash: "theirs".into(), pem: "another certificate".into() },
-		];
-		let matched = matching_macos_roots(roots, "our certificate\r\n");
-		assert_eq!(matched.len(), 1);
-		assert_eq!(matched[0].hash, "ours");
 	}
 
 	#[test]
@@ -865,10 +828,6 @@ mod tests {
 
 // --- root CA trust ---
 
-/// Prefix of the testd root common name; new roots append a pronounceable name.
-#[cfg(any(target_os = "macos", test))]
-const ROOT_CN: &str = "testd root";
-
 /// One certificate returned by `security find-certificate`, with the SHA-1
 /// used to delete that exact item rather than the first item with its name.
 #[cfg(any(target_os = "macos", test))]
@@ -915,7 +874,7 @@ pub fn is_root_trusted(cert_pem: &str) -> bool {
 	return is_root_trusted_linux(cert_pem);
 
 	#[cfg(target_os = "macos")]
-	return is_root_trusted_macos(cert_pem);
+	return macos_trust::is_trusted(cert_pem);
 
 	#[cfg(target_os = "windows")]
 	return is_root_trusted_windows(cert_pem);
@@ -1048,7 +1007,7 @@ fn owned_trust_input(owner: &ownership::InstallationId, cert_pem: &str) -> Vec<u
 	format!("{}\n{cert_pem}", owner.as_str()).into_bytes()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn single_anchor_der(pem: &str) -> io::Result<Vec<u8>> {
 	if pem.matches("-----BEGIN CERTIFICATE-----").count() != 1 {
 		return Err(io::Error::new(io::ErrorKind::InvalidData, "expected one root certificate"));
@@ -1190,73 +1149,6 @@ fn is_root_trusted_linux(cert_pem: &str) -> bool {
 	linux_bundle_contains_root(&trust_layout(), cert_pem).is_ok_and(|trusted| trusted)
 }
 
-#[cfg(any(target_os = "macos", test))]
-fn is_testd_root_cn(common_name: &str) -> bool {
-	if common_name == ROOT_CN {
-		return true;
-	}
-	let Some(suffix) = common_name.strip_prefix(ROOT_CN).and_then(|rest| rest.strip_prefix(' ')) else {
-		return false;
-	};
-	covo::decode(suffix).is_ok_and(|bytes| bytes.len() == 4 && covo::encode(&bytes) == suffix)
-}
-
-#[cfg(target_os = "macos")]
-fn certificate_common_name(pem: &str) -> Option<String> {
-	let der = pem_to_der(pem).ok()?;
-	let (_, certificate) = x509_parser::parse_x509_certificate(der.as_ref()).ok()?;
-	let name = certificate.subject().iter_common_name().next()?;
-	Some(name.as_str().ok()?.to_owned())
-}
-
-#[cfg(target_os = "macos")]
-fn macos_testd_roots() -> io::Result<Vec<MacRoot>> {
-	let output = silent_command("security")
-		.args(["find-certificate", "-a", "-p", "/Library/Keychains/System.keychain"])
-		.output()?;
-	if !output.status.success() {
-		return Ok(Vec::new());
-	}
-	let mut roots = parse_macos_roots(&String::from_utf8_lossy(&output.stdout));
-	roots.retain(|root| certificate_common_name(&root.pem).is_some_and(|name| is_testd_root_cn(&name)));
-	Ok(roots)
-}
-
-#[cfg(target_os = "macos")]
-fn is_root_trusted_macos(cert_pem: &str) -> bool {
-	let Ok(roots) = macos_testd_roots() else { return false };
-	!matching_macos_roots(roots, cert_pem).is_empty()
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn matching_macos_roots(roots: Vec<MacRoot>, cert_pem: &str) -> Vec<MacRoot> {
-	let expected = normalize_pem(cert_pem);
-	roots.into_iter().filter(|root| root.pem == expected).collect()
-}
-
-#[cfg(target_os = "macos")]
-fn delete_macos_roots(roots: &[MacRoot]) -> io::Result<()> {
-	for root in roots {
-		let status = silent_command("sudo")
-			.args(["security", "delete-certificate", "-t", "-Z", &root.hash, "/Library/Keychains/System.keychain"])
-			.status()?;
-		if !status.success() {
-			return Err(io::Error::other(format!("failed to remove testd root {}", root.hash)));
-		}
-	}
-	Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn delete_macos_roots_script(roots: &[MacRoot]) -> String {
-	roots
-		.iter()
-		.map(|root| {
-			format!("security delete-certificate -t -Z {} /Library/Keychains/System.keychain || exit 1; ", root.hash)
-		})
-		.collect()
-}
-
 #[cfg(target_os = "windows")]
 fn is_root_trusted_windows(cert_pem: &str) -> bool {
 	let Ok(der) = pem_to_der(cert_pem) else { return false };
@@ -1280,7 +1172,7 @@ pub fn trust_root(cert_pem: &str) -> io::Result<()> {
 	return trust_root_linux(cert_pem, Elevation::Sudo);
 
 	#[cfg(target_os = "macos")]
-	return trust_root_macos(cert_pem);
+	return macos_trust::install(cert_pem, Elevation::Sudo);
 
 	#[cfg(target_os = "windows")]
 	return trust_root_windows(cert_pem);
@@ -1297,27 +1189,7 @@ pub fn trust_root_gui(cert_pem: &str) -> io::Result<()> {
 	}
 	#[cfg(target_os = "macos")]
 	{
-		use base64::Engine;
-		use base64::engine::general_purpose::STANDARD;
-
-		// `do shell script` does not inherit stdin. Pass the public certificate
-		// as base64 and let the elevated shell create its own root-only file.
-		let encoded = STANDARD.encode(cert_pem.as_bytes());
-		let script = format!(
-			"tmp=$(mktemp /var/root/testd-root.XXXXXX) && trap 'rm -f $tmp' EXIT && \
-			 printf '%s' '{encoded}' | base64 -D > $tmp && \
-			 security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain $tmp"
-		);
-		let status = silent_command("osascript")
-			.args(["-e", &format!("do shell script \"{script}\" with administrator privileges")])
-			.status()?;
-		if !status.success() {
-			return Err(io::Error::new(
-				io::ErrorKind::PermissionDenied,
-				"root CA install failed (cancelled or auth error)",
-			));
-		}
-		Ok(())
+		macos_trust::install(cert_pem, Elevation::Gui)
 	}
 	#[cfg(target_os = "windows")]
 	{
@@ -1352,19 +1224,6 @@ fn trust_root_linux(cert_pem: &str, elevation: Elevation) -> io::Result<()> {
 		))),
 		_ => Err(io::Error::other("root CA install or trust-store update failed")),
 	}
-}
-
-#[cfg(target_os = "macos")]
-fn trust_root_macos(cert_pem: &str) -> io::Result<()> {
-	let script = "tmp=$(mktemp /var/root/testd-root.XXXXXX) && trap 'rm -f $tmp' EXIT && \
-		cat > $tmp && security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain $tmp";
-	let mut command = silent_command("sudo");
-	command.args(["sh", "-c", script]);
-	let status = run_with_stdin(command, cert_pem.as_bytes())?;
-	if !status.success() {
-		return Err(io::Error::new(io::ErrorKind::PermissionDenied, "root CA install failed"));
-	}
-	Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -1406,7 +1265,7 @@ pub fn untrust_root(cert_pem: &str) -> io::Result<()> {
 	return untrust_root_linux(cert_pem, Elevation::Sudo);
 
 	#[cfg(target_os = "macos")]
-	return untrust_root_macos(cert_pem);
+	return macos_trust::remove(cert_pem, Elevation::Sudo);
 
 	#[cfg(target_os = "windows")]
 	return untrust_root_windows(cert_pem);
@@ -1425,21 +1284,7 @@ pub fn untrust_root_gui(cert_pem: &str) -> io::Result<()> {
 	}
 	#[cfg(target_os = "macos")]
 	{
-		let roots = matching_macos_roots(macos_testd_roots()?, cert_pem);
-		if roots.is_empty() {
-			return Ok(());
-		}
-		let script = delete_macos_roots_script(&roots);
-		let status = silent_command("osascript")
-			.args(["-e", &format!("do shell script \"{script}\" with administrator privileges")])
-			.status()?;
-		if !status.success() {
-			return Err(io::Error::new(
-				io::ErrorKind::PermissionDenied,
-				"root CA removal failed (cancelled or auth error)",
-			));
-		}
-		Ok(())
+		macos_trust::remove(cert_pem, Elevation::Gui)
 	}
 	#[cfg(target_os = "windows")]
 	{
@@ -1475,18 +1320,13 @@ fn untrust_root_linux(cert_pem: &str, elevation: Elevation) -> io::Result<()> {
 	}
 }
 
-#[cfg(target_os = "macos")]
-fn untrust_root_macos(cert_pem: &str) -> io::Result<()> {
-	delete_macos_roots(&matching_macos_roots(macos_testd_roots()?, cert_pem))
-}
-
 #[cfg(target_os = "windows")]
 fn untrust_root_windows(cert_pem: &str) -> io::Result<()> {
 	let der = pem_to_der(cert_pem)?;
 	run_windows_helper("RemoveRoot", &[("Thumbprint", &sha1_hex(&der)), ("Fingerprint", &sha256_hex(&der))])
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
 fn sha256_hex(bytes: &[u8]) -> String {
 	use sha2::{Digest, Sha256};
 	Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()

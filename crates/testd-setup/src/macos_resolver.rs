@@ -5,9 +5,11 @@ use std::net::SocketAddr;
 use std::path::Path;
 
 #[cfg(target_os = "macos")]
-use super::{Elevation, silent_command};
+use super::{Elevation, ownership};
 
-const CONFLICT: i32 = 17;
+use super::macos;
+
+const CONFLICT: i32 = macos::CONFLICT;
 
 pub(super) fn matches_route(content: &str, addr: SocketAddr) -> bool {
 	let mut servers = Vec::new();
@@ -42,19 +44,21 @@ fn already_configured(path: &Path, addr: SocketAddr) -> io::Result<bool> {
 	Ok(true)
 }
 
-fn install_script(path: &Path, addr: SocketAddr, reload: &str) -> String {
+fn install_script(path: &Path, addr: SocketAddr, owner: &str, reload: &str) -> String {
 	let directory = super::shell_quote(&path.parent().unwrap().to_string_lossy());
-	let path = super::shell_quote(&path.to_string_lossy());
 	let content = super::shell_quote(&format!("nameserver {}\nport {}\n", addr.ip(), addr.port()));
-	/* Noclobber rechecks after authorization and refuses files, links, or directories created in the meantime. */
+	let helpers = macos::file_script(path, owner);
 	format!(
-		"PATH=/usr/sbin:/usr/bin:/sbin:/bin; export PATH\n\
-		mkdir -p {directory} || exit 1\n\
-		if [ -e {path} ] || [ -L {path} ]; then exit {CONFLICT}; fi\n\
-		set -C\n\
-		(umask 022; printf '%s' {content} > {path}) || exit {CONFLICT}\n\
-		{reload}"
+		"set -eu\n{helpers}\n\
+		[ ! -L {directory} ] || exit {CONFLICT}\n\
+		mkdir -p {directory}\n\
+		content={content}\ninstall_file\n{reload}"
 	)
+}
+
+fn remove_script(path: &Path, owner: &str, reload: &str) -> String {
+	let helpers = macos::file_script(path, owner);
+	format!("set -eu\n{helpers}\nreload={}\nremove_file", super::shell_quote(reload))
 }
 
 #[cfg(target_os = "macos")]
@@ -65,22 +69,29 @@ pub(super) fn setup(tld: &str, addr: SocketAddr, elevation: Elevation) -> io::Re
 	if already_configured(&path, addr)? {
 		return Ok(());
 	}
-	let script = install_script(&path, addr, "dscacheutil -flushcache && killall -HUP mDNSResponder");
-	let status = match elevation {
-		Elevation::Sudo => silent_command("sudo").args(["sh", "-c", &script]).status()?,
-		Elevation::Gui => {
-			let escaped = script.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
-			let action = format!("do shell script \"{escaped}\" with administrator privileges");
-			silent_command("osascript").args(["-e", &action]).status()?
-		},
-	};
-	if !status.success() {
-		return Err(io::Error::other(format!("resolver setup failed ({status}); existing state was not replaced")));
-	}
+	let owner = ownership::InstallationId::load_or_create()?;
+	let script = install_script(&path, addr, &owner.fingerprint(), RELOAD);
+	macos::run(&script, elevation)?;
 	if !already_configured(&path, addr)? {
 		return Err(io::Error::other("resolver setup could not be verified"));
 	}
 	Ok(())
+}
+
+#[cfg(target_os = "macos")]
+const RELOAD: &str = "dscacheutil -flushcache && killall -HUP mDNSResponder";
+
+#[cfg(target_os = "macos")]
+pub(super) fn teardown(tld: &str) -> io::Result<()> {
+	testd_core::validate::validate_domain_labels(tld)
+		.map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+	let path = std::path::PathBuf::from(format!("/etc/resolver/{tld}"));
+	let marker = std::path::PathBuf::from(format!("/etc/resolver/{tld}.owner"));
+	if !macos::present(&path)? && !macos::present(&marker)? {
+		return Ok(());
+	}
+	let owner = ownership::InstallationId::load()?.ok_or_else(|| conflict(&path))?;
+	macos::run(&remove_script(&path, &owner.fingerprint(), RELOAD), Elevation::Sudo)
 }
 
 #[cfg(test)]
@@ -109,7 +120,7 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		let path = dir.path().join("test ' route");
 		assert!(!already_configured(&path, address()).unwrap());
-		let script = install_script(&path, address(), "true");
+		let script = install_script(&path, address(), "installation-a", "true");
 		let run = || std::process::Command::new("sh").args(["-c", &script]).status().unwrap();
 		assert!(run().success());
 		assert!(already_configured(&path, address()).unwrap());
@@ -121,11 +132,33 @@ mod tests {
 		std::fs::write(&raced, "other tool's settings").unwrap();
 		assert!(already_configured(&raced, address()).is_err());
 		let status = std::process::Command::new("sh")
-			.args(["-c", &install_script(&raced, address(), "true")])
+			.args(["-c", &install_script(&raced, address(), "installation-a", "true")])
 			.status()
 			.unwrap();
 		assert_eq!(status.code(), Some(CONFLICT));
 		assert_eq!(std::fs::read_to_string(raced).unwrap(), "other tool's settings");
+	}
+
+	#[test]
+	fn cleanup_requires_unchanged_owned_files() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("owned ' route");
+		let marker = std::path::PathBuf::from(format!("{}.owner", path.display()));
+		let run = |script: String| std::process::Command::new("sh").args(["-c", &script]).status().unwrap();
+		assert!(run(install_script(&path, address(), "installation-a", "true")).success());
+		let original = std::fs::read(&path).unwrap();
+		assert_eq!(run(remove_script(&path, "installation-b", "true")).code(), Some(CONFLICT));
+		std::fs::write(&path, "another tool's route").unwrap();
+		assert_eq!(run(remove_script(&path, "installation-a", "true")).code(), Some(CONFLICT));
+		assert_eq!(std::fs::read_to_string(&path).unwrap(), "another tool's route");
+		std::fs::write(&path, &original).unwrap();
+		assert!(run(remove_script(&path, "installation-a", "true")).success());
+		assert!(!path.exists());
+		assert!(!marker.exists());
+		assert!(run(remove_script(&path, "installation-a", "true")).success());
+		std::fs::write(&path, original).unwrap();
+		assert_eq!(run(remove_script(&path, "installation-a", "true")).code(), Some(CONFLICT));
+		assert!(path.exists());
 	}
 
 	#[cfg(unix)]
@@ -137,7 +170,7 @@ mod tests {
 		std::os::unix::fs::symlink(&target, &link).unwrap();
 		assert!(already_configured(&link, address()).is_err());
 		let status = std::process::Command::new("sh")
-			.args(["-c", &install_script(&link, address(), "true")])
+			.args(["-c", &install_script(&link, address(), "installation-a", "true")])
 			.status()
 			.unwrap();
 		assert_eq!(status.code(), Some(CONFLICT));

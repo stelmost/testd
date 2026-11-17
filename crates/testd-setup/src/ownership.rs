@@ -21,7 +21,7 @@ impl InstallationId {
 		&self.0
 	}
 
-	#[cfg(any(target_os = "windows", test))]
+	#[cfg(any(target_os = "windows", target_os = "macos", test))]
 	pub(super) fn fingerprint(&self) -> String {
 		super::sha256_hex(self.0.as_bytes())
 	}
