@@ -214,14 +214,52 @@ class ServiceSafetyTests(unittest.TestCase):
 			self.assertEqual(commands['service-kill'], ['systemctl', '--user', 'kill', '--kill-whom=main',
 				'--signal=SIGKILL', 'fixture.service'])
 
-	def test_macos_service_checks_block_before_touching_the_host(self):
+	def test_macos_fixture_uses_the_packaged_template_and_a_private_environment(self):
+		unit = service.plistlib.loads(service.launchd_unit(pathlib.Path('/candidate cli'),
+			pathlib.Path('/fixture home'), pathlib.Path('/fake provider'), 'fixture-job', pathlib.Path('/report')))
+		self.assertEqual(unit['Label'], 'fixture-job')
+		self.assertEqual(unit['KeepAlive'], {'SuccessfulExit': False})
+		self.assertEqual(unit['ProgramArguments'], ['/usr/bin/env', '-i', 'HOME=/fixture home',
+			'PATH=/usr/bin:/bin:/usr/sbin:/sbin', 'TESTD_TLD=test', 'TESTD_TUNNEL=/fake provider',
+			'/candidate cli', 'host'])
+
+	def test_macos_job_identity_is_checked_before_accepting_a_pid(self):
 		with tempfile.TemporaryDirectory() as temporary:
 			run = FakeRun(pathlib.Path(temporary))
-			with patch.object(service.socket, 'socket') as listener:
+			for output, expected in [('path = /owned.plist\npid = 123\n', 123),
+					('path = /other.plist\npid = 123\n', None), ('path = /owned.plist\n', None)]:
+				with self.subTest(output=output), patch.object(run, 'command', return_value=output):
+					if expected:
+						self.assertEqual(service.launchd_pid(run, 'gui/501/job', pathlib.Path('/owned.plist')), expected)
+					else:
+						with self.assertRaises(RuntimeError):
+							service.launchd_pid(run, 'gui/501/job', pathlib.Path('/owned.plist'))
+
+	def test_macos_completion_unloads_only_the_owned_job_and_retains_its_plist(self):
+		with tempfile.TemporaryDirectory() as temporary:
+			run, user, home, provider = self.fixture(temporary)
+			with patch.object(service.socket, 'socket'), patch.object(service, 'service_home',
+					return_value=(home, [1, 2, 3], provider)), patch.object(service, 'supervise') as supervise, \
+					patch.object(service, 'launchd_job'), patch.object(service, 'wait_stopped'):
 				service.run_service(run, pathlib.Path('/candidate'), 'Darwin')
-			listener.assert_not_called()
-			self.assertTrue(run.metadata['incomplete'])
-			self.assertEqual(run.records[0][1], 'skip')
+			self.assertEqual([name for name, _, _ in run.commands],
+				['service-preflight', 'service-start', 'service-stop', 'service-unloaded'])
+			self.assertEqual(run.commands[0][2]['expected'], 113)
+			self.assertEqual(run.commands[-1][2]['expected'], 113)
+			self.assertTrue(next(run.output.glob('*.plist')).is_file())
+			self.assertEqual(supervise.call_args.kwargs['kill_command'][:3], ['launchctl', 'kill', 'SIGKILL'])
+
+	def test_macos_replaced_plist_is_never_unloaded(self):
+		with tempfile.TemporaryDirectory() as temporary:
+			run, user, home, provider = self.fixture(temporary)
+			def replace(run, name, unit, proof, *args, **options):
+				unit.unlink()
+				unit.write_text('replacement', encoding='utf-8')
+			with patch.object(service.socket, 'socket'), patch.object(service, 'service_home',
+					return_value=(home, [1, 2, 3], provider)), patch.object(service, 'supervise', side_effect=replace):
+				with self.assertRaisesRegex(RuntimeError, 'identity changed'):
+					service.run_service(run, pathlib.Path('/candidate'), 'Darwin')
+			self.assertNotIn('service-stop', [name for name, _, _ in run.commands])
 
 
 if __name__ == '__main__':

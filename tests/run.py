@@ -470,6 +470,7 @@ def system_snapshot(run, tld, interactive=False):
 		run.record('system-snapshot', 'fail', detail)
 		raise RuntimeError(f'system checks require a clean disposable host; {detail}')
 	run.record('system-snapshot', 'pass', str(manifest))
+	state.prepare_directories(state.Host(SYSTEM, tld, interactive), backup)
 	return backup
 
 
@@ -489,11 +490,11 @@ def system_restore(run, backup, tld, interactive=False):
 
 
 def require_owned_product_integration():
-	if SYSTEM in ('Darwin', 'Windows'):
+	if SYSTEM == 'Windows':
 		raise RuntimeError(f'{SYSTEM} system integration checks are blocked until resolver and trust ownership is enforced')
 
 
-def cleanup_owned_linux_integration(run, cli, home, tld, interactive=False):
+def cleanup_owned_product_integration(run, cli, home, tld, interactive=False):
 	"""Use the candidate's ownership checks, never name-based deletion."""
 	config = home / '.config/testd'
 	owner = config / 'system-ownership-id'
@@ -607,7 +608,7 @@ def host(run, *, scope='host'):
 					if home is not None:
 						if file_digest(cli) != cli_digest:
 							raise RuntimeError('the candidate CLI changed; no system cleanup was attempted')
-						cleanup_owned_linux_integration(run, cli, home, HOST_TLD, interactive=True)
+						cleanup_owned_product_integration(run, cli, home, HOST_TLD, interactive=True)
 				except Exception as error:
 					if not any(item['name'] == 'system-owned-cleanup' and item['status'] == 'fail' for item in run.results):
 						run.record('system-owned-cleanup', 'fail', str(error))
@@ -1125,7 +1126,7 @@ def cleanup_browser_system(run, cli, home, snapshot, tcp_ports, udp_ports, cli_d
 		try:
 			if file_digest(cli) != cli_digest:
 				raise RuntimeError('the candidate CLI changed; no system cleanup was attempted')
-			cleanup_owned_linux_integration(run, cli, home, DESKTOP_TLD, interactive=True)
+			cleanup_owned_product_integration(run, cli, home, DESKTOP_TLD, interactive=True)
 		except Exception as error:
 			if not any(item['name'] == 'system-owned-cleanup' and item['status'] == 'fail' for item in run.results):
 				run.record('system-owned-cleanup', 'fail', str(error))
@@ -1297,13 +1298,28 @@ def require_fresh_desktop_user():
 	raise RuntimeError(f'existing testd user data at {config}; use a fresh disposable user and retain a backup')
 
 
+def desktop_command(app):
+	if SYSTEM != 'Darwin' or app.suffix != '.app':
+		return [str(app)]
+	import plistlib
+	info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
+	name = info['CFBundleExecutable']
+	if not isinstance(name, str) or name in ('', '.', '..') or pathlib.Path(name).name != name:
+		raise RuntimeError('the app bundle has an invalid executable name')
+	executable = app / 'Contents/MacOS' / name
+	if not executable.is_file() or not os.access(executable, os.X_OK):
+		raise RuntimeError(f'the app bundle executable is unavailable: {executable}')
+	# Direct launch preserves the isolated environment; Launch Services can reuse a different instance.
+	return [str(executable)]
+
+
 def desktop(run):
 	require_owned_product_integration()
 	if not run.args.app:
 		raise RuntimeError('provide --app with the candidate .app, .AppImage, or NSIS installer')
-	if SYSTEM == 'Linux' and not getattr(run.args, 'bin', None):
+	if SYSTEM in ('Linux', 'Darwin') and not getattr(run.args, 'bin', None):
 		raise RuntimeError('provide --bin with the candidate CLI for ownership-checked system cleanup')
-	if SYSTEM == 'Linux':
+	if SYSTEM in ('Linux', 'Darwin'):
 		cli = pathlib.Path(run.args.bin).expanduser().resolve()
 		if not cli.is_file() or not os.access(cli, os.X_OK):
 			raise RuntimeError(f'the candidate CLI is missing or not executable: {cli}')
@@ -1320,14 +1336,14 @@ def desktop(run):
 	items = checklist_items((ROOT / 'tests/host/gui-checklist.md').read_text(encoding=ENCODING))
 	if not items:
 		raise RuntimeError('no desktop checklist items were found')
-	if SYSTEM == 'Linux':
+	if SYSTEM in ('Linux', 'Darwin'):
 		check_ports([7737, 7740, 443], [7753])
 	if ask('Confirm this is a disposable host with a persisted full-system backup [y/N]: ') != 'y':
 		raise RuntimeError('desktop validation requires a disposable host and persisted full-system backup')
 	snapshot = system_snapshot(run, DESKTOP_TLD, interactive=True)
 	print('This suite requires a real desktop session and actual interaction. '
 		'Cleanup removes only proven owned integration after candidate shutdown.', flush=True)
-	command = ['open', str(app)] if SYSTEM == 'Darwin' else [str(app)]
+	command = desktop_command(app)
 	app_log = run.log_path('desktop-app')
 	app_process = None
 	try:
@@ -1338,7 +1354,7 @@ def desktop(run):
 			app_process = subprocess.Popen(
 				command, stdin=subprocess.DEVNULL, stdout=sink, stderr=subprocess.STDOUT, env=env)
 		print(f'Candidate app output: {app_log}', flush=True)
-		if SYSTEM == 'Linux':
+		if SYSTEM in ('Linux', 'Darwin'):
 			time.sleep(1.5)
 			if app_process.poll() is not None:
 				raise RuntimeError(
@@ -1362,7 +1378,7 @@ def desktop(run):
 				detail = 'not applicable: ' + detail
 			run.record(item, {'p': 'pass', 'f': 'fail', 'n': 'skip'}[answer], detail)
 	finally:
-		if app_process is not None and SYSTEM == 'Linux' and app_process.poll() is None:
+		if app_process is not None and SYSTEM in ('Linux', 'Darwin') and app_process.poll() is None:
 			app_process.terminate()
 			try:
 				app_process.wait(timeout=5)
@@ -1378,17 +1394,17 @@ def desktop(run):
 		if stopped:
 			try:
 				try:
-					if SYSTEM == 'Linux':
+					if SYSTEM in ('Linux', 'Darwin'):
 						wait_for_fixture_ports([7737, 7740, 443], [7753])
 				except Exception as error:
 					run.record('fixture-shutdown', 'fail', str(error))
 					raise
 				run.record('fixture-shutdown', 'pass', 'operator confirmed shutdown and fixture ports are available')
 				try:
-					if SYSTEM == 'Linux':
+					if SYSTEM in ('Linux', 'Darwin'):
 						if file_digest(cli) != cli_digest:
 							raise RuntimeError('the candidate CLI changed; no system cleanup was attempted')
-						cleanup_owned_linux_integration(run, cli, pathlib.Path.home(), DESKTOP_TLD, interactive=True)
+						cleanup_owned_product_integration(run, cli, pathlib.Path.home(), DESKTOP_TLD, interactive=True)
 				except Exception as error:
 					if not any(item['name'] == 'system-owned-cleanup' and item['status'] == 'fail' for item in run.results):
 						run.record('system-owned-cleanup', 'fail', str(error))
@@ -1469,9 +1485,10 @@ def interrupt(signum, frame):
 def require_disposable_host(parser, args):
 	if args.suite in COORDINATED_SUITES:
 		return
-	changes_system = args.suite in ('artifacts', 'browser', 'desktop', 'service') or \
-		args.suite == 'host' and (args.system or args.service)
-	if not changes_system:
+	changes_system = args.suite in ('artifacts', 'browser', 'desktop') or \
+		args.suite == 'host' and args.system
+	owns_service = args.suite == 'service' or args.suite == 'host' and args.service
+	if not changes_system and not owns_service:
 		return
 	if args.report is None:
 		parser.error('artifact, system, browser, desktop, and service checks require a new persisted --report')
@@ -1479,8 +1496,10 @@ def require_disposable_host(parser, args):
 		parser.error('artifact, system, browser, desktop, and service checks require a report outside temporary directories')
 	if args.report.exists() or args.report.is_symlink():
 		parser.error(f'report path already exists: {args.report}')
+	if not changes_system:
+		return
 	if not sys.stdin.isatty():
-		parser.error('artifact, system, browser, desktop, and service checks require an interactive terminal')
+		parser.error('artifact, system, browser, and desktop checks require an interactive terminal')
 	try:
 		answer = input('Confirm a disposable host with a persisted full-system snapshot; type yes: ')
 	except (EOFError, KeyboardInterrupt):

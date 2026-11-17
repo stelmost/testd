@@ -318,7 +318,7 @@ class AllChecks:
 			'blocked: shared trust-store output and hooks need comparison with the full-system snapshot')
 
 	def require_owned_product_integration(self):
-		if self.api.SYSTEM in ('Darwin', 'Windows'):
+		if self.api.SYSTEM == 'Windows':
 			raise Blocked(f'{self.api.SYSTEM} resolver and trust ownership protections are incomplete')
 
 	def host_system_available(self):

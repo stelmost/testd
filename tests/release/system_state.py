@@ -132,6 +132,25 @@ class Host:
 		path = pathlib.Path(path)
 		return not path.is_symlink() and path.is_dir()
 
+	def macos_markers(self):
+		return sorted(str(path) for path in pathlib.Path('/Library/Keychains').glob('.testd-root-*.owner'))
+
+	def create_directory(self, path):
+		code = 'import os, sys; os.mkdir(sys.argv[1], 0o755)'
+		self.command([sys.executable, '-c', code, path], True)
+		return self.fingerprint(path)[:-1]
+
+	def remove_directory(self, path, proof):
+		code = '''import json, os, stat, sys
+path, proof = sys.argv[1], json.loads(sys.argv[2])
+value = os.lstat(path)
+actual = [value.st_dev, value.st_ino, value.st_uid, value.st_gid, stat.S_IMODE(value.st_mode)]
+if not stat.S_ISDIR(value.st_mode) or actual != proof:
+    raise SystemExit('fixture directory changed; refusing removal')
+os.rmdir(path)
+'''
+		self.command([sys.executable, '-c', code, path, json.dumps(proof)], True)
+
 	def mode(self, path):
 		return stat.S_IMODE(pathlib.Path(path).lstat().st_mode)
 
@@ -230,7 +249,8 @@ def files(host):
 			{'path': '/etc/systemd/resolved.conf.d/90-testd.conf.owner'},
 		]
 	if host.system == 'Darwin':
-		return [{'path': f'/etc/resolver/{host.tld}'}]
+		return [{'path': f'/etc/resolver/{host.tld}'}, {'path': f'/etc/resolver/{host.tld}.owner'},
+			*[{'path': path} for path in host.macos_markers()]]
 	return []
 
 
@@ -337,14 +357,18 @@ def snapshot(host, directory, artifacts=None):
 	if host.tld not in SAFE_TLDS:
 		raise HostError(f'unsafe test TLD: {host.tld}')
 	artifacts = files(host) if artifacts is None else artifacts
+	missing_directories = set()
 	for item in artifacts:
 		parent = str(pathlib.Path(item['path']).parent)
 		if not host.directory(parent):
-			raise HostError(f'{parent}: system fixture parent is missing or a symlink; left untouched')
+			if host.system == 'Darwin' and parent == '/etc/resolver' and not host.exists(parent):
+				missing_directories.add(parent)
+			else:
+				raise HostError(f'{parent}: system fixture parent is missing or a symlink; left untouched')
 	(directory / BLOBS).mkdir(parents=True, exist_ok=False)
 	manifest = {'system': host.system, 'tld': host.tld, 'created':
 		datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-		'files': [], 'certificates': []}
+		'files': [], 'certificates': [], 'missing_directories': sorted(missing_directories)}
 	for index, item in enumerate(artifacts):
 		entry = {'path': item['path'], 'reload': item.get('reload'), 'exists': host.exists(item['path'])}
 		if entry['exists']:
@@ -411,6 +435,9 @@ def validate_manifest(host, directory, manifest):
 		raise HostError('the snapshot or its blobs directory is a symlink')
 	if manifest.get('system') != host.system or manifest.get('tld') != host.tld or host.tld not in SAFE_TLDS:
 		raise HostError('the snapshot platform or TLD does not match this host')
+	missing = manifest.get('missing_directories', [])
+	if missing not in ([], ['/etc/resolver']) or missing and host.system != 'Darwin':
+		raise HostError('the snapshot contains unexpected system directories')
 	entries = manifest.get('files')
 	expected = files(host)
 	if not isinstance(entries, list) or [item.get('path') for item in entries] != [item['path'] for item in expected]:
@@ -455,12 +482,44 @@ def restore(host, directory):
 			host.command(windows_command('Restore', directory, host.tld), privileged=True)
 		except HostError as error:
 			problems.append(str(error))
+	problems += restore_directories(host, directory, manifest)
 	problems += verify(host, directory, manifest)
 	if not problems and not record.exists():
 		stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 		with record.open('x', encoding='utf-8') as output:
 			json.dump({'restored': stamp}, output, indent='\t')
 			output.write('\n')
+	return problems
+
+
+def prepare_directories(host, directory):
+	"""Create only missing fixture parents recorded by the persisted snapshot."""
+	manifest = load(directory)
+	validate_manifest(host, pathlib.Path(directory), manifest)
+	for path in manifest.get('missing_directories', []):
+		proof = host.create_directory(path)
+		ledger = pathlib.Path(directory) / 'created-directory.json'
+		with ledger.open('x', encoding='utf-8') as output:
+			json.dump({'path': path, 'fingerprint': proof}, output)
+			output.flush()
+			os.fsync(output.fileno())
+
+
+def restore_directories(host, directory, manifest):
+	problems = []
+	for path in manifest.get('missing_directories', []):
+		if not host.exists(path):
+			continue
+		try:
+			ledger = pathlib.Path(directory) / 'created-directory.json'
+			if ledger.is_symlink() or not ledger.is_file():
+				raise HostError('no fixture directory ownership proof')
+			proof = json.loads(ledger.read_text(encoding='utf-8'))
+			if proof['path'] != path:
+				raise HostError('fixture directory ownership differs')
+			host.remove_directory(path, proof['fingerprint'])
+		except (HostError, OSError, ValueError, KeyError) as error:
+			problems.append(f'{path}: {error}; left untouched')
 	return problems
 
 
@@ -524,7 +583,14 @@ def verify(host, directory, manifest=None):
 			problems.append(f'{path}: content differs from the snapshot')
 		elif entry['exists'] and host.fingerprint(path) != entry.get('fingerprint'):
 			problems.append(f'{path}: identity, ownership, or mode differs from the snapshot')
+	for path in manifest.get('missing_directories', []):
+		if host.exists(path):
+			problems.append(f'{path}: fixture directory remains after restore')
 	if manifest['system'] == 'Darwin':
+		expected_markers = {entry['path'] for entry in manifest['files']
+			if entry['path'].startswith('/Library/Keychains/.testd-root-')}
+		if set(host.macos_markers()) != expected_markers:
+			problems.append('macOS trust ownership records differ from the snapshot')
 		expected = {entry['sha1'] for entry in manifest['certificates']}
 		current = set(keychain_certificates(host))
 		if current != expected:
@@ -582,6 +648,7 @@ def self_test_artifacts(host):
 def install_fixture(host, directory, workdir):
 	"""Install what `doctor --fix` would, through the same privileged operations."""
 	certificate = pathlib.Path(workdir) / 'fixture.pem'
+	prepare_directories(host, directory)
 	try:
 		host.command(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
 			'-subj', f'/CN={FIXTURE_KEYCHAIN_NAME}', '-keyout', str(pathlib.Path(workdir) / 'fixture.key'),

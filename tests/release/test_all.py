@@ -539,7 +539,7 @@ class AllChecksTests(unittest.TestCase):
 			api.browser.assert_not_called()
 
 	def test_unowned_platform_integration_is_blocked_before_any_side_effect(self):
-		for system in ('Darwin', 'Windows'):
+		for system in ('Windows',):
 			for name in ('host-system', 'desktop'):
 				with self.subTest(system=system, stage=name), tempfile.TemporaryDirectory() as temporary:
 					args = arguments(system=True, interactive=True, app=pathlib.Path('app'))

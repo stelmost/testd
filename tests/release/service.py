@@ -6,6 +6,8 @@ import http.client
 import json
 import os
 import pathlib
+import plistlib
+import re
 import shutil
 import socket
 import stat
@@ -177,19 +179,21 @@ def pid(run, name):
 	return value
 
 
-def supervise(run, name, unit, proof, port, tls_port, root):
+def supervise(run, name, unit, proof, port, tls_port, root, *, read_pid=None, kill_command=None):
+	read_pid = read_pid or (lambda: pid(run, name))
+	kill_command = kill_command or ['systemctl', '--user', 'kill', '--kill-whom=main', '--signal=SIGKILL', name]
 	control = root.parent.parent / 'control.json'
 	wait_dashboard(port, control)
 	run.command('service-tls', ['curl', '--silent', '--show-error', '--max-time', '10', '--noproxy', '*',
 		'--cacert', str(root), '--resolve', f'testd.test:{tls_port}:127.0.0.1',
 		f'https://testd.test:{tls_port}/'])
-	original = pid(run, name)
+	original = read_pid()
 	with verified_owned_file(unit, proof):
-		run.command('service-kill', ['systemctl', '--user', 'kill', '--kill-whom=main', '--signal=SIGKILL', name])
+		run.command('service-kill', kill_command)
 	for _ in range(60):
 		time.sleep(0.5)
 		try:
-			current = pid(run, name)
+			current = read_pid()
 		except RuntimeError:
 			continue
 		if current != original:
@@ -212,14 +216,68 @@ def service_unit(cli, home, provider):
 	return text.replace(write_marker, f'ReadWritePaths={systemd_argument(home / ".config/testd")}')
 
 
+def launchd_unit(cli, home, provider, name, output):
+	unit = plistlib.loads((ROOT / 'packaging/launchd/dev.testd.host.plist').read_bytes())
+	if unit.get('Label') != 'dev.testd.host' or unit.get('ProgramArguments', [])[-2:] != ['testd', 'host']:
+		raise RuntimeError('the packaged launchd template changed; review it before running this fixture')
+	unit['Label'] = name
+	unit['ProgramArguments'] = ['/usr/bin/env', '-i', f'HOME={home}',
+		'PATH=/usr/bin:/bin:/usr/sbin:/sbin', 'TESTD_TLD=test', f'TESTD_TUNNEL={provider}', str(cli), 'host']
+	unit['StandardOutPath'] = str(output / 'launchd-stdout.log')
+	unit['StandardErrorPath'] = str(output / 'launchd-stderr.log')
+	return plistlib.dumps(unit)
+
+
+def launchd_job(run, target, unit):
+	text = run.command('service-pid', ['launchctl', 'print', target])
+	path = re.search(r'^\s*path = (.+)$', text, re.MULTILINE)
+	if not path or path[1] != str(unit):
+		raise RuntimeError('the launchd job path differs from the owned fixture')
+	return text
+
+
+def launchd_pid(run, target, unit):
+	text = launchd_job(run, target, unit)
+	process = re.search(r'^\s*pid = (\d+)$', text, re.MULTILINE)
+	if not process or int(process[1]) <= 1:
+		raise RuntimeError('the launchd fixture has no live PID')
+	return int(process[1])
+
+
+def run_launchd(run, cli):
+	with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+		probe.bind(('127.0.0.1', 7753))
+	home, ports, provider = service_home(run, cli)
+	name = f'dev.testd.releasecheck.{uuid.uuid4().hex}'
+	domain = f'gui/{os.getuid()}'
+	target = f'{domain}/{name}'
+	run.command('service-preflight', ['launchctl', 'print', target], expected=113)
+	unit = run.output / f'{name}.plist'
+	proof = create_owned_file(unit, launchd_unit(cli.resolve(), home, provider, name, run.output))
+	try:
+		run.command('service-start', ['launchctl', 'bootstrap', domain, str(unit)])
+		supervise(run, target, unit, proof, ports[0], ports[1], home / '.config/testd/pki/root.crt',
+			read_pid=lambda: launchd_pid(run, target, unit), kill_command=['launchctl', 'kill', 'SIGKILL', target])
+	finally:
+		with verified_owned_file(unit, proof):
+			launchd_job(run, target, unit)
+			run.command('service-stop', ['launchctl', 'bootout', target])
+		for port in ports:
+			wait_stopped(port)
+		run.command('service-unloaded', ['launchctl', 'print', target], expected=113)
+	# Retain the exact plist as evidence, outside the login-agent directories.
+	run.record('service-stop-check', 'pass', 'owned launchd job unloaded; listeners stopped; plist retained')
+
+
 def run_service(run, cli, system):
 	if system == 'Windows':
 		run.record('service', 'skip', 'not applicable: no Windows CLI service is shipped')
 		return
-	if system != 'Linux':
-		run.metadata['incomplete'] = True
-		run.record('service', 'skip', 'blocked: launchd service ownership is not yet verified')
+	if system == 'Darwin':
+		run_launchd(run, cli)
 		return
+	if system != 'Linux':
+		raise RuntimeError(f'unsupported service platform: {system}')
 	with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
 		probe.bind(('127.0.0.1', 7753))
 	home, ports, provider = service_home(run, cli)

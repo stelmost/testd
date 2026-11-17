@@ -196,12 +196,12 @@ This is the runbook for checks **outside hosted CI**: actual OS resolver/trust c
 
 | Check | Linux desktop VM | macOS VM | Windows 11 VM |
 |---|---|---|---|
-| Resolver/trust installation and owned cleanup | `host --system`; shared trust effects still require independent comparison | Blocked by ownership safeguards | Blocked by ownership safeguards |
-| Actual service supervision | `service` with a real systemd user session | Launchd check blocked by ownership safeguards | Not applicable: no CLI service shipped |
-| Real browser | Fixture-owned setup with `browser --system` | Preconfigured mode only; separately proven DNS/trust setup required | Preconfigured mode only; separately proven DNS/trust setup required |
-| Tray, setup, login, GUI workflow | `desktop`, plus separate logout/login evidence | Desktop runner blocked | Desktop runner blocked |
+| Resolver/trust installation and owned cleanup | `host --system`; shared trust effects still require independent comparison | `host --system`; full-system trust comparison still required | Blocked by ownership safeguards |
+| Actual service supervision | `service` with a real systemd user session | `service` with a logged-in launchd GUI session | Not applicable: no CLI service shipped |
+| Real browser | Fixture-owned setup with `browser --system` | Fixture-owned setup with `browser --system` | Preconfigured mode only; separately proven DNS/trust setup required |
+| Tray, setup, login, GUI workflow | `desktop`, plus separate logout/login evidence | `desktop --app candidate.app --bin candidate`, plus separate login evidence | Desktop runner blocked |
 | Archive/package smoke | `artifacts`; real uninstall remains incomplete | `artifacts`; not complete installed-app evidence | `artifacts`; not complete installed-app evidence |
-| Full installation/upgrade/uninstall | Manual checklist with owned integration and full-system comparison | Resolver/trust cleanup coverage blocked | Resolver/trust cleanup coverage blocked |
+| Full installation/upgrade/uninstall | Manual checklist with owned integration and full-system comparison | Manual checklist with owned integration and full-system comparison | Resolver/trust cleanup coverage blocked |
 | Signing/notarization | Record packages as unsigned | Separate credentialed signing and verification | Separate credentialed signing and verification |
 
 A VM does not bypass a blocked runner. Do not remove its guards, force system checks through direct scripts, or mark blocked platform coverage passed. macOS 15 or another explicitly claimed supported macOS version can be tested; upgrading the host to Tahoe is not a requirement of this runbook.
@@ -272,7 +272,7 @@ Do not run `testd init` first. This suite creates an isolated fixture home, inst
 
 Inspect `report.json`, command logs, and `system-before/`. Independently compare resolver state, source anchors, effective trust, generated bundles, and hook effects with the persisted full-system baseline. Scoped cleanup alone leaves this stage incomplete. Record the comparison result separately; neither restoring the VM nor editing report JSON converts missing preservation evidence into a pass.
 
-Complete [SYS-01 through SYS-16](tests/manual/system-integration.md), including interruption/recovery and synthetic unowned/conflicting-state cases. Each seeded conflict needs its own restored snapshot and before/after identity/content evidence; do not ask `host --system` to overwrite it. SYS-15 and SYS-16 remain blocked until macOS/Windows ownership safeguards exist.
+Complete [SYS-01 through SYS-16](tests/manual/system-integration.md), including interruption/recovery and synthetic unowned/conflicting-state cases. Each seeded conflict needs its own restored snapshot and before/after identity/content evidence; do not ask `host --system` to overwrite it. SYS-15 covers macOS resolver and certificate ownership; SYS-16 remains blocked until Windows ownership safeguards exist.
 
 ### Run Linux service supervision
 
@@ -283,7 +283,7 @@ systemctl --user show-environment
 python3 tests/run.py service --bin "$CLI" --report "$REPORT-service"
 ```
 
-Do not add `--system` or run this as root. The suite uses a randomly named user unit, isolated home, fake provider, high ports, and actual manager-directed start, crash/restart, and stop. Verify the stopped listener and ownership-checked unit cleanup in the report; `service-unit.service` retains the generated unit. Keep macOS launchd marked blocked and Windows CLI service marked not applicable.
+Do not add `--system` or run this as root. The suite uses a randomly named user unit, isolated home, fake provider, high ports, and actual manager-directed start, crash/restart, and stop. Verify the stopped listener and ownership-checked unit cleanup in the report; `service-unit.service` retains the generated unit. On macOS, run the same `service` command as the logged-in desktop user: the fixture loads a unique job into `gui/<uid>`, checks its plist before signalling or unloading it, and retains the plist in the report without installing a login item. Standalone service checks do not require a full-system snapshot because they do not change resolver/trust state or persistent service entries. Windows CLI service remains not applicable.
 
 ### Run real Linux browsers
 
@@ -318,7 +318,7 @@ python3 tests/run.py browser --system --bin "$CLI" --edge-port 8443 --report "$R
 
 Open the printed `https://app.releasecheck.test:8443/` URL in a clean profile. If that browser uses its own trust store, import only the fixture's public root from `<report>/browser-home/.config/testd/pki/root.crt` into that disposable profile. Do not use certificate-warning bypasses, `--insecure`, browser-only DNS overrides, or a real account. Complete [BROWSER-01 through BROWSER-08](tests/manual/browser.md): certificate/SAN/chain/lifetime, WebSocket idle, SSE/upload, cookie scope, dashboard/dead upstream/unknown name, and renewal. Save the page's JSON report, stop with Ctrl+C, close the test browsers, and answer shutdown confirmations truthfully.
 
-On macOS/Windows, `browser` without `--system` supports a separately preconfigured candidate DNS/trust setup, but does not establish that setup's ownership or cleanup. The host must be stopped before running the suite; it starts its own candidate daemon. Do not improvise a fresh-VM root/NRPT/resolver installation to bypass the current platform blockers. Record Safari/Windows browser coverage as blocked until a separately proven, restorable setup is available.
+On macOS, `browser --system` uses installation-owned resolver and trust receipts with the same cleanup verification. On Windows, `browser` without `--system` supports a separately preconfigured candidate DNS/trust setup, but does not establish that setup's ownership or cleanup. The host must be stopped before running the suite; it starts its own candidate daemon. Do not improvise a fresh-VM root/NRPT/resolver installation to bypass the current platform blockers. Windows browser coverage remains blocked until a separately proven, restorable setup is available. Record installed Safari observations separately from Playwright WebKit.
 
 ### Run Linux desktop, login, and installed-package checks
 

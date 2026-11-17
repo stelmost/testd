@@ -834,6 +834,44 @@ class SystemStateTests(unittest.TestCase):
 			self.assertFalse(backup.exists())
 			self.assertEqual(host.commands, [])
 
+	def test_macos_snapshot_records_and_prepares_a_missing_resolver_directory(self):
+		with tempfile.TemporaryDirectory() as temporary:
+			host = FakeHost('Darwin')
+			backup = pathlib.Path(temporary) / 'system-before'
+			with patch.object(host, 'directory', side_effect=lambda path: path != '/etc/resolver'):
+				state.snapshot(host, backup)
+			self.assertEqual(state.load(backup)['missing_directories'], ['/etc/resolver'])
+			with patch.object(host, 'create_directory', return_value=[1, 2, 0, 0, 0o755]) as create:
+				state.prepare_directories(host, backup)
+			create.assert_called_once_with('/etc/resolver')
+			proof = json.loads((backup / 'created-directory.json').read_text())
+			self.assertEqual(proof['path'], '/etc/resolver')
+			self.assertEqual(proof['fingerprint'], [1, 2, 0, 0, 0o755])
+
+	@unittest.skipIf(os.name == 'nt', 'not applicable: Unix fixture directories are not used on Windows')
+	def test_directory_removal_refuses_a_replacement_or_nonempty_directory(self):
+		class LocalHost(state.Host):
+			def argv(self, argv, privileged=False):
+				return list(argv)
+		with tempfile.TemporaryDirectory() as temporary:
+			host = LocalHost('Darwin', 'testdcheck')
+			path = pathlib.Path(temporary) / 'resolver'
+			proof = host.create_directory(str(path))
+			keep = path / 'unrelated'
+			keep.write_text('preserve')
+			with self.assertRaises(state.HostError):
+				host.remove_directory(str(path), proof)
+			self.assertEqual(keep.read_text(), 'preserve')
+			keep.unlink()
+			path.rename(path.with_name('original'))
+			path.mkdir()
+			with self.assertRaises(state.HostError):
+				host.remove_directory(str(path), proof)
+			path.rmdir()
+			path.with_name('original').rename(path)
+			host.remove_directory(str(path), proof)
+			self.assertFalse(path.exists())
+
 	def test_snapshot_accepts_an_artifact_override(self):
 		with tempfile.TemporaryDirectory() as temporary:
 			host = FakeHost()
@@ -1451,7 +1489,7 @@ class HostSystemTests(unittest.TestCase):
 			self.assertEqual(run.results[-1]['status'], 'fail')
 
 	def test_unowned_platform_system_checks_stop_before_build_or_snapshot(self):
-		for system in ('Darwin', 'Windows'):
+		for system in ('Windows',):
 			with self.subTest(system=system), tempfile.TemporaryDirectory() as directory:
 				run = self.create_run(directory)
 				with patch.object(runner, 'SYSTEM', system), patch.object(runner, 'binary') as binary, \
@@ -1469,11 +1507,11 @@ class HostSystemTests(unittest.TestCase):
 			owner = home / '.config/testd/system-ownership-id'
 			with patch.dict(os.environ, {'TESTD_TOKEN': 'real-secret'}), \
 					patch.object(run, 'command') as command:
-				runner.cleanup_owned_linux_integration(run, cli, home, 'testdcheck', True)
+				runner.cleanup_owned_product_integration(run, cli, home, 'testdcheck', True)
 				command.assert_not_called()
 				owner.parent.mkdir(parents=True)
 				owner.write_text('fixture-owner', encoding='utf-8')
-				runner.cleanup_owned_linux_integration(run, cli, home, 'testdcheck', True)
+				runner.cleanup_owned_product_integration(run, cli, home, 'testdcheck', True)
 			self.assertEqual(command.call_args.args[:3], ('system-owned-cleanup', [str(cli), 'uninstall'], 300))
 			self.assertNotIn('--purge', command.call_args.args[1])
 			self.assertEqual(command.call_args.kwargs['env']['HOME'], str(home))
@@ -1492,7 +1530,7 @@ class HostSystemTests(unittest.TestCase):
 			for cli in (pathlib.PurePosixPath('/fixture/candidate'),
 					pathlib.PureWindowsPath('C:/fixture/candidate.exe')):
 				with self.subTest(path=str(cli)), patch.object(run, 'command') as command:
-					runner.cleanup_owned_linux_integration(run, cli, home, 'testdcheck', True)
+					runner.cleanup_owned_product_integration(run, cli, home, 'testdcheck', True)
 					self.assertEqual(command.call_args.args[1], [str(cli), 'uninstall'])
 
 	@unittest.skipIf(os.name == 'nt', 'not applicable: Linux ownership cleanup uses Unix paths')
@@ -1507,7 +1545,7 @@ class HostSystemTests(unittest.TestCase):
 			(target / 'system-ownership-id').write_text('keep', encoding='utf-8')
 			(config / 'testd').symlink_to(target, target_is_directory=True)
 			with patch.object(run, 'command') as command, self.assertRaisesRegex(RuntimeError, 'symlink'):
-				runner.cleanup_owned_linux_integration(run, pathlib.Path('/candidate'), home, 'testdcheck', True)
+				runner.cleanup_owned_product_integration(run, pathlib.Path('/candidate'), home, 'testdcheck', True)
 			command.assert_not_called()
 			self.assertEqual((target / 'system-ownership-id').read_text(encoding='utf-8'), 'keep')
 
@@ -1575,11 +1613,19 @@ class HostSystemTests(unittest.TestCase):
 			snapshot.assert_not_called()
 			restore.assert_not_called()
 
+	def test_standalone_service_needs_no_system_change_confirmation(self):
+		parser = Mock()
+		with patch.object(sys.stdin, 'isatty', return_value=False):
+			runner.require_disposable_host(parser, SimpleNamespace(suite='service', system=False, service=False,
+				report=ROOT / 'uncreated-service-fixture-report'))
+		parser.error.assert_not_called()
+
 	def test_system_snapshot_checks_sudo_through_the_terminal(self):
 		with tempfile.TemporaryDirectory() as directory:
 			run = self.create_run(directory)
 			fake = SimpleNamespace(Host=lambda *args, **kwargs: None,
-				snapshot=lambda host, backup: backup / 'manifest.json', occupied=lambda backup: [])
+				snapshot=lambda host, backup: backup / 'manifest.json', occupied=lambda backup: [],
+				prepare_directories=lambda host, backup: None)
 			with patch.object(runner, 'SYSTEM', 'Linux'), patch.object(runner, 'require'), \
 				patch.object(runner, 'helper', return_value=fake), \
 				patch.object(run, 'command', return_value='') as command, \
@@ -1760,7 +1806,7 @@ quick_launch_diagnostics fixture
 		self.assertNotIn(private, result.stderr)
 		self.assertEqual(result.stdout, '')
 
-	def test_macos_system_scripts_refuse_before_touching_the_host(self):
+	def test_macos_system_scripts_require_runner_authorization_before_touching_the_host(self):
 		with tempfile.TemporaryDirectory() as temporary:
 			root = pathlib.Path(temporary)
 			marker = root / 'keep'
@@ -1771,7 +1817,7 @@ quick_launch_diagnostics fixture
 				with self.subTest(script=script):
 					result = subprocess.run(['bash', script], cwd=ROOT, env=env, capture_output=True, text=True, timeout=15)
 					self.assertEqual(result.returncode, 2)
-					self.assertIn('blocked', result.stderr)
+					self.assertIn('confirmed disposable host and snapshot', result.stderr)
 					self.assertEqual(marker.read_text(encoding='utf-8'), 'existing data')
 					self.assertFalse((root / 'output').exists())
 
@@ -1836,8 +1882,24 @@ class DesktopRunnerTests(unittest.TestCase):
 		with redirect_stdout(io.StringIO()):
 			return runner.Run(args)
 
+	def test_macos_bundle_launch_uses_its_executable_to_preserve_fixture_environment(self):
+		import plistlib
+		with tempfile.TemporaryDirectory() as temporary:
+			app = pathlib.Path(temporary) / 'testd.app'
+			executable = app / 'Contents/MacOS/testd-gui'
+			executable.parent.mkdir(parents=True)
+			executable.write_text('fixture')
+			executable.chmod(0o700)
+			info = app / 'Contents/Info.plist'
+			info.write_bytes(plistlib.dumps({'CFBundleExecutable': 'testd-gui'}))
+			with patch.object(runner, 'SYSTEM', 'Darwin'):
+				self.assertEqual(runner.desktop_command(app), [str(executable)])
+				info.write_bytes(plistlib.dumps({'CFBundleExecutable': '../outside'}))
+				with self.assertRaisesRegex(RuntimeError, 'invalid executable name'):
+					runner.desktop_command(app)
+
 	def test_unowned_platform_desktop_checks_stop_before_launch_or_snapshot(self):
-		for system in ('Darwin', 'Windows'):
+		for system in ('Windows',):
 			with self.subTest(system=system), tempfile.TemporaryDirectory() as directory:
 				run = self.create_run(directory)
 				with patch.object(runner, 'SYSTEM', system), patch.object(runner, 'system_snapshot') as snapshot, \
@@ -1887,7 +1949,7 @@ class DesktopRunnerTests(unittest.TestCase):
 					patch.object(runner, 'ask', side_effect=['y', 'q', 'y']), \
 					patch.object(runner, 'system_snapshot', return_value=pathlib.Path(directory) / 'before'), \
 					patch.object(runner, 'system_restore') as restore, \
-					patch.object(runner, 'cleanup_owned_linux_integration') as cleanup, redirect_stdout(io.StringIO()):
+					patch.object(runner, 'cleanup_owned_product_integration') as cleanup, redirect_stdout(io.StringIO()):
 				with self.assertRaisesRegex(RuntimeError, 'candidate CLI changed'):
 					runner.desktop(run)
 			cleanup.assert_not_called()
@@ -1935,7 +1997,7 @@ class DesktopRunnerTests(unittest.TestCase):
 					patch.object(runner, 'ask', side_effect=['y', 'q', 'y']), \
 					patch.object(runner, 'system_snapshot', return_value=pathlib.Path(directory) / 'before'), \
 					patch.object(runner, 'system_restore') as restore, \
-					patch.object(runner, 'cleanup_owned_linux_integration') as cleanup, redirect_stdout(io.StringIO()):
+					patch.object(runner, 'cleanup_owned_product_integration') as cleanup, redirect_stdout(io.StringIO()):
 				with self.assertRaisesRegex(RuntimeError, 'port still occupied'):
 					runner.desktop(run)
 			cleanup.assert_not_called()
@@ -2145,7 +2207,7 @@ class BrowserTests(unittest.TestCase):
 			self.assertIn('isolated network egress', run.results[-1]['detail'])
 
 	def test_system_browser_refuses_unowned_platforms_before_starting_a_candidate(self):
-		for system in ('Darwin', 'Windows'):
+		for system in ('Windows',):
 			with self.subTest(system=system), tempfile.TemporaryDirectory() as directory:
 				run = self.create_run(directory)
 				run.args.system = True
@@ -2226,7 +2288,7 @@ class BrowserTests(unittest.TestCase):
 					patch.object(runner, 'system_snapshot', side_effect=snapshot), \
 					patch.object(runner, 'initialize_browser_home', side_effect=initialize), \
 					patch.object(runner, 'browser_session', side_effect=session), \
-					patch.object(runner, 'cleanup_owned_linux_integration', side_effect=lambda *a, **k: events.append('cleanup')), \
+					patch.object(runner, 'cleanup_owned_product_integration', side_effect=lambda *a, **k: events.append('cleanup')), \
 					patch.object(runner, 'system_restore', side_effect=lambda *a, **k: events.append('restore')), \
 					redirect_stdout(io.StringIO()):
 				with self.assertRaisesRegex(RuntimeError, 'fixture browser failed'):
@@ -2239,7 +2301,7 @@ class BrowserTests(unittest.TestCase):
 		with tempfile.TemporaryDirectory() as directory:
 			run = self.create_run(directory)
 			run.metadata['browser_watcher_active'] = True
-			with patch.object(runner, 'cleanup_owned_linux_integration') as cleanup, \
+			with patch.object(runner, 'cleanup_owned_product_integration') as cleanup, \
 					patch.object(runner, 'system_restore') as restore, redirect_stdout(io.StringIO()):
 				with self.assertRaisesRegex(RuntimeError, 'watcher is still running'):
 					runner.cleanup_browser_system(run, pathlib.Path('candidate'), pathlib.Path('home'),
@@ -2254,7 +2316,7 @@ class BrowserTests(unittest.TestCase):
 		with tempfile.TemporaryDirectory() as directory:
 			run = self.create_run(directory)
 			run.metadata['browser_cleanup_unverified'] = True
-			with patch.object(runner, 'cleanup_owned_linux_integration') as cleanup, \
+			with patch.object(runner, 'cleanup_owned_product_integration') as cleanup, \
 					patch.object(runner, 'system_restore') as restore, redirect_stdout(io.StringIO()):
 				with self.assertRaisesRegex(RuntimeError, 'browser process cleanup is unverified'):
 					runner.cleanup_browser_system(run, pathlib.Path('candidate'), pathlib.Path('home'),
