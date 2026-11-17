@@ -418,7 +418,7 @@ Run them on real machines, not inside the dev container. A macOS, Linux, and Win
 | Script | Checks |
 |---|---|
 | `tests/host/linux.sh` | resolver route, CA trust, edge TLS, loopback dashboard, DNS A records, token requests, issued tokens, local registration, sharing, quick launches, URL actions, doctor state checks, launch-at-login entry, systemd unit |
-| `tests/host/macos.sh` | Unprivileged edge, dashboard, DNS, registration, sharing, quick launches, doctor state, and launch-at-login checks; resolver and trust checks are blocked |
+| `tests/host/macos.sh` | Edge, dashboard, DNS, registration, sharing, quick launches, doctor state, login entry, and plist checks; resolver and trust checks with `host --system` |
 | `tests/host/windows.ps1` | Unprivileged edge, dashboard, DNS, registration, sharing, quick launches, and launch-at-login checks; NRPT and root trust checks are blocked |
 | `tests/host/gui-checklist.md` | setup dialog, tray, dashboard window, click-to-open, single instance, quick launches, certificate controls, URL actions, packaging/signing |
 
@@ -560,7 +560,7 @@ Before permitted system checks, `run.py` records selected integration under `<re
 | Platform | Selected snapshot | Cleanup policy |
 |---|---|---|
 | Linux | The systemd-resolved drop-in, the distro's CA anchor, and their ownership markers | Candidate-owned integration is removed through the candidate's ownership checks; other changes are left untouched |
-| macOS | The test TLD resolver file and named testd roots in the System keychain | Product checks are blocked; the self-test removes only its exact recorded fixture certificate |
+| macOS | The test TLD resolver and receipt, certificate receipts, and named testd roots in the System keychain | Candidate-owned integration is removed through its ownership checks; changed or unowned state is preserved |
 | Windows | NRPT rules for the test TLD and named testd roots in the machine store | Verify only; never remove or recreate rules or roots by name |
 
 File fixtures use exclusive creation and record their identity and content before cleanup. A replaced, changed, deleted, or unowned artifact is reported, not overwritten or removed. Pre-existing keychain and machine-root trust settings are not captured and cannot be verified from this snapshot. System stages remain incomplete when shared trust-store output or hooks have not been compared with the persisted full-system snapshot.

@@ -18,4 +18,4 @@ Run on each OS, architecture, packaging format, and upgrade path selected for re
 - [ ] INSTALL-09: Stop candidate processes and shares, disable any login item, uninstall owned resolver and trust integration, and remove the package. Verify owned state is gone and unowned state is unchanged; preserve and report conflicts.
 - [ ] INSTALL-10: Purge user data only after system cleanup is complete and its ownership evidence is no longer needed. Reinstall and verify the documented fresh setup path.
 
-Record each platform and package result separately. macOS owned removal remains unimplemented; Windows ownership guards have fixture evidence but still require disposable-host validation. Automated macOS and Windows destructive checks remain blocked. Keep reports private until reviewed.
+Record each platform and package result separately. macOS installation and owned removal require the backed-up native runs above; unit fixtures do not establish installed-package behavior. Windows ownership guards have fixture evidence but still require disposable-host validation, and automated Windows destructive checks remain blocked. Keep reports private until reviewed.
