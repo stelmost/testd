@@ -2429,6 +2429,7 @@ class BrowserTests(unittest.TestCase):
 			with patch.dict(os.environ, {'TESTD_TOKEN': 'real-secret', 'TESTD_HOSTS': 'remote.example'}), \
 				patch.object(runner, 'require'), \
 				patch.object(runner, 'check_ports'), \
+				patch.object(runner, 'browser_owner_credential', return_value='fixture-owner-credential'), \
 				patch.object(runner, 'wait_for_host', return_value={'tld': 'test'}) as wait, \
 				patch.object(runner, 'binary', return_value=binary_path), \
 				patch.object(runner, 'require_host_resolution'), \
@@ -2442,7 +2443,7 @@ class BrowserTests(unittest.TestCase):
 			self.assertEqual(serve.call_args.kwargs['env']['TESTD_TUNNEL'], str(run.output))
 			self.assertNotIn('TESTD_TOKEN', serve.call_args.kwargs['env'])
 			self.assertNotIn('TESTD_HOSTS', serve.call_args.kwargs['env'])
-			wait.assert_called_once_with(7737, 'process', 'output')
+			wait.assert_called_once_with(7737, 'process', 'output', credential='fixture-owner-credential')
 			command.assert_called_once()
 			self.assertNotIn('TESTD_TOKEN', command.call_args.args[3])
 			self.assertNotIn('TESTD_HOSTS', command.call_args.args[3])
@@ -2604,6 +2605,7 @@ class BrowserTests(unittest.TestCase):
 					events.append(('stop', args[0]))
 
 			with patch.object(runner, 'check_ports'), \
+				patch.object(runner, 'browser_owner_credential', return_value='fixture-owner-credential'), \
 				patch.object(runner, 'wait_for_host', return_value={'tld': 'test'}), \
 				patch.object(run, 'serve', side_effect=serve) as serve_mock, \
 				redirect_stdout(io.StringIO()):
@@ -2738,6 +2740,15 @@ class BrowserTests(unittest.TestCase):
 				runner.require_host_resolution(run, pathlib.Path('/bin/true'))
 			self.assertEqual(run.results[-1]['name'], 'host-resolution')
 			self.assertEqual(run.results[-1]['status'], 'pass')
+
+	def test_status_request_sends_the_owned_credential_only_in_its_header(self):
+		with patch.object(runner.http.client, 'HTTPConnection') as connection:
+			response = connection.return_value.getresponse.return_value
+			response.status = 200
+			response.read.return_value = b'{"tld":"test"}'
+			self.assertEqual(runner.local_host_status(7737, 'fixture-owner-credential'), {'tld': 'test'})
+			connection.return_value.request.assert_called_once_with('GET', '/api/status',
+				headers={'Authorization': 'Bearer fixture-owner-credential'})
 
 	def test_a_refused_connection_is_reported_as_a_missing_host(self):
 		with patch.object(runner.http.client, 'HTTPConnection') as connection:
