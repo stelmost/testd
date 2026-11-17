@@ -837,6 +837,17 @@ class SystemStateTests(unittest.TestCase):
 			self.assertFalse(backup.exists())
 			self.assertEqual(host.commands, [])
 
+	def test_macos_restore_accepts_new_receipts_but_reports_them_as_unowned(self):
+		with tempfile.TemporaryDirectory() as temporary:
+			host = FakeHost('Darwin')
+			backup = pathlib.Path(temporary) / 'system-before'
+			state.snapshot(host, backup)
+			receipt = '/Library/Keychains/.testd-root-' + 'a' * 64 + '.owner'
+			host.files[receipt] = b'another installation'
+			problems = state.restore(host, backup)
+			self.assertIn('macOS trust ownership records differ from the snapshot', problems)
+			self.assertEqual(host.files[receipt], b'another installation')
+
 	def test_macos_verification_detects_a_leftover_certificate_receipt(self):
 		with tempfile.TemporaryDirectory() as temporary:
 			host = FakeHost('Darwin')
@@ -1480,6 +1491,21 @@ class HostSystemTests(unittest.TestCase):
 				runner.host(run, scope='ci')
 			binary.assert_not_called()
 			snapshot.assert_not_called()
+
+	@unittest.skipIf(os.name == 'nt', 'not applicable: Unix TCP reuse semantics')
+	def test_port_check_accepts_time_wait_but_refuses_a_live_listener(self):
+		with socket.socket() as listener:
+			listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+			listener.bind(('127.0.0.1', 0))
+			port = listener.getsockname()[1]
+			listener.listen()
+			with self.assertRaisesRegex(RuntimeError, 'unavailable'):
+				runner.check_ports([port])
+			with socket.create_connection(('127.0.0.1', port)) as client:
+				connection, _ = listener.accept()
+				connection.close()
+				self.assertEqual(client.recv(1), b'')
+		runner.check_ports([port])
 
 	def test_shutdown_port_check_retries_without_stopping_an_existing_listener(self):
 		with patch.object(runner, 'check_ports', side_effect=[RuntimeError('busy'), None]) as ports, \
