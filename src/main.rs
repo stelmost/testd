@@ -744,7 +744,8 @@ async fn doctor(fix: bool, json: bool) -> anyhow::Result<i32> {
 	let mut status = caddy::probe(tld, edge_port);
 	if config.edge_enabled
 		&& status == EdgeStatus::Untrusted
-		&& fix && let Some(pem) = &root_pem
+		&& fix
+		&& let Some(pem) = &root_pem
 	{
 		match testd_setup::trust_root(pem) {
 			Ok(()) => status = caddy::probe(tld, edge_port),
