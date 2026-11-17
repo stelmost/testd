@@ -620,8 +620,13 @@ def check_ports(tcp, udp=()):
 	for kind, ports in [(socket.SOCK_STREAM, tcp), (socket.SOCK_DGRAM, udp)]:
 		for port in ports:
 			with socket.socket(socket.AF_INET, kind) as probe:
+				if kind == socket.SOCK_STREAM and SYSTEM != 'Windows':
+					# Match Unix listeners: closed connections in TIME_WAIT do not mean a live fixture remains.
+					probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 				try:
 					probe.bind(('127.0.0.1', port))
+					if kind == socket.SOCK_STREAM:
+						probe.listen(1)
 				except OSError as error:
 					raise RuntimeError(f'fixture port {port} is unavailable; stop the existing service first') from error
 

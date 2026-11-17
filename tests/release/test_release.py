@@ -1488,6 +1488,22 @@ class HostSystemTests(unittest.TestCase):
 			binary.assert_not_called()
 			snapshot.assert_not_called()
 
+	@unittest.skipIf(sys.platform == 'win32', 'Unix listener reuse semantics')
+	def test_port_probe_accepts_closed_connections_but_refuses_live_listeners(self):
+		with socket.socket() as listener:
+			listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+			listener.bind(('127.0.0.1', 0))
+			listener.listen(1)
+			port = listener.getsockname()[1]
+			with self.assertRaisesRegex(RuntimeError, 'unavailable'):
+				runner.check_ports([port])
+			with socket.create_connection(('127.0.0.1', port)) as client:
+				connection, _ = listener.accept()
+				with connection:
+					connection.shutdown(socket.SHUT_WR)
+					self.assertEqual(client.recv(1), b'')
+		runner.check_ports([port])
+
 	def test_shutdown_port_check_retries_without_stopping_an_existing_listener(self):
 		with patch.object(runner, 'check_ports', side_effect=[RuntimeError('busy'), None]) as ports, \
 				patch.object(runner.time, 'sleep') as sleep:
