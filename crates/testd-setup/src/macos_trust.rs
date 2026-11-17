@@ -20,7 +20,8 @@ struct Root {
 impl Root {
 	fn new(pem: &str) -> io::Result<Self> {
 		let der = super::single_anchor_der(pem)?;
-		x509_parser::parse_x509_certificate(&der).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+		x509_parser::parse_x509_certificate(&der)
+			.map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
 		Ok(Self {
 			pem: pem.to_owned(),
 			sha1: sha1_hex(&der).to_uppercase(),

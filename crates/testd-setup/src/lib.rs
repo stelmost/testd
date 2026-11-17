@@ -1090,7 +1090,7 @@ fn existing_linux_anchor(path: &Path, cert_pem: &str) -> io::Result<bool> {
 	}
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn run_with_stdin(mut command: std::process::Command, input: &[u8]) -> io::Result<std::process::ExitStatus> {
 	use std::io::Write;
 	use std::process::Stdio;

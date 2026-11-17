@@ -730,7 +730,7 @@ class FakeHost(state.Host):
 		elif argv[:2] == ['security', 'find-certificate']:
 			return ''.join(state.encode_pem(der) for der in self.certificates.values())
 		elif argv[:2] == ['security', 'delete-certificate']:
-			self.certificates.pop(argv[3], None)
+			self.certificates.pop(argv[argv.index('-Z') + 1], None)
 		elif argv[:2] == ['security', 'add-trusted-cert']:
 			for der in state.decode_pem(pathlib.Path(argv[-1]).read_text()):
 				self.certificates[hashlib.sha1(der).hexdigest()] = der
@@ -750,6 +750,9 @@ class FakeHost(state.Host):
 
 	def directory(self, path):
 		return True
+
+	def macos_markers(self):
+		return sorted(path for path in self.files if path.startswith('/Library/Keychains/.testd-root-'))
 
 	def mode(self, path):
 		return self.modes.get(str(path), 0o644)
@@ -833,6 +836,14 @@ class SystemStateTests(unittest.TestCase):
 				state.snapshot(host, backup)
 			self.assertFalse(backup.exists())
 			self.assertEqual(host.commands, [])
+
+	def test_macos_verification_detects_a_leftover_certificate_receipt(self):
+		with tempfile.TemporaryDirectory() as temporary:
+			host = FakeHost('Darwin')
+			backup = pathlib.Path(temporary) / 'system-before'
+			state.snapshot(host, backup)
+			host.files['/Library/Keychains/.testd-root-fixture.owner'] = b'owned receipt'
+			self.assertIn('macOS trust ownership records differ from the snapshot', state.verify(host, backup))
 
 	def test_macos_snapshot_records_and_prepares_a_missing_resolver_directory(self):
 		with tempfile.TemporaryDirectory() as temporary:
@@ -1271,7 +1282,7 @@ class SystemStateTests(unittest.TestCase):
 			self.assertTrue(any('no test ownership proof' in problem for problem in problems), problems)
 			self.assertEqual(set(host.certificates.values()), {kept, unrelated})
 			deletes = [argv for argv, _ in host.commands if argv[:2] == ['security', 'delete-certificate']]
-			self.assertEqual(deletes, [['security', 'delete-certificate', '-Z',
+			self.assertEqual(deletes, [['security', 'delete-certificate', '-t', '-Z',
 				hashlib.sha1(fixture).hexdigest(), state.KEYCHAIN]])
 
 	def test_macos_restore_does_not_reinstall_a_missing_preexisting_root(self):
