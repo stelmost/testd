@@ -1159,7 +1159,9 @@ fn run_with_stdin(mut command: std::process::Command, input: &[u8]) -> io::Resul
 	use std::process::Stdio;
 
 	/* Privileged utility progress must not precede machine-readable CLI output. */
-	command.stdin(Stdio::piped()).stdout(std::io::stderr().as_fd().try_clone_to_owned()?);
+	command
+		.stdin(Stdio::piped())
+		.stdout(std::io::stderr().as_fd().try_clone_to_owned()?);
 	let mut child = command.spawn()?;
 	let mut stdin = child.stdin.take().expect("stdin was requested");
 	stdin.write_all(input)?;
