@@ -2443,7 +2443,7 @@ class BrowserTests(unittest.TestCase):
 			self.assertEqual(serve.call_args.kwargs['env']['TESTD_TUNNEL'], str(run.output))
 			self.assertNotIn('TESTD_TOKEN', serve.call_args.kwargs['env'])
 			self.assertNotIn('TESTD_HOSTS', serve.call_args.kwargs['env'])
-			wait.assert_called_once_with(7737, 'process', 'output', credential='fixture-owner-credential')
+			wait.assert_called_once_with(7737, 'process', 'output', environment=serve.call_args.kwargs['env'])
 			command.assert_called_once()
 			self.assertNotIn('TESTD_TOKEN', command.call_args.args[3])
 			self.assertNotIn('TESTD_HOSTS', command.call_args.args[3])
@@ -2740,6 +2740,20 @@ class BrowserTests(unittest.TestCase):
 				runner.require_host_resolution(run, pathlib.Path('/bin/true'))
 			self.assertEqual(run.results[-1]['name'], 'host-resolution')
 			self.assertEqual(run.results[-1]['status'], 'pass')
+
+	@unittest.skipIf(sys.platform == 'win32', 'Unix fixture config location')
+	def test_browser_status_uses_the_transient_dashboard_credential(self):
+		with tempfile.TemporaryDirectory() as directory:
+			config = pathlib.Path(directory) / '.config/testd'
+			config.mkdir(parents=True)
+			(config / 'config.toml').write_text('[host]\nsecret = "separate-node-credential"\n')
+			control = config / 'control.json'
+			control.write_text('{"dashboard_token":"fixture-dashboard-credential"}')
+			control.chmod(0o600)
+			self.assertEqual(runner.browser_owner_credential({'HOME': directory}), 'fixture-dashboard-credential')
+			control.unlink()
+			with self.assertRaises(runner.HostUnavailable):
+				runner.browser_owner_credential({'HOME': directory})
 
 	def test_status_request_sends_the_owned_credential_only_in_its_header(self):
 		with patch.object(runner.http.client, 'HTTPConnection') as connection:
