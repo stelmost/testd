@@ -960,8 +960,7 @@ mod tests {
 										&Response::PendingGrant { id: "pending".into(), domain: domain.to_owned() },
 									)
 									.await
-									.is_ok()
-										&& protocol::send(&mut writer, &Response::Ok).await.is_ok()
+									.is_ok() && protocol::send(&mut writer, &Response::Ok).await.is_ok()
 								},
 							}
 						} else {

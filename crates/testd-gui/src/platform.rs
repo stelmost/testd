@@ -68,7 +68,7 @@ fn autostart() -> anyhow::Result<AutoLaunch> {
 	#[cfg(windows)]
 	let path = format!("\"{path}\"");
 	let mut builder = AutoLaunchBuilder::new();
-	builder.set_app_name("dev.testd.host").set_app_path(&path);
+	builder.set_app_name("dev.testd.host").set_app_path(path.as_ref());
 	#[cfg(target_os = "macos")]
 	builder.set_use_launch_agent(true);
 	builder
