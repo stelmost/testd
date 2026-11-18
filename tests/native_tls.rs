@@ -171,7 +171,10 @@ async fn pair_through_proxy(host: &Host, home: &Path) -> TcpListener {
 	let proxy = tokio::spawn(async move {
 		let (mut client, _) = listener.accept().await.unwrap();
 		let mut server = TcpStream::connect(upstream).await.unwrap();
-		tokio::io::copy_bidirectional(&mut client, &mut server).await.unwrap();
+		/* Pairing success is checked below; Darwin may reset the relay when the CLI exits. */
+		if let Err(error) = tokio::io::copy_bidirectional(&mut client, &mut server).await {
+			assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset, "pairing relay failed: {error}");
+		}
 		listener
 	});
 	host.pair_at(home, address).await;
