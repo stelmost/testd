@@ -29,7 +29,6 @@ pub fn run_helper() -> Option<io::Result<()>> {
 		}
 		let listener = transfer::activate(SOCKET_NAME)?;
 		let channel = UnixStream::connect(path)?;
-		channel.set_write_timeout(Some(TIMEOUT))?;
 		transfer::send(&channel, &listener)
 	})())
 }
@@ -98,13 +97,19 @@ fn receive(channel: &UnixListener, address: SocketAddr) -> io::Result<TcpListene
 			Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
 				return Err(io::Error::new(io::ErrorKind::TimedOut, "launchd did not start the socket helper"));
 			},
-			Err(error) => return Err(error),
+			Err(error) => return Err(io::Error::new(error.kind(), format!("accept helper channel: {error}"))),
 		}
 	};
-	stream.set_read_timeout(Some(TIMEOUT))?;
-	let descriptor: OwnedFd = transfer::receive(&stream)?;
+	let descriptor: OwnedFd = transfer::receive(&stream)
+		.map_err(|error| io::Error::new(error.kind(), format!("receive descriptor: {error}")))?;
 	let listener = TcpListener::from(descriptor);
-	if listener.local_addr()? != address || socket2::SockRef::from(&listener).r#type()? != socket2::Type::STREAM {
+	let actual = listener
+		.local_addr()
+		.map_err(|error| io::Error::new(error.kind(), format!("inspect listener address: {error}")))?;
+	let socket_type = socket2::SockRef::from(&listener)
+		.r#type()
+		.map_err(|error| io::Error::new(error.kind(), format!("inspect socket type: {error}")))?;
+	if actual != address || socket_type != socket2::Type::STREAM {
 		return Err(io::Error::other("launchd returned a different socket; refusing the listener"));
 	}
 	Ok(listener)

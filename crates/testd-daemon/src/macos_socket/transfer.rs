@@ -32,7 +32,28 @@ pub(super) fn activate(name: &str) -> io::Result<OwnedFd> {
 	Ok(sockets.pop().unwrap())
 }
 
+fn wait(channel: &UnixStream, events: libc::c_short) -> io::Result<()> {
+	let deadline = std::time::Instant::now() + super::TIMEOUT;
+	loop {
+		let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+		let mut descriptor = libc::pollfd { fd: channel.as_raw_fd(), events, revents: 0 };
+		/* SAFETY: poll receives one initialized descriptor and a bounded timeout. */
+		let result = unsafe { libc::poll(&mut descriptor, 1, remaining.as_millis() as i32) };
+		if result > 0 {
+			return Ok(());
+		}
+		if result == 0 {
+			return Err(io::Error::new(io::ErrorKind::TimedOut, "socket transfer timed out"));
+		}
+		let error = io::Error::last_os_error();
+		if error.kind() != io::ErrorKind::Interrupted {
+			return Err(error);
+		}
+	}
+}
+
 pub(super) fn send(channel: &UnixStream, descriptor: &OwnedFd) -> io::Result<()> {
+	wait(channel, libc::POLLOUT)?;
 	let mut payload = [1u8];
 	let mut vector = libc::iovec { iov_base: payload.as_mut_ptr().cast(), iov_len: payload.len() };
 	let mut control = [0usize; 8];
@@ -48,7 +69,7 @@ pub(super) fn send(channel: &UnixStream, descriptor: &OwnedFd) -> io::Result<()>
 		(*header).cmsg_type = libc::SCM_RIGHTS;
 		(*header).cmsg_len = libc::CMSG_LEN(size_of::<RawFd>() as _) as _;
 		ptr::write_unaligned(libc::CMSG_DATA(header).cast::<RawFd>(), descriptor.as_raw_fd());
-		if libc::sendmsg(channel.as_raw_fd(), &message, 0) != 1 {
+		if libc::sendmsg(channel.as_raw_fd(), &message, libc::MSG_DONTWAIT) != 1 {
 			return Err(io::Error::last_os_error());
 		}
 	}
@@ -56,6 +77,7 @@ pub(super) fn send(channel: &UnixStream, descriptor: &OwnedFd) -> io::Result<()>
 }
 
 pub(super) fn receive(channel: &UnixStream) -> io::Result<OwnedFd> {
+	wait(channel, libc::POLLIN)?;
 	let mut payload = [0u8];
 	let mut vector = libc::iovec { iov_base: payload.as_mut_ptr().cast(), iov_len: payload.len() };
 	let mut control = [0usize; 8];
@@ -67,7 +89,7 @@ pub(super) fn receive(channel: &UnixStream) -> io::Result<OwnedFd> {
 		message.msg_iovlen = 1;
 		message.msg_control = control.as_mut_ptr().cast();
 		message.msg_controllen = size_of_val(&control) as _;
-		let received = libc::recvmsg(channel.as_raw_fd(), &mut message, 0);
+		let received = libc::recvmsg(channel.as_raw_fd(), &mut message, libc::MSG_DONTWAIT);
 		if received < 0 {
 			return Err(io::Error::last_os_error());
 		}
