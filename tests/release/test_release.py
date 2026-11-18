@@ -2122,6 +2122,26 @@ class DesktopRunnerTests(unittest.TestCase):
 			self.assertEqual(launch.call_args.kwargs['env']['TESTD_TUNNEL'], str(run.output))
 			self.assertTrue(run.metadata['incomplete'])
 
+	def test_macos_desktop_observes_the_apps_bind_outcome_without_a_privileged_probe(self):
+		with tempfile.TemporaryDirectory() as directory:
+			run = self.create_run(directory)
+			run.args.bin = run.args.app
+			run.args.app.chmod(0o700)
+			terminal = Mock()
+			terminal.isatty.return_value = True
+			with patch.object(runner, 'SYSTEM', 'Darwin'), patch.object(runner.sys, 'stdin', terminal), \
+					patch.object(runner, 'require_fresh_desktop_user'), patch.object(runner, 'check_ports') as ports, \
+					patch.object(runner, 'system_snapshot'), patch.object(runner, 'system_restore'), \
+					patch.object(runner, 'cleanup_owned_product_integration'), patch.object(runner, 'time'), \
+					patch.object(runner.threading, 'Thread'), patch.object(runner.subprocess, 'Popen') as launch, \
+					patch.object(runner, 'wait_for_fixture_ports') as stopped, \
+					patch.object(runner, 'ask', side_effect=['y', 'q', 'y']), redirect_stdout(io.StringIO()):
+				launch.return_value.poll.return_value = None
+				runner.desktop(run)
+			ports.assert_called_once_with([7737, 7740], [7753])
+			stopped.assert_called_once_with([7737, 7740], [7753])
+			launch.assert_called_once()
+
 	def test_desktop_refuses_existing_user_data_before_system_snapshot(self):
 		with tempfile.TemporaryDirectory() as directory:
 			run = self.create_run(directory)

@@ -631,7 +631,7 @@ def check_ports(tcp, udp=()):
 				try:
 					probe.bind(('127.0.0.1', port))
 				except OSError as error:
-					raise RuntimeError(f'fixture port {port} is unavailable; stop the existing service first') from error
+					raise RuntimeError(f'fixture port {port} is unavailable: {error}') from error
 
 
 def wait_for_fixture_ports(tcp, udp, timeout=10):
@@ -1343,8 +1343,10 @@ def desktop(run):
 	items = checklist_items((ROOT / 'tests/host/gui-checklist.md').read_text(encoding=ENCODING))
 	if not items:
 		raise RuntimeError('no desktop checklist items were found')
+	# macOS restricts loopback port 443; the actual setup must report its bind outcome.
+	tcp_ports = [7737, 7740] if SYSTEM == 'Darwin' else [7737, 7740, 443]
 	if SYSTEM in ('Linux', 'Darwin'):
-		check_ports([7737, 7740, 443], [7753])
+		check_ports(tcp_ports, [7753])
 	if ask('Confirm this is a disposable host with a persisted full-system backup [y/N]: ') != 'y':
 		raise RuntimeError('desktop validation requires a disposable host and persisted full-system backup')
 	snapshot = system_snapshot(run, DESKTOP_TLD, interactive=True)
@@ -1402,7 +1404,7 @@ def desktop(run):
 			try:
 				try:
 					if SYSTEM in ('Linux', 'Darwin'):
-						wait_for_fixture_ports([7737, 7740, 443], [7753])
+						wait_for_fixture_ports(tcp_ports, [7753])
 				except Exception as error:
 					run.record('fixture-shutdown', 'fail', str(error))
 					raise
