@@ -1609,11 +1609,12 @@ class HostSystemTests(unittest.TestCase):
 			with patch.object(runner, 'SYSTEM', 'Linux'), patch.object(runner, 'require'), \
 				patch.object(runner, 'binary', return_value=cli), patch.object(runner, 'check_ports'), \
 				patch.object(runner, 'system_snapshot', side_effect=snapshot), \
-				patch.object(runner, 'system_restore', side_effect=lambda *a, **k: events.append('restore')), \
+				patch.object(runner, 'system_restore', side_effect=lambda *a, **k: events.append('restore')) as restore, \
 				patch.object(run, 'command', side_effect=RuntimeError('host checks failed')):
 				with self.assertRaisesRegex(RuntimeError, 'host checks failed'):
 					runner.host(run)
 			self.assertEqual(events, ['snapshot', 'restore'])
+			restore.assert_called_once_with(run, pathlib.Path('system-before'), 'testdcheck', interactive=True)
 
 	def test_busy_fixture_ports_are_refused_before_the_snapshot(self):
 		with tempfile.TemporaryDirectory() as directory:

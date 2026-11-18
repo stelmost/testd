@@ -619,7 +619,7 @@ def host(run, *, scope='host'):
 						run.record('system-owned-cleanup', 'fail', str(error))
 					raise
 			finally:
-				system_restore(run, snapshot, HOST_TLD)
+				system_restore(run, snapshot, HOST_TLD, interactive=True)
 
 
 def check_ports(tcp, udp=()):
