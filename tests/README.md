@@ -125,7 +125,7 @@ The browser report records engine/user agent, candidate/root hashes, certificate
 | Packaging, rollback, and recovery reports | Python release/harness fixtures and protected artifact checks | Provenance, signing, installed upgrade/uninstall on each platform |
 | Browser fixture protocols and reports | Bun fixture tests and opt-in Playwright | Each claimed OS/browser combination |
 
-On macOS, `macos_https.rs` exercises a real CLI with a temporary home and a low loopback HTTPS port through the logged-in user's launchd GUI session. It verifies the certificate with its fixture CA and checks listener release after process exit. It changes no OS DNS, trust, or login entries; it requires an available `gui/<uid>` domain and does not substitute for first-run desktop evidence.
+On macOS, native port-443 validation requires the logged-in user's launchd GUI session. Verify the CLI and actual app with their default loopback HTTPS address, hostname-verified TLS, refusal from a separate LAN machine, no remaining `dev.testd.socket.*` jobs, and listener release after exit. The ordinary Rust suite covers descriptor transfer and exact job configuration without requiring launchd access.
 
 `native_tls.rs` runs the real CLI against an isolated component host: matching and mismatched pairing codes, no credential issuance during pairing, identity replacement, plaintext downgrade attempts, mutual-TLS application requests and upgrades, and rollback retaining TLS identity. Its resolver cannot touch the system, and candidate homes are private fixtures. It does not validate firewall configuration or actual network continuity.
 
