@@ -452,6 +452,11 @@ def binary(run):
 def system_snapshot(run, tld, interactive=False):
 	"""Snapshot OS integration and refuse pre-existing state before system checks."""
 	state = helper('system_state')
+	if SYSTEM == 'Darwin':
+		manager = run.command('macos-session', ['launchctl', 'managername'])
+		if manager.strip() != 'Aqua':
+			raise RuntimeError('macOS trust checks require a terminal in the logged-in desktop session; '
+				'SSH cannot present the system trust removal authorization')
 	if SYSTEM != 'Windows' and not interactive:
 		require('sudo')
 		run.command('sudo-ready', ['sudo', '-n', 'true'], terminal=True)

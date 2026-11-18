@@ -73,7 +73,7 @@ Ignored, skipped, inapplicable, blocked, and unrun checks are never passes. A co
 
 ## System and interactive checks
 
-System, artifact, browser, and desktop checks require a clean disposable machine, an interactive terminal, a new persisted report, and a persisted full-system snapshot. Scoped runner backups do not cover the full OS, user profile, browser stores, package installation, login items, or shared CA-store effects. Unix system checks need `sudo -v` in the same terminal. The standalone `service` suite uses a private home, high ports, and a uniquely named owned systemd or launchd job; it requires the real user session but no resolver/trust changes or elevated privileges. Do not use elevated privileges for routine `check` or `ci`.
+System, artifact, browser, and desktop checks require a clean disposable machine, an interactive terminal, a new persisted report, and a persisted full-system snapshot. Scoped runner backups do not cover the full OS, user profile, browser stores, package installation, login items, or shared CA-store effects. Unix system checks need `sudo -v` in the same terminal. macOS resolver/trust, browser-system, and desktop checks must start in the logged-in desktop's terminal (`launchctl managername` reports `Aqua`); SSH cannot present the authorization required to remove system trust. Approve the native trust dialogs during the run. The standalone `service` suite uses a private home, high ports, and a uniquely named owned systemd or launchd job; it requires the real user session but no resolver/trust changes or elevated privileges. Do not use elevated privileges for routine `check` or `ci`.
 
 ```sh
 python3 tests/run.py host --bin /path/to/candidate --system --report /path/to/new-system-report

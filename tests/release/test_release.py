@@ -1657,6 +1657,18 @@ class HostSystemTests(unittest.TestCase):
 				report=ROOT / 'uncreated-service-fixture-report'))
 		parser.error.assert_not_called()
 
+	def test_macos_system_snapshot_refuses_ssh_before_snapshot_or_elevation(self):
+		with tempfile.TemporaryDirectory() as directory:
+			run = self.create_run(directory)
+			state_api = Mock()
+			with patch.object(runner, 'SYSTEM', 'Darwin'), patch.object(runner, 'helper', return_value=state_api), \
+					patch.object(run, 'command', return_value='Background\n') as command:
+				with self.assertRaisesRegex(RuntimeError, 'logged-in desktop session'):
+					runner.system_snapshot(run, 'testdcheck')
+			command.assert_called_once_with('macos-session', ['launchctl', 'managername'])
+			state_api.snapshot.assert_not_called()
+			self.assertFalse((run.output / 'system-before').exists())
+
 	def test_system_snapshot_checks_sudo_through_the_terminal(self):
 		with tempfile.TemporaryDirectory() as directory:
 			run = self.create_run(directory)
