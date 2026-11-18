@@ -134,10 +134,10 @@ pub fn test_directory() -> tempfile::TempDir {
 	#[cfg(unix)]
 	{
 		use std::os::unix::fs::PermissionsExt;
-		/* Fixture privacy must not depend on the developer's umask. */
+		/* Keep fixture parents canonical on macOS and privacy independent of the developer's umask. */
 		tempfile::Builder::new()
 			.permissions(std::fs::Permissions::from_mode(0o700))
-			.tempdir()
+			.tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap())
 			.unwrap()
 	}
 	#[cfg(not(unix))]
