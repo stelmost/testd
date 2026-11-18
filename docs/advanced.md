@@ -190,7 +190,7 @@ On Linux, binding 443 needs `CAP_NET_BIND_SERVICE`, root, or a high port.
 - High port: set `[host] edge_addr = '127.0.0.1:8443'` and open `https://app.example.test:8443`.
 - User service: `packaging/systemd/testd.service` sets `NoNewPrivileges=yes`, so it cannot acquire a file capability. Use a high port there.
 
-macOS uses the launchd template in `packaging/launchd/`. Windows needs no capability for the default configuration beyond the usual firewall prompt.
+On macOS, testd asks the logged-in user's launchd GUI session for the exact loopback socket when a low-port bind is denied. The daemon and tray keep running as the current user; the temporary socket-transfer job is unloaded before startup completes. This preserves `127.0.0.1:443` without a wildcard listener or privileged daemon. A logged-in desktop session is required for this fallback; a high port remains available for headless environments. The persistent service template is in `packaging/launchd/`. Windows needs no capability for the default configuration beyond the usual firewall prompt.
 
 ## Desktop app and OS integration
 
