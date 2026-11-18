@@ -184,6 +184,10 @@ fn parse_port(s: &str, entry: &str) -> anyhow::Result<u16> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+	#[cfg(target_os = "macos")]
+	if let Some(result) = testd_daemon::macos_socket::run_helper() {
+		return Ok(result?);
+	}
 	let cli = Cli::parse();
 
 	match cli.command {

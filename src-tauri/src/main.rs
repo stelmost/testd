@@ -20,6 +20,14 @@ fn needs_init() -> bool {
 }
 
 fn main() {
+	#[cfg(target_os = "macos")]
+	if let Some(result) = testd_daemon::macos_socket::run_helper() {
+		if let Err(error) = result {
+			eprintln!("socket activation failed: {error}");
+			std::process::exit(1);
+		}
+		return;
+	}
 	let rt = Arc::new(tokio::runtime::Runtime::new().expect("failed to create tokio runtime"));
 
 	let rt_clone = Arc::clone(&rt);

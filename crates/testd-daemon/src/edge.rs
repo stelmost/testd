@@ -149,10 +149,12 @@ pub fn start(
 
 	let tls_addr = match tls_addr {
 		Some(addr) => {
-			let listener = std::net::TcpListener::bind(addr).with_context(|| {
-				format!(
-					"bind the HTTPS edge on {addr}; check port permissions or set [host] edge_addr to a high port"
-				)
+			#[cfg(target_os = "macos")]
+			let listener = crate::macos_socket::bind(addr);
+			#[cfg(not(target_os = "macos"))]
+			let listener = std::net::TcpListener::bind(addr);
+			let listener = listener.with_context(|| {
+				format!("bind the HTTPS edge on {addr}; check port permissions or set [host] edge_addr to a high port")
 			})?;
 			listener.set_nonblocking(true)?;
 			let listener = TcpListener::from_std(listener)?;

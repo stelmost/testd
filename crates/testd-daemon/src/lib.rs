@@ -10,6 +10,8 @@ pub mod health;
 pub mod http;
 pub mod launch;
 mod local_auth;
+#[cfg(target_os = "macos")]
+pub mod macos_socket;
 pub mod registry;
 pub mod resolver;
 pub mod setup;
