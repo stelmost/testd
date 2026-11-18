@@ -250,6 +250,9 @@ Host, under the config directory:
 | `pki/backups/` | Previous intermediates | private |
 | `tokens.json` | Issued tokens and granted names, including secrets | `0600` |
 | `control.json` | Distinct per-run local control and dashboard credentials | user-private |
+| `tray-control.json`, `tray.lock` | Early tray activation and per-user instance guard | user-private |
+| `browser-*.html` | Live browser bootstrap handoff; invalid after its setup session or daemon ends | user-private |
+| `last-error.txt` | Most recent native desktop diagnostic | user-private |
 | `launches.json` | Quick launch definitions | user-private |
 | `Caddyfile` | Managed external-front config | plain |
 

@@ -1,24 +1,23 @@
 //! Privileged macOS operations with installation-specific ownership records.
 
-#[cfg(target_os = "macos")]
 use std::io;
+use std::os::fd::AsFd;
 use std::path::Path;
 
-#[cfg(target_os = "macos")]
-use super::{Elevation, silent_command};
-use super::shell_quote;
+use super::{Elevation, shell_quote, silent_command};
 
 pub(super) const CONFLICT: i32 = 17;
 
-#[cfg(target_os = "macos")]
 pub(super) fn run(script: &str, elevation: Elevation) -> io::Result<()> {
 	let script = format!("PATH=/usr/sbin:/usr/bin:/sbin:/bin; export PATH\nset -eu\n{script}");
+	/* Authorization utility output must not precede machine-readable CLI output. */
+	let stdout = std::io::stderr().as_fd().try_clone_to_owned()?;
 	let status = match elevation {
-		Elevation::Sudo => silent_command("sudo").args(["sh", "-c", &script]).status()?,
+		Elevation::Sudo => silent_command("sudo").args(["sh", "-c", &script]).stdout(stdout).status()?,
 		Elevation::Gui => {
 			let escaped = script.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
 			let action = format!("do shell script \"{escaped}\" with administrator privileges");
-			silent_command("osascript").args(["-e", &action]).status()?
+			silent_command("osascript").args(["-e", &action]).stdout(stdout).status()?
 		},
 	};
 	match status.code() {
@@ -49,4 +48,37 @@ pub(super) fn file_script(path: &Path, owner: &str) -> String {
 		.replace("stat -f '%d:%i:%u:%g:%Lp'", "stat -c '%d:%i:%u:%g:%a'")
 		.replace("stat -f '%u:%Lp:%l'", "stat -c '%u:%a:%h'");
 	format!("path={path}\nmarker={marker}\nowner={}\n{helpers}", shell_quote(owner))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::os::unix::fs::PermissionsExt;
+	use std::process::Command;
+
+	#[test]
+	fn privileged_progress_does_not_pollute_standard_output() {
+		const FLAG: &str = "TESTD_MACOS_PRIVILEGED_PROGRESS_FIXTURE";
+		if std::env::var_os(FLAG).is_some() {
+			for elevation in [Elevation::Sudo, Elevation::Gui] {
+				run("true", elevation).unwrap();
+			}
+			return;
+		}
+		let directory = tempfile::tempdir().unwrap();
+		for name in ["sudo", "osascript"] {
+			let path = directory.path().join(name);
+			std::fs::write(&path, "#!/bin/sh\nprintf privileged-progress\n").unwrap();
+			std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+		}
+		let output = Command::new(std::env::current_exe().unwrap())
+			.args(["--exact", "macos::tests::privileged_progress_does_not_pollute_standard_output", "--nocapture"])
+			.env(FLAG, "1")
+			.env("PATH", directory.path())
+			.output()
+			.unwrap();
+		assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+		assert!(!String::from_utf8_lossy(&output.stdout).contains("privileged-progress"));
+		assert_eq!(String::from_utf8_lossy(&output.stderr).matches("privileged-progress").count(), 2);
+	}
 }

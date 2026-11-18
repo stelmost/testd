@@ -32,11 +32,11 @@ function Find-Binaries($dir) {
 
 Section 'repository'
 git -C $root log --oneline -1
-git -C $root status --short -- Cargo.lock src-tauri/Cargo.toml
+git -C $root status --short -- Cargo.lock crates/testd-gui/Cargo.toml
 
 Section 'locked dependencies'
 cargo tree --manifest-path "$root/Cargo.toml" -p testd-gui -i tray-icon
-cargo tree --manifest-path "$root/Cargo.toml" -p testd-gui -i tauri
+cargo tree --manifest-path "$root/Cargo.toml" -p testd-gui -i tao
 
 Section 'built binaries'
 $builtHashes = @()
@@ -48,13 +48,13 @@ if ($builtHashes.Count -eq 0) {
 }
 
 Section 'bundles'
-$bundles = @(Get-ChildItem -Path "$root\target\release\bundle\nsis\*.exe" -ErrorAction SilentlyContinue |
+$bundles = @(Get-ChildItem -Path "$root\target\release\bundle\*.exe" -ErrorAction SilentlyContinue |
 	Sort-Object LastWriteTime)
 foreach ($bundle in $bundles) {
 	Write-Host "$($bundle.FullName)  written $($bundle.LastWriteTime.ToString('s'))"
 }
 if ($bundles.Count -eq 0) {
-	Write-Host 'no NSIS installer under target\release\bundle\nsis'
+	Write-Host 'no NSIS installer under target\release\bundle'
 }
 
 Section 'running processes'
@@ -100,7 +100,7 @@ if ($installedHashes.Count -eq 0) {
 Section 'tray trace'
 $trace = Join-Path $env:TEMP 'testd-tray.log'
 if (Test-Path -LiteralPath $trace) {
-	# First line names the binary and tauri version that produced the trace.
+	# First line names the native binary and package version that produced the trace.
 	Get-Content -LiteralPath $trace -TotalCount 3
 	Write-Host '...'
 	Get-Content -LiteralPath $trace -Tail 40
@@ -114,7 +114,7 @@ if ($installedHashes.Count -eq 0) {
 } elseif (@($installedHashes | Where-Object { $builtHashes -notcontains $_ }).Count -eq 0) {
 	Write-Host 'the installed binary matches target\release'
 } else {
-	Write-Host 'the installed binary differs from target\release, which is expected: cargo tauri build'
-	Write-Host 'adds tauri/custom-protocol and patches target\release in place with bundle type'
-	Write-Host 'information after bundling. Use the trace start line to identify the running build.'
+	Write-Host 'the installed binary differs from target\release; verify source, target, version and build hashes'
+	Write-Host 'cargo-packager packages the candidate executable without adding a webview runtime.'
+	Write-Host 'Use the trace start line and artifact hashes to identify the running build.'
 }

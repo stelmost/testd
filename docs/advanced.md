@@ -194,7 +194,7 @@ On macOS, testd asks the logged-in user's launchd GUI session for the exact loop
 
 ## Desktop app and OS integration
 
-The tray app is a separate Tauri build. On first start it opens a setup dialog served by the daemon on an ephemeral loopback port: resolver, root certificate, and operator secret. The dialog generates a pronounceable secret into an editable field, so an existing secret can replace it. Setup talks HTTP, not IPC, and shares the dashboard's stylesheet.
+The tray app is a separate native Rust build. On first start it opens setup in the default browser on an ephemeral loopback port: resolver, root certificate, and operator secret. The page generates a pronounceable secret into an editable field, so an existing secret can replace it. Setup talks HTTP, shares the dashboard's stylesheet, and navigates its tab to the dashboard after the daemon starts. Closing the tab leaves the tray running; **Continue setup** reopens the page and **Exit** stops the app. Browser launching uses an owner-private handoff file rather than passing administrative credentials in process arguments.
 
 The tray:
 

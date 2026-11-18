@@ -1,0 +1,190 @@
+use std::path::Path;
+
+use anyhow::{Context, bail};
+use gio::prelude::*;
+use gtk::prelude::*;
+
+pub fn open_browser(file_url: &str) -> anyhow::Result<()> {
+	let browser = gio::AppInfo::default_for_uri_scheme("http").context("no default HTTP browser is configured")?;
+	browser.launch_uris(&[file_url], Some(&browser_context()))?;
+	Ok(())
+}
+
+fn browser_context() -> gio::AppLaunchContext {
+	let context = gio::AppLaunchContext::new();
+	if std::env::var_os("APPIMAGE").is_some() {
+		/* Bundled GTK/loader paths belong to the tray, not the host browser. */
+		for variable in [
+			"LD_LIBRARY_PATH",
+			"LD_PRELOAD",
+			"GTK_PATH",
+			"GTK_IM_MODULE_FILE",
+			"GDK_PIXBUF_MODULE_FILE",
+			"GSETTINGS_SCHEMA_DIR",
+			"GI_TYPELIB_PATH",
+			"GTK_EXE_PREFIX",
+			"GTK_DATA_PREFIX",
+			"GTK_THEME",
+			"GDK_BACKEND",
+			"XDG_DATA_DIRS",
+		] {
+			restore_browser_variable(&context, variable, std::env::var_os(format!("APPIMAGE_ORIGINAL_{variable}")));
+		}
+		if let Some(path) = std::env::var_os("APPIMAGE_ORIGINAL_PATH") {
+			context.setenv("PATH", path);
+		}
+		context.unsetenv("APPIMAGE");
+		context.unsetenv("APPDIR");
+	}
+	context
+}
+
+fn restore_browser_variable(context: &gio::AppLaunchContext, variable: &str, original: Option<std::ffi::OsString>) {
+	match original {
+		Some(value) => context.setenv(variable, value),
+		None => context.unsetenv(variable),
+	}
+}
+
+pub fn show_error(message: &str) -> anyhow::Result<()> {
+	gtk::init().context("cannot initialize GTK for the desktop diagnostic")?;
+	let dialog = gtk::MessageDialog::builder()
+		.message_type(gtk::MessageType::Error)
+		.buttons(gtk::ButtonsType::Ok)
+		.text("Testd")
+		.secondary_text(message.replace('\0', "�"))
+		.build();
+	dialog.run();
+	dialog.close();
+	Ok(())
+}
+
+pub fn check_autostart(executable: &Path) -> anyhow::Result<()> {
+	let directory = testd_core::config::config_dir().parent().unwrap().join("autostart");
+	crate::private::directory(&directory)?;
+	check_login_entry(&directory.join("dev.testd.host.desktop"), executable)
+}
+
+fn check_login_entry(path: &Path, executable: &Path) -> anyhow::Result<()> {
+	let Some(data) = crate::private::read_entry(path)? else {
+		return Ok(());
+	};
+	let entry = gtk::glib::KeyFile::new();
+	entry.load_from_data(std::str::from_utf8(&data)?, gtk::glib::KeyFileFlags::NONE)?;
+	let expected = gtk::glib::KeyFile::new();
+	let raw = executable.to_str().context("invalid login executable path")?;
+	expected.load_from_data(
+		&format!("[Desktop Entry]\nExec={}\n", super::desktop_exec(raw)),
+		gtk::glib::KeyFileFlags::NONE,
+	)?;
+	let command = entry.string("Desktop Entry", "Exec")?;
+	let keys = entry.keys("Desktop Entry")?;
+	let allowed = ["Type", "Version", "Name", "Comment", "Exec", "StartupNotify", "Terminal"];
+	if keys.len() != allowed.len()
+		|| keys.iter().any(|key| !allowed.contains(&key.as_str()))
+		|| entry.string("Desktop Entry", "Name")? != "dev.testd.host"
+		|| entry.string("Desktop Entry", "Type")? != "Application"
+		|| entry.string("Desktop Entry", "Version")? != "1.0"
+		|| entry.string("Desktop Entry", "Comment")? != "dev.testd.hoststartup script"
+		|| entry.string("Desktop Entry", "StartupNotify")? != "false"
+		|| entry.string("Desktop Entry", "Terminal")? != "false"
+		|| (command.trim_end() != expected.string("Desktop Entry", "Exec")?.as_str() && command.trim_end() != raw)
+	{
+		bail!("the existing login entry was changed or points elsewhere; left unchanged");
+	}
+	Ok(())
+}
+
+pub fn register_scheme(executable: &Path) -> anyhow::Result<()> {
+	let name = "testd-gui-handler.desktop";
+	if let Some(current) = gio::AppInfo::default_for_uri_scheme("testd") {
+		/* Reuse compatible installed/legacy handlers without adopting or rewriting them. */
+		let registered = current.executable();
+		let registered =
+			if registered.is_absolute() { Some(registered) } else { gtk::glib::find_program_in_path(registered) };
+		if registered.as_deref() == Some(executable) {
+			return Ok(());
+		}
+		/* A bundled AppImage entry is transient; register its persistent wrapper instead. */
+		let is_own_transient_image = registered.as_deref() == Some(std::env::current_exe()?.as_path());
+		if current.id().as_deref() != Some(name) && !is_own_transient_image {
+			bail!("another testd URL handler is configured; it was left unchanged");
+		}
+	}
+	let path = executable.to_str().context("the URL-handler path must be valid Unicode")?;
+	if path.chars().any(char::is_control) {
+		bail!("control characters are not supported in a URL-handler path");
+	}
+	let directory = gtk::glib::user_data_dir().join("applications");
+	crate::private::directory(&directory)?;
+	let path = directory.join(name);
+	let content = format!(
+		"[Desktop Entry]\nType=Application\nName=Testd\nTerminal=false\n\
+		Exec={} %u\nMimeType=x-scheme-handler/testd;\n",
+		super::desktop_exec(executable.to_str().unwrap()),
+	);
+	match std::fs::symlink_metadata(&path) {
+		Ok(metadata) if metadata.is_file() => {
+			if std::fs::read_to_string(&path)? != content {
+				bail!("the existing testd desktop handler differs; it was left unchanged");
+			}
+		},
+		Ok(_) => bail!("the existing testd desktop handler is not an ordinary file; left unchanged"),
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+			use std::io::Write;
+			let mut file = testd_core::private_file::create_new(&path)?;
+			file.write_all(content.as_bytes())?;
+			file.sync_all()?;
+		},
+		Err(error) => return Err(error.into()),
+	}
+	gio::DesktopAppInfo::from_filename(&path)
+		.context("the URL-handler desktop entry could not be loaded")?
+		.set_as_default_for_type("x-scheme-handler/testd")?;
+	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn browser_environment_restoration_never_mutates_the_tray_process() {
+		let variable = "TESTD_BROWSER_ENVIRONMENT_FIXTURE";
+		let before = std::env::var_os(variable);
+		let context = gio::AppLaunchContext::new();
+		context.setenv(variable, "packaged");
+		restore_browser_variable(&context, variable, Some("host".into()));
+		assert!(
+			context
+				.environment()
+				.iter()
+				.any(|entry| entry == "TESTD_BROWSER_ENVIRONMENT_FIXTURE=host")
+		);
+		restore_browser_variable(&context, variable, None);
+		assert!(
+			!context
+				.environment()
+				.iter()
+				.any(|entry| entry.to_string_lossy().starts_with(variable))
+		);
+		assert_eq!(std::env::var_os(variable), before);
+	}
+
+	#[test]
+	fn login_validation_accepts_legacy_entries_but_preserves_changed_entries() {
+		let home = tempfile::tempdir().unwrap();
+		let entry = home.path().join("login.desktop");
+		let path = "/home/me/a space/Testd%u.AppImage";
+		for executable in [path.to_owned(), crate::platform::desktop_exec(path), "/bin/sh".into()] {
+			let content = format!(
+				"[Desktop Entry]\nType=Application\nVersion=1.0\nName=dev.testd.host\n\
+				Comment=dev.testd.hoststartup script\nExec={executable} \nStartupNotify=false\nTerminal=false"
+			);
+			testd_core::config::write_private(&entry, content.as_bytes()).unwrap();
+			let result = check_login_entry(&entry, Path::new(path));
+			assert_eq!(result.is_ok(), executable != "/bin/sh");
+			assert_eq!(std::fs::read_to_string(&entry).unwrap(), content);
+		}
+	}
+}

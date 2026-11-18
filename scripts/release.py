@@ -30,14 +30,14 @@ def digest(path):
 def check_version(version):
 	if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', version):
 		raise ValueError(f'invalid release version: {version}')
-	manifests = [ROOT / 'Cargo.toml', ROOT / 'src-tauri/Cargo.toml', *sorted(ROOT.glob('crates/*/Cargo.toml'))]
+	manifests = [ROOT / 'Cargo.toml', *sorted(ROOT.glob('crates/*/Cargo.toml'))]
 	for path in manifests:
 		actual = tomllib.loads(path.read_text())['package']['version']
 		if actual != version:
 			raise ValueError(f'{path}: expected {version}, found {actual}')
-	actual = json.loads((ROOT / 'src-tauri/tauri.conf.json').read_text())['version']
-	if actual != version:
-		raise ValueError(f'Tauri bundle version: expected {version}, found {actual}')
+		package = tomllib.loads(path.read_text())['package']
+		if 'version' in package.get('metadata', {}).get('packager', {}):
+			raise ValueError(f'{path}: packager must inherit the Cargo package version')
 	if f'## [{version}]' not in (ROOT / 'CHANGELOG.md').read_text():
 		raise ValueError(f'CHANGELOG.md has no released entry for {version}')
 
@@ -73,7 +73,7 @@ def package(args):
 def copy_bundles(args, platform, arch):
 	extensions = {'macos': ['.dmg'], 'linux': ['.AppImage', '.deb'], 'windows': ['.exe']}[platform]
 	for extension in extensions:
-		candidates = sorted((args.build_dir / 'bundle').rglob('*' + extension))
+		candidates = sorted((args.build_dir / 'bundle').glob('*' + extension))
 		if len(candidates) != 1:
 			raise ValueError(f'expected one {extension} bundle, found {candidates}')
 		suffix = '-setup' if platform == 'windows' else ''
@@ -116,7 +116,7 @@ def homebrew(args):
 
 
 def scan_sbom():
-	manifests = [ROOT / 'Cargo.toml', ROOT / 'src-tauri/Cargo.toml', *sorted(ROOT.glob('crates/*/Cargo.toml'))]
+	manifests = [ROOT / 'Cargo.toml', *sorted(ROOT.glob('crates/*/Cargo.toml'))]
 	expected = {tomllib.loads(path.read_text())['package']['name'] for path in manifests}
 	documents = {}
 	for manifest in manifests:
@@ -166,7 +166,7 @@ def main():
 	build.add_argument('--target', choices=TARGETS, required=True)
 	build.add_argument('--build-dir', type=pathlib.Path, required=True)
 	build.add_argument('--output', type=pathlib.Path, required=True)
-	build.add_argument('--cli-only', action='store_true', help='stage only the CLI archive without Tauri bundles')
+	build.add_argument('--cli-only', action='store_true', help='stage only the CLI archive without tray bundles')
 	brew = commands.add_parser('homebrew')
 	brew.add_argument('--version', required=True)
 	brew.add_argument('--artifacts', type=pathlib.Path, required=True)

@@ -627,9 +627,12 @@ def check_ports(tcp, udp=()):
 		for port in ports:
 			with socket.socket(socket.AF_INET, kind) as probe:
 				if kind == socket.SOCK_STREAM and SYSTEM != 'Windows':
+					# Closed connections in TIME_WAIT do not mean a live fixture remains.
 					probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 				try:
 					probe.bind(('127.0.0.1', port))
+					if kind == socket.SOCK_STREAM:
+						probe.listen(1)
 				except OSError as error:
 					raise RuntimeError(f'fixture port {port} is unavailable: {error}') from error
 
@@ -789,11 +792,12 @@ class HostUnavailable(RuntimeError):
 	"""The intake endpoint did not answer like a running testd host."""
 
 
-def local_host_status(port):
-	"""Read the running host's status."""
+def local_host_status(port, credential=None):
+	"""Read the owned host's status with its local operator credential."""
 	connection = http.client.HTTPConnection('127.0.0.1', port, timeout=5)
 	try:
-		connection.request('GET', '/api/status')
+		headers = {'Authorization': f'Bearer {credential}'} if credential else {}
+		connection.request('GET', '/api/status', headers=headers)
 		response = connection.getresponse()
 		body = response.read()
 	except OSError as error:
@@ -809,7 +813,7 @@ def local_host_status(port):
 		raise RuntimeError(f'the host at 127.0.0.1:{port} returned an invalid /api/status document') from error
 
 
-def wait_for_host(port, process, output, timeout=30):
+def wait_for_host(port, process, output, timeout=30, environment=None):
 	"""Wait for a host this suite started to accept connections."""
 	deadline = time.monotonic() + timeout
 	while time.monotonic() < deadline:
@@ -818,7 +822,7 @@ def wait_for_host(port, process, output, timeout=30):
 			raise RuntimeError(f'the host exited with {process.returncode} before listening on 127.0.0.1:{port}; '
 				f'is it initialized with `testd init`?\n{detail[-4000:]}')
 		try:
-			return local_host_status(port)
+			return local_host_status(port, browser_owner_credential(environment or os.environ))
 		except HostUnavailable:
 			time.sleep(0.25)
 	raise RuntimeError(f'the host did not listen on 127.0.0.1:{port} within {timeout} seconds')
@@ -856,6 +860,22 @@ def isolated_environment(**values):
 	return env
 
 
+def browser_owner_credential(environment):
+	base = pathlib.Path(environment.get('APPDATA', pathlib.Path.home() / 'AppData/Roaming')) if SYSTEM == 'Windows' \
+		else pathlib.Path(environment.get('HOME', str(pathlib.Path.home()))) / '.config'
+	control = base / 'testd/control.json'
+	if control.is_symlink():
+		raise RuntimeError('the browser host control file is linked')
+	if not control.is_file():
+		raise HostUnavailable('the owned host has not written its control descriptor yet')
+	if SYSTEM != 'Windows' and control.stat().st_mode & 0o077:
+		raise RuntimeError('the browser host control file is not owner-private')
+	credential = json.loads(control.read_text(encoding=ENCODING)).get('dashboard_token')
+	if not isinstance(credential, str) or not re.fullmatch(r'[A-Za-z0-9_-]{16,}', credential):
+		raise RuntimeError('the browser host dashboard credential is missing or invalid')
+	return credential
+
+
 class HostFixture:
 	"""A host the browser suite owns. An already-running host is left untouched."""
 
@@ -887,7 +907,7 @@ class HostFixture:
 		self.context = self.run.serve(name, [str(self.cli), 'host'], env=env, stop_signal=signal.SIGINT)
 		self.process, self.output = self.context.__enter__()
 		try:
-			self.status = wait_for_host(self.port, self.process, self.output)
+			self.status = wait_for_host(self.port, self.process, self.output, environment=env)
 		except BaseException:
 			self.stop()
 			raise
@@ -1572,14 +1592,17 @@ def prepare(args):
 			break
 	if args.gui and SYSTEM == 'Linux':
 		if not shutil.which('pkg-config'):
-			missing.append('pkg-config and GTK/WebKit development packages (see .github/actions/linux-dependencies)')
+			missing.append('pkg-config and native GTK/AppIndicator packages (see .github/actions/linux-dependencies)')
 		else:
-			for library in ('gtk+-3.0', 'webkit2gtk-4.1'):
+			for library in ('gtk+-3.0', 'dbus-1'):
 				if subprocess.run(['pkg-config', '--exists', library], timeout=30).returncode:
 					missing.append(f'GUI development library: {library}')
+			indicators = ('ayatana-appindicator3-0.1', 'appindicator3-0.1')
+			if all(subprocess.run(['pkg-config', '--exists', library], timeout=30).returncode for library in indicators):
+				missing.append('GUI development library: Ayatana AppIndicator or AppIndicator')
 	for requirement in missing:
 		print(f'Missing: {requirement}')
-	print('Native GUI builds also require Xcode on macOS or Visual Studio C++ tools and WebView2 on Windows.'
+	print('Native GUI builds also require Xcode on macOS or Visual Studio C++ tools and the Windows SDK on Windows.'
 		if args.gui else 'GUI checks are opt-in with --gui; ci always includes them.')
 	print('This command only checks prerequisites; it does not install tools. '
 		'See tests/README.md for setup commands.')

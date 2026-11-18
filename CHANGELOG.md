@@ -14,8 +14,9 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 
 - Dashboard administration requires an owner-scoped per-run credential, separate from registration and control tokens; tray and CLI links bootstrap origin-scoped sessions, and bare loopback connections reveal no live state
 - Setup uses a separate ephemeral credential before reading secrets or invoking privileged actions; daemon restart invalidates dashboard sessions
-- The tray app opens the dashboard in a window instead of the browser, and lists `testd.test → dashboard` as the last row of the name list
-- First-run setup is a local page served by the daemon on an ephemeral loopback port and shown in a dialog; it shares the dashboard stylesheet and talks HTTP instead of Tauri commands
+- The native Rust tray uses Tao and tray-icon/muda; setup and the dashboard open in the default browser through owner-private handoff files, without administrative credentials in opener arguments
+- First-run setup navigates its own tab into the dashboard; closing a tab leaves the tray running with Continue setup and Exit controls
+- Tray packaging uses pinned cargo-packager tooling; package identity, per-user Windows installation, and public artifact names are retained
 
 ### Fixed
 
@@ -31,7 +32,7 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 - Windows resolver and root removal require unchanged administrator-owned records; CLI uninstall remains blocked pending native validation
 - Windows elevation uses the system PowerShell and verifies a single in-memory helper-source snapshot before execution without exceeding the native command-line limit; helper and certificate staging files close before the elevated process reads them
 - macOS certificate actions preserve other installations' roots, and Windows resolver setup refuses conflicting unowned rules
-- Failed startup releases background listeners, and the setup dialog accepts another attempt after a start failure
+- Failed startup releases background listeners; setup rejects concurrent finishes, retains earlier recovery backups, and accepts another attempt after a start failure
 - Wrapped CLI commands stop their process trees; quick launches keep Stop responsive during rebinding and stalled host requests
 - TLS claims and provider aliases retain their upstream identity through rollback; failed rebinds preserve the previous forwarder, and grant withdrawal closes active leaf streams
 - WebSocket upgrades retain their connection-limit permits, IPv6 targets use brackets, and silent authentication peers no longer block failover
@@ -39,6 +40,7 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 
 ### Removed
 
+- The Tauri framework, webview runtime, desktop plugins, capabilities, and cargo-tauri build path
 - The redundant `testd deregister` CLI command; registrations still end with their owning connection, and protocol-level deregistration remains available to that owner
 - Unused Caddy-trust and prefix-scope helpers, and the unused second product-site implementation
 

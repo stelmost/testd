@@ -101,6 +101,23 @@ test('setup repair buttons regain their names when a prerequisite disappears', a
 	}
 });
 
+test('setup navigates its own tab only to the returned loopback dashboard', async () => {
+	const setup = await Bun.file(new URL('../../crates/testd-daemon/setup.html', import.meta.url)).text();
+	const source = setup.slice(setup.indexOf('async function finishSetup('),
+		setup.indexOf("\n\tdocument.getElementById('secret-input').addEventListener"));
+	for (const url of ['http://127.0.0.1:7737/#token=fixture-owner', 'https://foreign.example/#token=fixture-owner']) {
+		let navigated = '';
+		const finish = new Function('document', 'hideNotice', 'authorizedFetch', 'setPill', 'notice', 'location',
+			`return (${source});`)(
+			{ getElementById: () => ({ value: 'fixture-secret', disabled: false, textContent: '' }) },
+			() => {}, async () => ({ ok: true, json: async () => ({ url }) }), () => {}, () => {},
+			{ replace: (target: string) => { navigated = target; } },
+		);
+		await finish();
+		expect(navigated).toBe(url.startsWith('http://127.') ? url : '');
+	}
+});
+
 test('quick-launch commands preserve Windows executable paths', () => {
 	expect(parseCommand(String.raw`"C:\Program Files\nodejs\node.exe" app.js`))
 		.toEqual([String.raw`C:\Program Files\nodejs\node.exe`, 'app.js']);

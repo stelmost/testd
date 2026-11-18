@@ -648,6 +648,27 @@ pub fn write_caddyfile_import_gui(caddyfile_path: &Path, import_path: &Path) -> 
 mod tests {
 	use super::*;
 
+	#[cfg(target_os = "linux")]
+	#[test]
+	fn privileged_progress_does_not_pollute_standard_output() {
+		use std::process::Command;
+		const FLAG: &str = "TESTD_PRIVILEGED_PROGRESS_FIXTURE";
+		if std::env::var_os(FLAG).is_some() {
+			let mut command = Command::new("sh");
+			command.args(["-c", "cat >/dev/null; printf privileged-progress"]);
+			assert!(run_with_stdin(command, b"fixture input").unwrap().success());
+			return;
+		}
+		let output = Command::new(std::env::current_exe().unwrap())
+			.args(["--exact", "tests::privileged_progress_does_not_pollute_standard_output", "--nocapture"])
+			.env(FLAG, "1")
+			.output()
+			.unwrap();
+		assert!(output.status.success());
+		assert!(!String::from_utf8_lossy(&output.stdout).contains("privileged-progress"));
+		assert!(String::from_utf8_lossy(&output.stderr).contains("privileged-progress"));
+	}
+
 	#[cfg(any(target_os = "macos", target_os = "linux"))]
 	#[test]
 	fn shell_quote_escapes_single_quotes() {
@@ -1093,9 +1114,13 @@ fn existing_linux_anchor(path: &Path, cert_pem: &str) -> io::Result<bool> {
 #[cfg(target_os = "linux")]
 fn run_with_stdin(mut command: std::process::Command, input: &[u8]) -> io::Result<std::process::ExitStatus> {
 	use std::io::Write;
+	use std::os::fd::AsFd;
 	use std::process::Stdio;
 
-	command.stdin(Stdio::piped());
+	/* Privileged utility progress must not precede machine-readable CLI output. */
+	command
+		.stdin(Stdio::piped())
+		.stdout(std::io::stderr().as_fd().try_clone_to_owned()?);
 	let mut child = command.spawn()?;
 	let mut stdin = child.stdin.take().expect("stdin was requested");
 	stdin.write_all(input)?;

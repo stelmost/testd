@@ -1,9 +1,9 @@
 use tokio::task::JoinHandle;
 
 /* Unlike a bare JoinHandle, daemon-owned work must stop when its owner disappears. */
-pub(crate) struct BackgroundTask(pub(crate) JoinHandle<()>);
+pub(crate) struct BackgroundTask<T = ()>(pub(crate) JoinHandle<T>);
 
-impl Drop for BackgroundTask {
+impl<T> Drop for BackgroundTask<T> {
 	fn drop(&mut self) {
 		self.0.abort();
 	}

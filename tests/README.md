@@ -18,7 +18,7 @@ Use `python` instead of `python3` on native Windows. Python uses only its standa
 
 Windows fixtures need both file and directory symlink creation in the account's temporary directory. `prepare` probes this without changing system settings. For `WinError 1314`, enable Windows Developer Mode where supported, or grant a dedicated test account `SeCreateSymbolicLinkPrivilege` and start a new logon session. Use a symlink-capable filesystem. Keep routine checks unelevated; do not bypass this prerequisite by relabelling skipped safety checks as passes.
 
-GUI compilation is opt-in locally. Install the [Linux GTK/WebKit development packages](../.github/actions/linux-dependencies/action.yml), macOS Xcode tooling, or Windows WebView2 prerequisites before using `--gui`. `prepare --gui` also checks Linux `pkg-config` libraries. Tool detection does not establish that a native compiler, GUI, or installation works.
+GUI compilation is opt-in locally. Install the [Linux GTK/AppIndicator development packages](../.github/actions/linux-dependencies/action.yml), macOS Xcode tooling, or Windows Visual Studio C++ tools and SDK before using `--gui`. No embedded WebKit or WebView2 runtime is required. `prepare --gui` also checks Linux `pkg-config` libraries. Tool detection does not establish that a native compiler, GUI, default-browser handoff, or installation works.
 
 ## Run
 

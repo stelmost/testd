@@ -35,7 +35,7 @@ From source:
 cargo install --path .
 ```
 
-Public releases provide CLI archives, tray bundles, `SHA256SUMS`, and generated Homebrew definitions. Verify the checksums before installing. Homebrew templates live in `packaging/homebrew/`; a release generates installable definitions with real digests. The tray app is a separate, public Tauri build. [DEVELOPING.md](DEVELOPING.md) covers building and release validation. There is no in-app updater or commercial-service requirement.
+Public releases provide CLI archives, tray bundles, `SHA256SUMS`, and generated Homebrew definitions. Verify the checksums before installing. Homebrew templates live in `packaging/homebrew/`; a release generates installable definitions with real digests. The native tray app is a separate, public Rust build and opens its local pages in your default browser. [DEVELOPING.md](DEVELOPING.md) covers building and release validation. There is no in-app updater or commercial-service requirement.
 
 ## First name
 
@@ -131,7 +131,9 @@ Fetch the root from either dashboard URL:
 curl http://127.0.0.1:7737/ca.crt
 ```
 
-The tray enables launch at login once, on its first start, and has a **Launch at login** checkbox from then on. Unticking it is final until you tick it again, even if the login item is removed outside the tray. The first start opens a setup dialog served on an ephemeral loopback port, covering the DNS resolver, the root certificate, and the operator secret; it generates a pronounceable secret into an editable field, where an existing one can replace it. The dialog talks to the daemon over HTTP rather than IPC, and closes into the dashboard once the daemon starts.
+The tray enables launch at login once, after its first successful start, and has a **Launch at login** checkbox from then on. Unticking it is final until you tick it again, even if the login item is removed outside the tray. First start opens setup in the default browser on an ephemeral loopback port, covering the DNS resolver, root certificate, and operator secret. The page generates a pronounceable secret into an editable field, where an existing one can replace it. Successful setup navigates the same tab to the dashboard. Closing a tab does not stop testd: use **Continue setup** to reopen setup, or **Exit** to stop the tray and its daemon.
+
+Tray browser launches use an owner-private HTML handoff so the administrative credential is not passed to a launcher in process arguments. The handoff remains available while its setup surface or daemon is running and is removed on ordinary shutdown. The default browser/profile and extensions with access to the page are local administration clients. A browser that cannot read the private file must not be worked around by weakening its permissions; report the opener error and use a supported local browser.
 
 ## Sharing a name
 

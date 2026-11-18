@@ -388,13 +388,18 @@
 			});
 			const data = await response.json().catch(() => ({}));
 			if (!response.ok) throw new Error(data.error || response.statusText);
+			const dashboard = new URL(data.url);
+			if (dashboard.protocol !== 'http:' || !['127.0.0.1', '[::1]'].includes(dashboard.hostname)) {
+				throw new Error('The host returned an invalid local dashboard address');
+			}
 			setPill('finish-pill', 'Started', 'ok');
 			notice('Setup complete. Opening the dashboard...', false);
+			location.replace(dashboard.href);
 		} catch (e) {
 			button.disabled = false;
 			button.textContent = 'Finish setup';
 			setPill('finish-pill', 'Error', 'danger');
-			notice('Setup could not finish: ' + e.message + ' Fix the problem and restart testd; setup resumes.');
+			notice('Setup could not finish: ' + e.message + ' Use the tray to check the host, retry setup, or reopen the dashboard.');
 		}
 	}
 
