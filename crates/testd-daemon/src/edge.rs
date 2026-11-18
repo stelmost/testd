@@ -153,8 +153,10 @@ pub fn start(
 			let listener = crate::macos_socket::bind(addr);
 			#[cfg(not(target_os = "macos"))]
 			let listener = std::net::TcpListener::bind(addr);
-			let listener = listener.with_context(|| {
-				format!("bind the HTTPS edge on {addr}; check port permissions or set [host] edge_addr to a high port")
+			let listener = listener.map_err(|error| {
+				anyhow::anyhow!(
+					"bind the HTTPS edge on {addr}: {error}; check port permissions or set [host] edge_addr to a high port"
+				)
 			})?;
 			listener.set_nonblocking(true)?;
 			let listener = TcpListener::from_std(listener)?;
