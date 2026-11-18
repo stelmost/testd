@@ -151,7 +151,7 @@ pub fn start(
 		Some(addr) => {
 			let listener = std::net::TcpListener::bind(addr).with_context(|| {
 				format!(
-					"bind the HTTPS edge on {addr}; grant the binary CAP_NET_BIND_SERVICE or set [host] edge_addr to a high port"
+					"bind the HTTPS edge on {addr}; check port permissions or set [host] edge_addr to a high port"
 				)
 			})?;
 			listener.set_nonblocking(true)?;
