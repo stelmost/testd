@@ -2,6 +2,9 @@ use std::process::Command;
 
 use super::*;
 
+#[path = "macos_trust_digest_tests.rs"]
+mod digest;
+
 const PEM: &str = "-----BEGIN CERTIFICATE-----\nAAEC\n-----END CERTIFICATE-----\n";
 
 fn root(marker: PathBuf) -> Root {
@@ -38,7 +41,7 @@ fn trust_cleanup_preserves_unowned_or_changed_state() {
 			shell_quote(&log.to_string_lossy()),
 		);
 		Command::new("sh")
-			.args(["-c", &format!("set -eu\n{script}\n{stubs}\n{action}")])
+			.args(["-c", &format!("set -eu\n{script}\n{stubs}\ncertificate_count=1\n{action}")])
 			.status()
 			.unwrap()
 	};
@@ -52,5 +55,21 @@ fn trust_cleanup_preserves_unowned_or_changed_state() {
 	std::fs::write(&trust, "original trust").unwrap();
 	assert!(run("owner-a", "original snapshot", "remove_trust").success());
 	assert!(!marker.exists());
-	assert!(std::fs::read_to_string(log).unwrap().contains("delete-certificate -t -Z"));
+	let calls = std::fs::read_to_string(&log).unwrap();
+	assert!(calls.contains("remove-trusted-cert -d "));
+	assert!(calls.contains("delete-certificate -Z "));
+	assert!(!calls.contains("delete-certificate -t"));
+	for certificate_count in [1, 0] {
+		std::fs::write(&trust, "original trust").unwrap();
+		assert!(run("owner-a", "original snapshot", "install_trust").success());
+		let before = std::fs::read_to_string(&log).unwrap();
+		std::fs::write(&trust, "absent").unwrap();
+		let action = format!("certificate_count={certificate_count}\nremove_trust");
+		assert!(run("owner-a", "original snapshot", &action).success());
+		let after = std::fs::read_to_string(&log).unwrap();
+		let cleanup = after.strip_prefix(&before).unwrap();
+		assert!(!cleanup.contains("remove-trusted-cert"));
+		assert_eq!(cleanup.contains("delete-certificate"), certificate_count == 1);
+		assert!(!marker.exists());
+	}
 }

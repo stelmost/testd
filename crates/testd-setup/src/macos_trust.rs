@@ -110,14 +110,15 @@ pub(super) fn install(pem: &str, elevation: Elevation) -> io::Result<()> {
 pub(super) fn remove(pem: &str, elevation: Elevation) -> io::Result<()> {
 	let root = Root::new(pem)?;
 	let store = certificates()?;
-	if matching_count(&root, &store)? == 0 && !macos::present(&root.marker)? {
+	let certificate_count = matching_count(&root, &store)?;
+	if certificate_count == 0 && !macos::present(&root.marker)? {
 		return Ok(());
 	}
 	let owner = ownership::InstallationId::load()?.ok_or_else(|| {
 		io::Error::new(io::ErrorKind::PermissionDenied, "no installation ownership ID; system trust was left untouched")
 	})?;
 	let script = root.script(&owner.fingerprint(), &sha256_hex(store.as_bytes()));
-	macos::run(&format!("{script}\nremove_trust"), elevation)?;
+	macos::run(&format!("{script}\ncertificate_count={certificate_count}\nremove_trust"), elevation)?;
 	if matching_count(&root, &certificates()?)? != 0 {
 		return Err(io::Error::other("the root remains in the system keychain"));
 	}

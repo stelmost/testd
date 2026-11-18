@@ -564,7 +564,8 @@ def restore_keychain(host, directory, manifest):
 			if proof.parent.is_symlink() or proof.is_symlink() or not proof.is_file() or proof.read_bytes() != der:
 				problems.append(f'{KEYCHAIN}: certificate {sha1} has no test ownership proof; left untouched')
 				continue
-			host.command(['security', 'delete-certificate', '-t', '-Z', sha1, KEYCHAIN], privileged=True)
+			host.command(['security', 'remove-trusted-cert', '-d', str(proof)], privileged=True)
+			host.command(['security', 'delete-certificate', '-Z', sha1, KEYCHAIN], privileged=True)
 		for sha1 in expected - current.keys():
 			problems.append(f'{KEYCHAIN}: pre-existing certificate {sha1} is missing; not reinstalled')
 	except (HostError, OSError) as error:

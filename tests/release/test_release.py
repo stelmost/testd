@@ -1293,8 +1293,11 @@ class SystemStateTests(unittest.TestCase):
 			self.assertTrue(any('no test ownership proof' in problem for problem in problems), problems)
 			self.assertEqual(set(host.certificates.values()), {kept, unrelated})
 			deletes = [argv for argv, _ in host.commands if argv[:2] == ['security', 'delete-certificate']]
-			self.assertEqual(deletes, [['security', 'delete-certificate', '-t', '-Z',
+			self.assertEqual(deletes, [['security', 'delete-certificate', '-Z',
 				hashlib.sha1(fixture).hexdigest(), state.KEYCHAIN]])
+			removals = [argv for argv, _ in host.commands if argv[:2] == ['security', 'remove-trusted-cert']]
+			self.assertEqual(removals, [['security', 'remove-trusted-cert', '-d',
+				str(backup / state.OWNED_CERTIFICATES / (hashlib.sha1(fixture).hexdigest() + '.der'))]])
 
 	def test_macos_restore_does_not_reinstall_a_missing_preexisting_root(self):
 		with tempfile.TemporaryDirectory() as temporary:
