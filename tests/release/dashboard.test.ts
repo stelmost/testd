@@ -86,6 +86,36 @@ test('local pages remove fragment credentials and authenticate requests without 
 	}
 });
 
+test('dashboard bootstrap survives unavailable session storage and removes the credential fragment', () => {
+	const source = dashboard.slice(dashboard.lastIndexOf('<script>') + '<script>'.length,
+		dashboard.indexOf('\n\tfunction setConnection('));
+	for (const token of ['fixture-owner', '']) {
+		let message = '';
+		let replaced = '';
+		const notice = {
+			className: '',
+			replaceChildren(...children: { textContent: string }[]) { message = children[0].textContent; },
+		};
+		const document = {
+			documentElement: { dataset: {} },
+			querySelectorAll: () => [],
+			getElementById: () => notice,
+			createElement: () => ({ textContent: '', setAttribute() {}, addEventListener() {} }),
+		};
+		const unavailable = () => { throw new Error('Storage blocked'); };
+		const bootstrap = new Function('window', 'document', 'sessionStorage', 'history', 'location',
+			'clearTimeout', 'setTimeout', source + '\nreturn dashboardToken;');
+		expect(bootstrap(
+			{ matchMedia: () => ({ matches: false, addEventListener() {} }) }, document,
+			{ setItem: unavailable, getItem: unavailable },
+			{ replaceState: (_state: unknown, _title: string, url: string) => { replaced = url; } },
+			{ hash: token ? '#token=' + token : '', pathname: '/', search: '' }, () => {}, () => 0,
+		)).toBe(token);
+		expect(message).toContain('Session storage is unavailable');
+		expect(replaced).not.toContain('token=');
+	}
+});
+
 test('setup repair buttons regain their names when a prerequisite disappears', async () => {
 	const setup = await Bun.file(new URL('../../crates/testd-daemon/setup.html', import.meta.url)).text();
 	const button = { disabled: false, textContent: '' };

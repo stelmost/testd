@@ -282,6 +282,7 @@
 		});
 	}
 	applyTheme(storedTheme());
+	let noticeTimer;
 
 	function sessionToken() {
 		const parameters = new URLSearchParams(location.hash.slice(1));
@@ -328,7 +329,6 @@
 		return response.json();
 	}
 
-	let noticeTimer;
 	let streamLive = false;
 
 	function hideNotice() {
