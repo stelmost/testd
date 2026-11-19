@@ -151,7 +151,7 @@ impl Registry {
 
 	/// Roll back only while the failed registration still owns the name.
 	pub fn restore(&mut self, connection: u64, domain: &str, previous: Option<Claim>) {
-		if !self.claims.get(domain).is_some_and(|claim| claim.connection == connection) {
+		if self.claims.get(domain).is_none_or(|claim| claim.connection != connection) {
 			return;
 		}
 		match previous {

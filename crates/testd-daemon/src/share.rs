@@ -1279,7 +1279,7 @@ fn serve_config_has_free_443(value: &serde_json::Value) -> bool {
 		let Some(entries) = value.as_object() else { return false };
 		for key in entries.keys() {
 			let port = if field == "TCP" { Some(key.as_str()) } else { key.rsplit_once(':').map(|(_, port)| port) };
-			if !port.and_then(|port| port.parse::<u16>().ok()).is_some_and(|port| port != 443) {
+			if port.and_then(|port| port.parse::<u16>().ok()).is_none_or(|port| port == 443) {
 				return false;
 			}
 		}
