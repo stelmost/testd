@@ -683,7 +683,7 @@ Use the explicit release formats from the CI matrix, and a fresh output director
 
 Artifacts: CLI `.tar.gz` (Linux/macOS) or `.zip` (Windows), `.dmg` containing `.app` (macOS), `.exe` (Windows NSIS), `.AppImage`/`.deb` (Linux). CI builds macOS Apple Silicon and Intel, Linux x86-64, and Windows x86-64.
 
-The pinned upstream GTK AppImage helper selects X11; a Wayland session therefore needs XWayland for that artifact. The native executable/deb retains ordinary GTK backend selection. Validate the actual desktop/tray host and host-browser handoff before claiming support; packaging alone is not native desktop evidence.
+AppImage bundles the linked GTK libraries and preserves ordinary GTK backend selection, including an explicit `GDK_BACKEND`. Its startup hook saves the host environment for browser and application launches before the bundled runtime changes it. Validate the actual desktop/tray host, host-browser handoff and a normal quick launch without XWayland before claiming support; packaging alone is not native desktop evidence.
 
 Windows ships only NSIS, configured in `crates/testd-gui/Cargo.toml` to install per user into `%LOCALAPPDATA%\Testd` without installer elevation. Resolver and trust changes retain their separate native authorization prompts. No MSI or machine-wide deployment is claimed. Preserve the actual installer/shortcut/URL-handler identity when validating upgrades; a matching visible product name alone is not evidence.
 

@@ -82,10 +82,9 @@ depends = [
 # AppIndicator is loaded dynamically, so linuxdeploy cannot discover it through ldd.
 libs = ['libayatana-appindicator3.so.1']
 
-[package.metadata.packager.appimage.linuxdeploy-plugins]
-gtk = """\
-https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/\
-7a3fbc31a9e5075073ff8790f26effbac5f84453/linuxdeploy-plugin-gtk.sh"""
+[package.metadata.packager.appimage.files]
+# linuxdeploy follows the linked GTK libraries; its GTK plugin forces X11 at runtime.
+'../../packaging/linux/appimage-host-environment.sh' = 'apprun-hooks/testd-host-environment.sh'
 
 [package.metadata.packager.nsis]
 installer-mode = 'currentUser'

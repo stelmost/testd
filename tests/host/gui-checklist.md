@@ -56,7 +56,7 @@ Answer each item `p`, `f`, `n`, or `q`. Give a reason for every failure or inapp
 - [ ] GUI-27: Stop launches and shares, disable the login item, uninstall the product integration, then remove the package. Verify the claimed cleanup and retain any reported conflicts.
 - [ ] GUI-28: Quit the tray and verify the candidate app, daemon, provider children, DNS and HTTPS listeners are stopped and the instance lock can be acquired again before confirming restoration. The current run's browser handoff and activation files are removed.
 - [ ] GUI-29: Test cold and warm default-browser opening, including an HTML file association pointing at an editor. The opener arguments contain a private file URI, not an administrative token. Test sandboxed browsers only when claimed; do not broaden file permissions to make them work.
-- [ ] GUI-30: With an open tray popup, change registrations, requests, shares, and launches; repeatedly open and close menus and invoke actions. Menu updates do not freeze or strand the tray, including Windows mouse-up, macOS full-screen, and Linux backend selection. For AppImage, verify its XWayland requirement where applicable and that bundled environment variables do not break the host browser.
+- [ ] GUI-30: With an open tray popup, change registrations, requests, shares, and launches; repeatedly open and close menus and invoke actions. Menu updates do not freeze or strand the tray, including Windows mouse-up, macOS full-screen, and Linux backend selection. For AppImage, verify native Wayland with XWayland unavailable, preservation of an explicit GTK backend, and that the bundled environment does not break the host browser or an ordinary Python quick launch.
 
 ## Coverage limits
 

@@ -452,7 +452,7 @@ async fn dispatch(
 		},
 		Command::OpenDomain(domain) => {
 			let url = daemon.engine.domain_url(&domain);
-			tasks.spawn(async move { tokio::task::spawn_blocking(move || open::that(url)).await?.map_err(Into::into) });
+			tasks.spawn(async move { tokio::task::spawn_blocking(move || crate::platform::open_browser(&url)).await? });
 		},
 		Command::OpenShare(name) => {
 			let url = daemon
@@ -463,7 +463,7 @@ async fn dispatch(
 				.find(|share| share.name == name)
 				.context("the share no longer exists")?
 				.url;
-			tasks.spawn(async move { tokio::task::spawn_blocking(move || open::that(url)).await?.map_err(Into::into) });
+			tasks.spawn(async move { tokio::task::spawn_blocking(move || crate::platform::open_browser(&url)).await? });
 		},
 		Command::Activate(_) | Command::Repair(_) | Command::OpenPage | Command::Quit => unreachable!(),
 	}

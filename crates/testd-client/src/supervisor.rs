@@ -542,6 +542,16 @@ fn spawn_child(
 	if let Some(cwd) = &spec.cwd {
 		command.current_dir(cwd);
 	}
+	for (key, value) in testd_core::appimage::host_environment() {
+		match value {
+			Some(value) => {
+				command.env(key, value);
+			},
+			None => {
+				command.env_remove(key);
+			},
+		}
+	}
 	for (key, value) in &spec.env {
 		command.env(key, value);
 	}

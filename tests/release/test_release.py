@@ -401,7 +401,8 @@ class ReleaseTests(unittest.TestCase):
 		self.assertNotIn('tauri', manifest['dependencies'])
 		self.assertIn('libgtk-3-0 | libgtk-3-0t64', packager['deb']['depends'])
 		self.assertIn('libayatana-appindicator3.so.1', packager['appimage']['libs'])
-		self.assertRegex(packager['appimage']['linuxdeploy-plugins']['gtk'], r'/[0-9a-f]{40}/')
+		self.assertNotIn('gtk', packager['appimage'].get('linuxdeploy-plugins', {}))
+		self.assertIn('apprun-hooks/testd-host-environment.sh', packager['appimage']['files'].values())
 
 	def test_archive_paths_cannot_escape_the_report_directory(self):
 		for path in ['../private', '/etc/passwd', 'C:/Windows/file', '..\\private']:

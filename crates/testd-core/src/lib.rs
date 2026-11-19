@@ -1,5 +1,6 @@
 //! Shared types and configuration for testd.
 
+pub mod appimage;
 pub mod config;
 pub mod naming;
 pub mod private_file;

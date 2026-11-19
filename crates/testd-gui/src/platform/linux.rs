@@ -12,34 +12,17 @@ pub fn open_browser(file_url: &str) -> anyhow::Result<()> {
 
 fn browser_context() -> gio::AppLaunchContext {
 	let context = gio::AppLaunchContext::new();
-	if std::env::var_os("APPIMAGE").is_some() {
-		/* Bundled GTK/loader paths belong to the tray, not the host browser. */
-		for variable in [
-			"LD_LIBRARY_PATH",
-			"LD_PRELOAD",
-			"GTK_PATH",
-			"GTK_IM_MODULE_FILE",
-			"GDK_PIXBUF_MODULE_FILE",
-			"GSETTINGS_SCHEMA_DIR",
-			"GI_TYPELIB_PATH",
-			"GTK_EXE_PREFIX",
-			"GTK_DATA_PREFIX",
-			"GTK_THEME",
-			"GDK_BACKEND",
-			"XDG_DATA_DIRS",
-		] {
-			restore_browser_variable(&context, variable, std::env::var_os(format!("APPIMAGE_ORIGINAL_{variable}")));
-		}
-		if let Some(path) = std::env::var_os("APPIMAGE_ORIGINAL_PATH") {
-			context.setenv("PATH", path);
-		}
-		context.unsetenv("APPIMAGE");
-		context.unsetenv("APPDIR");
+	for (variable, original) in testd_core::appimage::host_environment() {
+		restore_browser_variable(&context, &variable, original);
 	}
 	context
 }
 
-fn restore_browser_variable(context: &gio::AppLaunchContext, variable: &str, original: Option<std::ffi::OsString>) {
+fn restore_browser_variable(
+	context: &gio::AppLaunchContext,
+	variable: &std::ffi::OsStr,
+	original: Option<std::ffi::OsString>,
+) {
 	match original {
 		Some(value) => context.setenv(variable, value),
 		None => context.unsetenv(variable),
@@ -154,14 +137,14 @@ mod tests {
 		let before = std::env::var_os(variable);
 		let context = gio::AppLaunchContext::new();
 		context.setenv(variable, "packaged");
-		restore_browser_variable(&context, variable, Some("host".into()));
+		restore_browser_variable(&context, variable.as_ref(), Some("host".into()));
 		assert!(
 			context
 				.environment()
 				.iter()
 				.any(|entry| entry == "TESTD_BROWSER_ENVIRONMENT_FIXTURE=host")
 		);
-		restore_browser_variable(&context, variable, None);
+		restore_browser_variable(&context, variable.as_ref(), None);
 		assert!(
 			!context
 				.environment()
