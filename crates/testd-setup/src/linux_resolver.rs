@@ -19,6 +19,7 @@ struct ResolverLayout<'a> {
 	directory: &'a str,
 	dropin: &'a str,
 	reload: &'a str,
+	restart: &'a str,
 	dns_probe: &'a str,
 	domain_probe: &'a str,
 	config_probe: &'a str,
@@ -30,6 +31,7 @@ fn system_layout() -> ResolverLayout<'static> {
 		directory: RESOLVED_DROPIN_DIR,
 		dropin: RESOLVED_DROPIN,
 		reload: "systemctl reload systemd-resolved",
+		restart: "systemctl restart systemd-resolved",
 		dns_probe: "resolvectl dns",
 		domain_probe: "resolvectl domain",
 		config_probe: "systemd-analyze cat-config systemd/resolved.conf",
@@ -111,10 +113,14 @@ fn install_script(layout: &ResolverLayout<'_>, tld: &str, addr: SocketAddr, expe
 fn remove_script(layout: &ResolverLayout<'_>, tld: &str) -> String {
 	let dropin = shell_quote(layout.dropin);
 	let marker = shell_quote(&owner_marker(layout).to_string_lossy());
+	let domain = shell_quote(&format!("~{tld}"));
 	let tld = shell_quote(tld);
-	let reload = layout.reload;
+	let ResolverLayout { restart, domain_probe, .. } = layout;
+	/* Reload retains removed global domains; restart reloads config and preserves per-link state. */
 	format!(
 		"PATH=/usr/sbin:/usr/bin:/sbin:/bin; export PATH\n\
+		LC_ALL=C; SYSTEMD_COLORS=0; SYSTEMD_PAGER=cat; COLUMNS=10000\n\
+		export LC_ALL SYSTEMD_COLORS SYSTEMD_PAGER COLUMNS\n\
 		IFS= read -r owner || exit 1\n\
 		[ -n \"$owner\" ] || exit 1\n\
 		if [ ! -e {marker} ] && [ ! -L {marker} ]; then\n\
@@ -145,7 +151,11 @@ fn remove_script(layout: &ResolverLayout<'_>, tld: &str) -> String {
 		  [ \"$content_hash\" = \"$recorded_content_hash\" ] || exit {CONFLICT}\n\
 		  rm -- {dropin} || exit 1\n\
 		fi\n\
-		{reload} || exit 1\n\
+		{restart} || exit 1\n\
+		domains=$({domain_probe}) || exit 1\n\
+		printf '%s\\n' \"$domains\" | awk -v domain={domain} '\n\
+		  $1 == \"Global:\" {{ found=1; for (i=2; i<=NF; i++) if ($i == domain) stale=1 }}\n\
+		  END {{ exit (!found || stale) }}' || exit 1\n\
 		rm -- {marker} || exit 1"
 	)
 }
@@ -230,7 +240,7 @@ pub(super) fn teardown(tld: &str, elevation: Elevation) -> io::Result<()> {
 	match status.code() {
 		Some(0) => Ok(()),
 		Some(CONFLICT) => Err(conflict(dropin)),
-		_ => Err(io::Error::other("resolver removal or systemd-resolved reload failed")),
+		_ => Err(io::Error::other("resolver removal or live-state verification failed; ownership retained for retry")),
 	}
 }
 
@@ -278,6 +288,7 @@ mod tests {
 				directory: self.directory.to_str().unwrap(),
 				dropin: self.dropin.to_str().unwrap(),
 				reload: "printf '%s\\n' reloaded >> \"$TESTD_RESOLVER_LOG\"",
+				restart: "printf '%s\\n' restarted >> \"$TESTD_RESOLVER_LOG\"",
 				dns_probe: "cat \"$TESTD_RESOLVER_DNS\"",
 				domain_probe: "cat \"$TESTD_RESOLVER_DOMAINS\"",
 				config_probe: "cat \"$TESTD_RESOLVER_CONFIG\"",
@@ -350,7 +361,7 @@ mod tests {
 		assert_eq!(std::fs::read_to_string(&fixture.domains).unwrap(), unowned_domains);
 		assert!(!fixture.dropin.exists());
 		assert!(!fixture.marker().exists());
-		assert_eq!(std::fs::read_to_string(&fixture.log).unwrap(), "reloaded\nreloaded\n");
+		assert_eq!(std::fs::read_to_string(&fixture.log).unwrap(), "reloaded\nrestarted\n");
 		assert_eq!(std::fs::read_dir(&fixture.directory).unwrap().count(), 0);
 	}
 
@@ -568,17 +579,41 @@ mod tests {
 	}
 
 	#[test]
-	fn retries_reload_after_an_interrupted_removal() {
+	fn retries_restart_after_an_interrupted_removal() {
 		let fixture = Fixture::new();
 		assert!(fixture.install(OWNER_A, &fixture.snapshot()).success());
 		let mut layout = fixture.layout();
-		layout.reload = "sh -c 'exit 1'";
+		layout.restart = "sh -c 'exit 1'";
 		let status = run_with_stdin(fixture.command(&remove_script(&layout, TLD)), OWNER_A).unwrap();
 		assert!(!status.success());
 		assert!(!fixture.dropin.exists());
 		assert!(fixture.marker().exists());
 		assert!(fixture.remove(OWNER_A, TLD).success());
 		assert!(!fixture.marker().exists());
-		assert_eq!(std::fs::read_to_string(&fixture.log).unwrap(), "reloaded\nreloaded\n");
+		assert_eq!(std::fs::read_to_string(&fixture.log).unwrap(), "reloaded\nrestarted\n");
+	}
+
+	#[test]
+	fn removal_restarts_and_retains_proof_until_the_live_domain_is_gone() {
+		let fixture = Fixture::new();
+		assert!(fixture.install(OWNER_A, &fixture.snapshot()).success());
+		std::fs::write(&fixture.domains, "Global: ~test\nLink 2 (eth0): ~corp\n").unwrap();
+		assert!(!fixture.remove(OWNER_A, TLD).success());
+		assert!(!fixture.dropin.exists());
+		assert!(fixture.marker().exists());
+
+		let mut layout = fixture.layout();
+		layout.restart = "printf 'Global:\\nLink 2 (eth0): ~corp\\n' > \"$TESTD_RESOLVER_DOMAINS\"";
+		assert!(
+			run_with_stdin(fixture.command(&remove_script(&layout, TLD)), OWNER_A)
+				.unwrap()
+				.success()
+		);
+		assert!(!fixture.marker().exists());
+		assert_eq!(std::fs::read_to_string(&fixture.domains).unwrap(), "Global:\nLink 2 (eth0): ~corp\n");
+		assert_eq!(std::fs::read_to_string(&fixture.dns).unwrap(), "Global:\nLink 2 (eth0): 1.1.1.1\n");
+		let production = remove_script(&system_layout(), TLD);
+		assert!(production.contains("systemctl restart systemd-resolved"));
+		assert!(!production.contains("systemctl reload systemd-resolved"));
 	}
 }
