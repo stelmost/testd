@@ -414,7 +414,7 @@ mod tests {
 /// Write a host config file, replacing an existing one. Used for a fresh setup.
 pub fn write_config_force(caddy_config_path: &str, secret: Option<&str>) -> io::Result<PathBuf> {
 	let dir = config_dir();
-	std::fs::create_dir_all(&dir)?;
+	crate::private_file::create_directory(&dir)?;
 
 	let path = config_path();
 	let content = render_config(caddy_config_path, secret);
@@ -537,7 +537,7 @@ pub fn write_credential(profile: &str, token: &str) -> Result<(), ConfigError> {
 	validate_profile_name(profile)?;
 	let path = credential_path(profile);
 	let dir = credentials_dir();
-	std::fs::create_dir_all(&dir).map_err(|e| ConfigError::Io(dir, e))?;
+	crate::private_file::create_directory(&dir).map_err(|e| ConfigError::Io(dir, e))?;
 	write_private(&path, token.as_bytes()).map_err(|e| ConfigError::Io(path, e))
 }
 
@@ -684,7 +684,7 @@ pub fn read_pending_config() -> io::Result<PendingConfig> {
 /// Write or update the pending init state.
 pub fn write_pending_config(pending: &PendingConfig) -> io::Result<()> {
 	let dir = config_dir();
-	std::fs::create_dir_all(&dir)?;
+	crate::private_file::create_directory(&dir)?;
 
 	let content = format!(
 		"[init]\nstep = {}\ncaddy_config_path = \"{}\"\nsecret = \"{}\"\n",
@@ -698,7 +698,7 @@ pub fn write_pending_config(pending: &PendingConfig) -> io::Result<()> {
 /// Finalize init: write the real config from the pending state and remove the pending file.
 pub fn finish_pending_config(pending: &PendingConfig) -> io::Result<PathBuf> {
 	let dir = config_dir();
-	std::fs::create_dir_all(&dir)?;
+	crate::private_file::create_directory(&dir)?;
 
 	let config_path = dir.join("config.toml");
 	let secret = (!pending.secret.is_empty()).then_some(pending.secret.as_str());

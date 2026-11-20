@@ -367,7 +367,7 @@ async fn init(caddyfile: Option<String>, yes: bool, resolver_now: bool) -> anyho
 		let managed = testd_core::config::config_dir().join("Caddyfile");
 		let content = testd_daemon::edge::caddyfile(tld, http_addr_from_config()?);
 		if let Some(parent) = managed.parent() {
-			std::fs::create_dir_all(parent)?;
+			testd_core::private_file::create_directory(parent)?;
 		}
 		std::fs::write(&managed, content)?;
 	}

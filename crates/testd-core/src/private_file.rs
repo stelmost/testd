@@ -14,6 +14,18 @@ pub fn open(path: &Path) -> io::Result<File> {
 	File::open(path)
 }
 
+/** Create new Unix directory components privately without changing existing directory permissions. */
+pub fn create_directory(path: &Path) -> io::Result<()> {
+	let mut builder = std::fs::DirBuilder::new();
+	builder.recursive(true);
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::DirBuilderExt;
+		builder.mode(0o700);
+	}
+	builder.create(path)
+}
+
 pub fn open_directory(path: &Path) -> io::Result<File> {
 	#[cfg(windows)]
 	return windows::open_directory(path);
@@ -99,4 +111,25 @@ pub(crate) fn validate_existing(path: &Path) -> io::Result<()> {
 	#[cfg(not(windows))]
 	let _ = path;
 	Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+	use super::*;
+	use std::os::unix::fs::PermissionsExt;
+
+	#[test]
+	fn directory_creation_is_private_and_preserves_existing_permissions() {
+		let home = tempfile::tempdir().unwrap();
+		let directory = home.path().join("config/testd/pki");
+		create_directory(&directory).unwrap();
+		for path in [home.path().join("config"), home.path().join("config/testd"), directory.clone()] {
+			assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o700);
+		}
+		std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o775)).unwrap();
+		let original = open_directory(&directory).unwrap();
+		create_directory(&directory).unwrap();
+		assert!(same_file(&original, &open_directory(&directory).unwrap()).unwrap());
+		assert_eq!(std::fs::metadata(directory).unwrap().permissions().mode() & 0o777, 0o775);
+	}
 }

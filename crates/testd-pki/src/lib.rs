@@ -42,7 +42,7 @@ struct Intermediate {
 impl Ca {
 	/// Load the CA from `dir`, creating the root and node intermediate on first use.
 	pub fn load_or_init(dir: &Path) -> Result<Self> {
-		std::fs::create_dir_all(dir).context("create PKI directory")?;
+		testd_core::private_file::create_directory(dir).context("create PKI directory")?;
 
 		let root_cert_path = dir.join("root.crt");
 		let root_key_path = dir.join("root.key");
@@ -264,7 +264,7 @@ fn certificate_expiry(pem: &str) -> Result<i64> {
 fn backup_files(dir: &Path, names: &[&str]) -> Result<()> {
 	let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
 	let backup = dir.join("backups").join(timestamp.to_string());
-	std::fs::create_dir_all(&backup)?;
+	testd_core::private_file::create_directory(&backup)?;
 	for name in names {
 		let path = dir.join(name);
 		if path.exists() {
