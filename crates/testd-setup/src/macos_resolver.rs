@@ -161,6 +161,68 @@ mod tests {
 		assert!(path.exists());
 	}
 
+	#[test]
+	fn cleanup_uses_a_persistent_volume_and_refuses_same_content_replacements() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("owned route");
+		let marker = std::path::PathBuf::from(format!("{}.owner", path.display()));
+		let run = |script: String| std::process::Command::new("sh").args(["-c", &script]).status().unwrap();
+		assert!(run(install_script(&path, address(), "installation-a", "true")).success());
+		let receipt = std::fs::read_to_string(&marker).unwrap();
+		let identity = receipt.lines().nth(1).unwrap();
+		assert!(identity.starts_with("volume:"));
+		let (_, remainder) = identity.strip_prefix("volume:").unwrap().split_once(':').unwrap();
+		let other_volume = receipt.replace(identity, &format!("volume:another-volume:{remainder}"));
+		std::fs::write(&marker, other_volume).unwrap();
+		assert_eq!(run(remove_script(&path, "installation-a", "true")).code(), Some(CONFLICT));
+		std::fs::write(&marker, &receipt).unwrap();
+		let retained = dir.path().join("retained");
+		std::fs::rename(&path, &retained).unwrap();
+		std::fs::copy(&retained, &path).unwrap();
+		assert_eq!(run(remove_script(&path, "installation-a", "true")).code(), Some(CONFLICT));
+		assert!(path.exists() && marker.exists());
+		std::fs::remove_file(&path).unwrap();
+		std::fs::rename(retained, &path).unwrap();
+		assert!(run(remove_script(&path, "installation-a", "true")).success());
+	}
+
+	#[test]
+	fn legacy_receipts_keep_their_original_device_identity_guard() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("legacy route");
+		let marker = std::path::PathBuf::from(format!("{}.owner", path.display()));
+		let run = |script: String| std::process::Command::new("sh").args(["-c", &script]).status().unwrap();
+		assert!(run(install_script(&path, address(), "installation-a", "true")).success());
+		let receipt = std::fs::read_to_string(&marker).unwrap();
+		let output = std::process::Command::new("sh")
+			.args(["-c", &format!("{}\nlegacy_file_identity \"$path\"", macos::file_script(&path, "installation-a"))])
+			.output()
+			.unwrap();
+		assert!(output.status.success());
+		let identity = String::from_utf8(output.stdout).unwrap();
+		let identity = identity.trim();
+		let original_identity = receipt.lines().nth(1).unwrap();
+		let legacy = receipt.replace(original_identity, identity);
+		let (_, remainder) = identity.split_once(':').unwrap();
+		std::fs::write(&marker, receipt.replace(original_identity, &format!("changed-device:{remainder}"))).unwrap();
+		assert_eq!(run(remove_script(&path, "installation-a", "true")).code(), Some(CONFLICT));
+		assert!(path.exists());
+		std::fs::write(&marker, legacy).unwrap();
+		assert!(run(remove_script(&path, "installation-a", "true")).success());
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn hard_linked_routes_are_left_untouched() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("owned route");
+		let run = |script: String| std::process::Command::new("sh").args(["-c", &script]).status().unwrap();
+		assert!(run(install_script(&path, address(), "installation-a", "true")).success());
+		std::fs::hard_link(&path, dir.path().join("linked route")).unwrap();
+		assert_eq!(run(remove_script(&path, "installation-a", "true")).code(), Some(CONFLICT));
+		assert!(path.exists());
+	}
+
 	#[cfg(unix)]
 	#[test]
 	fn links_and_directories_are_left_untouched() {

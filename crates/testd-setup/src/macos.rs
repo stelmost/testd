@@ -45,8 +45,14 @@ pub(super) fn file_script(path: &Path, owner: &str) -> String {
 	let helpers = include_str!("macos-owned-file.sh");
 	#[cfg(not(target_os = "macos"))]
 	let helpers = helpers
+		.replace(
+			"volume=$(diskutil info -plist \"$device\" | plutil -extract VolumeUUID raw -o - -)",
+			"volume=$(stat -c '%d' \"$1\")",
+		)
+		.replace("stat -f '%i:%u:%g:%Lp'", "stat -c '%i:%u:%g:%a'")
 		.replace("stat -f '%d:%i:%u:%g:%Lp'", "stat -c '%d:%i:%u:%g:%a'")
-		.replace("stat -f '%u:%Lp:%l'", "stat -c '%u:%a:%h'");
+		.replace("stat -f '%u:%Lp:%l'", "stat -c '%u:%a:%h'")
+		.replace("stat -f '%l'", "stat -c '%h'");
 	format!("path={path}\nmarker={marker}\nowner={}\n{helpers}", shell_quote(owner))
 }
 

@@ -9,6 +9,15 @@ file_hash() {
 }
 
 file_identity() {
+	# Device numbers can change at boot; a volume UUID identifies the persistent filesystem.
+	device=$(df -P "$1" | awk 'NR == 2 { print $1 }')
+	volume=$(diskutil info -plist "$device" | plutil -extract VolumeUUID raw -o - -) || return 1
+	[ -n "$volume" ] || return 1
+	identity=$(stat -f '%i:%u:%g:%Lp' "$1") || return 1
+	printf 'volume:%s:%s\n' "$volume" "$identity"
+}
+
+legacy_file_identity() {
 	stat -f '%d:%i:%u:%g:%Lp' "$1"
 }
 
@@ -32,7 +41,12 @@ remove_file() {
 	verify_marker
 	if entry_exists "$path"; then
 		[ -f "$path" ] && [ ! -L "$path" ] || exit 17
-		identity=$(file_identity "$path")
+		[ "$(stat -f '%l' "$path")" = 1 ] || exit 17
+		recorded_identity=$(sed -n '2p' "$marker")
+		case "$recorded_identity" in
+			volume:*) identity=$(file_identity "$path") ;;
+			*) identity=$(legacy_file_identity "$path") ;;
+		esac
 		digest=$(file_hash "$path")
 		expected=$(printf '%s\n%s\n%s\n' "$owner" "$identity" "$digest")
 		[ "$(cat "$marker")" = "$expected" ] || exit 17
