@@ -1362,6 +1362,42 @@ async fn run_with_retry(binary: &Path, args: &[String]) -> Result<std::process::
 mod tests {
 	use super::*;
 
+	#[test]
+	fn invalid_environment_does_not_fall_back_or_override_an_explicit_provider() {
+		const FIXTURE: &str = "TESTD_INVALID_PROVIDER_FIXTURE";
+		if std::env::var_os(FIXTURE).is_some() {
+			let shares = Shares::from_env(None, Arc::new(Mutex::new(Registry::default())));
+			let error = shares.checked_provider(None).unwrap_err().to_string();
+			assert!(error.contains("TESTD_TUNNEL_PROVIDER"), "{error}");
+			assert_eq!(shares.checked_provider(Some(Provider::Cloudflared)).unwrap(), Provider::Cloudflared);
+			return;
+		}
+		let check = |value: std::ffi::OsString| {
+			let output = std::process::Command::new(std::env::current_exe().unwrap())
+				.args([
+					"--exact",
+					"share::tests::invalid_environment_does_not_fall_back_or_override_an_explicit_provider",
+				])
+				.env(FIXTURE, "1")
+				.env("TESTD_TUNNEL_PROVIDER", value)
+				.output()
+				.unwrap();
+			assert!(
+				output.status.success(),
+				"{}\n{}",
+				String::from_utf8_lossy(&output.stdout),
+				String::from_utf8_lossy(&output.stderr)
+			);
+		};
+		check("invalid-provider".into());
+		check("".into());
+		#[cfg(unix)]
+		{
+			use std::os::unix::ffi::OsStringExt;
+			check(std::ffi::OsString::from_vec(vec![0xff]));
+		}
+	}
+
 	fn manager() -> Shares {
 		Shares::new(
 			Provider::Tailscale,
