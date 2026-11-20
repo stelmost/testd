@@ -159,6 +159,39 @@ fn uninstall_help_offers_only_purge() {
 	assert!(!help.contains("--keep-certificate"), "{help}");
 }
 
+#[cfg(unix)]
+#[test]
+fn init_creates_private_directories_under_a_group_writable_umask() {
+	use std::os::unix::fs::PermissionsExt;
+
+	let home = TempDir::new().unwrap();
+	let original = testd_command(home.path(), &["init", "--caddyfile", ""]);
+	let mut command = Command::new("sh");
+	command
+		.args(["-c", "umask 0002; exec \"$@\"", "sh"])
+		.arg(original.get_program())
+		.args(original.get_args())
+		.current_dir(home.path());
+	for (name, value) in original.get_envs() {
+		if let Some(value) = value {
+			command.env(name, value);
+		} else {
+			command.env_remove(name);
+		}
+	}
+	let output = command.output().expect("run init with a child-only umask");
+	assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+	let directory = config_dir(home.path());
+	for path in [home.path().join(".config"), directory.clone(), directory.join("pki")] {
+		let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+		assert_eq!(mode, 0o700, "{}", path.display());
+	}
+	for name in ["config.toml", "pki/root.crt", "pki/root.key", "pki/node.crt", "pki/node.key"] {
+		let mode = std::fs::metadata(directory.join(name)).unwrap().permissions().mode() & 0o777;
+		assert_eq!(mode, 0o600, "{name}");
+	}
+}
+
 #[test]
 fn init_is_idempotent() {
 	let home = TempDir::new().unwrap();
