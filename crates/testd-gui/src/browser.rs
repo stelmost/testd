@@ -50,6 +50,9 @@ pub fn cleanup(directory: &Path) -> anyhow::Result<()> {
 		if !name.starts_with("browser-") || !name.ends_with(".html") {
 			continue;
 		}
+		if !entry.file_type()?.is_file() {
+			bail!("existing browser handoff is not a regular file; left untouched");
+		}
 		let path = entry.path();
 		let file = crate::private::open(&path)?;
 		let mut page = String::new();
@@ -162,9 +165,10 @@ mod tests {
 
 	#[cfg(unix)]
 	#[test]
-	fn cleanup_refuses_symlinks_shared_files_and_hard_links() {
+	fn cleanup_refuses_redirected_non_regular_and_shared_files() {
+		use std::os::unix::ffi::OsStrExt;
 		use std::os::unix::fs::{PermissionsExt, symlink};
-		for kind in ["symlink", "shared", "hard-link"] {
+		for kind in ["symlink", "directory", "pipe", "shared", "hard-link"] {
 			let home = crate::private::test_directory();
 			let original = home.path().join("retained");
 			let _file = testd_core::private_file::create_new(&original).unwrap();
@@ -173,6 +177,11 @@ mod tests {
 			let path = home.path().join("browser-unsafe.html");
 			match kind {
 				"symlink" => symlink(&original, &path).unwrap(),
+				"directory" => std::fs::create_dir(&path).unwrap(),
+				"pipe" => {
+					let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+					assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+				},
 				"hard-link" => std::fs::hard_link(&original, &path).unwrap(),
 				_ => {
 					std::fs::copy(&original, &path).unwrap();
