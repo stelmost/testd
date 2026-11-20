@@ -506,7 +506,7 @@ The Windows snapshot helper verifies NRPT rules and machine roots without deleti
 
 ### Launch at login
 
-The tray enables launch at login once after successful daemon startup, then exposes a **Launch at login** checkbox. Linux/Windows use `auto-launch` 0.5; macOS keeps the same LaunchAgent but serializes its raw executable path with `plist`, creating the file atomically without replacing an existing entry. Queries and changes run off the native event-loop thread. Failures are reported and an unavailable state is not presented as a false unchecked preference. The existing app name and initialization marker are retained. Changed entries or entries pointing elsewhere are preserved and reported rather than silently replaced. AppImage entries target the persistent image, not its mounted inner executable.
+Launch at login is off by default and changes only through the tray's **Launch at login** checkbox. Startup queries the existing entry without creating or restoring it. Linux creates the existing desktop-entry format as an owner-private file without replacement, independent of the caller's umask. Windows uses `auto-launch` 0.5; macOS keeps the same LaunchAgent but serializes its raw executable path with `plist`, creating the file atomically without replacing an existing entry. Queries and changes run off the native event-loop thread. Failures are reported and an unavailable state is not presented as a false unchecked preference. Changed entries or entries pointing elsewhere are preserved and reported rather than silently replaced. AppImage entries target the persistent image, not its mounted inner executable.
 
 | OS | Artifact | Check |
 |---|---|---|

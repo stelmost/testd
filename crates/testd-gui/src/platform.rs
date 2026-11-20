@@ -88,34 +88,19 @@ pub fn autostart_enabled() -> anyhow::Result<bool> {
 	login_enabled(&autostart()?)
 }
 
-fn remember_login_choice() -> anyhow::Result<()> {
-	let marker = testd_core::config::config_dir().join("autostart.initialized");
-	if !marker.try_exists()? {
-		testd_core::config::write_private(&marker, b"1\n")?;
-	}
-	Ok(())
-}
-
-pub fn enable_autostart_once() -> anyhow::Result<bool> {
-	let marker = testd_core::config::config_dir().join("autostart.initialized");
-	if !marker.try_exists()? {
-		return enable_autostart();
-	}
-	autostart_enabled()
-}
-
 pub fn enable_autostart() -> anyhow::Result<bool> {
 	let manager = autostart()?;
 	if !login_enabled(&manager)? {
 		#[cfg(target_os = "macos")]
 		native::enable_autostart(std::path::Path::new(manager.get_app_path()))
 			.context("cannot enable launch at login")?;
-		#[cfg(not(target_os = "macos"))]
+		#[cfg(target_os = "linux")]
+		native::enable_autostart(manager.get_app_path()).context("cannot enable launch at login")?;
+		#[cfg(windows)]
 		manager
 			.enable()
 			.map_err(|error| anyhow::anyhow!("cannot enable launch at login: {error}"))?;
 	}
-	remember_login_choice()?;
 	login_enabled(&manager)
 }
 
@@ -126,7 +111,6 @@ pub fn disable_autostart() -> anyhow::Result<bool> {
 		Err(auto_launch::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {},
 		Err(error) => return Err(anyhow::anyhow!("cannot disable launch at login: {error}")),
 	}
-	remember_login_choice()?;
 	login_enabled(&manager)
 }
 

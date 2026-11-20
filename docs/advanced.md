@@ -199,12 +199,12 @@ The tray app is a separate native Rust build. On first start it opens setup in t
 The tray:
 
 - Runs the daemon and opens the dashboard in a window
-- Enables launch at login once, on first start, with a **Launch at login** checkbox afterwards
+- Leaves launch at login off until you tick **Launch at login**
 - Shows pending access requests as notifications and changes its icon while one waits
 - Lists saved quick launches with start and stop actions
 - Provides share controls
 
-Unticking **Launch at login** is final until you tick it again, even if the login item is removed outside the tray. Removing the app with the OS uninstaller does not remove the DNS route or the trusted root. On Linux, run `testd uninstall` first; macOS and Windows uninstall remain blocked until system ownership can be verified.
+Unticking **Launch at login** or removing the login item outside the tray keeps it disabled until you explicitly enable it again. Removing the app with the OS uninstaller does not remove the DNS route or the trusted root. On Linux, run `testd uninstall` first; macOS and Windows uninstall remain blocked until system ownership can be verified.
 
 Notifications and OS URL-scheme launches share one action grammar:
 

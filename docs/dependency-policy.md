@@ -59,9 +59,9 @@ Remove these exceptions once notifications use zbus 6 and the standalone crates 
 
 ## Launch-at-login serialization
 
-Linux and Windows retain `auto-launch` 0.5 and their existing per-user registration. On macOS, the library still queries/disables the existing LaunchAgent, but testd creates it with the already selected `plist` serializer. The executable remains a raw filesystem path; XML escaping belongs only in serialization. The published `auto-launch` 0.6 still interpolates XML, so upgrading it would not fix paths containing `&`, `<`, or `>`.
+Linux and Windows retain `auto-launch` 0.5 for querying and removing their existing per-user registration. Linux writes the same desktop-entry format with owner-private, no-replace creation so a permissive umask cannot create an entry the product later rejects. On macOS, the library still queries/disables the existing LaunchAgent, but testd creates it with the already selected `plist` serializer. The executable remains a raw filesystem path; XML escaping belongs only in serialization. The published `auto-launch` 0.6 still interpolates XML, so upgrading it would not fix paths containing `&`, `<`, or `>`.
 
-The LaunchAgent keeps `dev.testd.host`, `ProgramArguments`, and `RunAtLoad`, along with the existing opt-out marker and validation of compatible/changed entries. Creation uses an owner-private temporary file and atomic no-replace persistence; it does not migrate to SMAppService or load a different login service. File-format tests run without AppKit, but do not replace an actual macOS logout/login observation.
+The LaunchAgent keeps `dev.testd.host`, `ProgramArguments`, and `RunAtLoad`, along with validation of compatible/changed entries. Startup only queries login state; explicit opt-in creates it. Creation uses an owner-private temporary file and atomic no-replace persistence; it does not migrate to SMAppService or load a different login service. File-format tests run without AppKit, but do not replace an actual macOS logout/login observation.
 
 ## Notification MSRV
 

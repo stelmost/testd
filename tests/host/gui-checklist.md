@@ -49,7 +49,7 @@ Answer each item `p`, `f`, `n`, or `q`. Give a reason for every failure or inapp
 
 ## Platform and package observations
 
-- [ ] GUI-23: Where launch at login is supported, toggle it off and on; the OS entry and tray state agree, and the tray remains responsive. Include a candidate path with spaces and Unicode; on macOS include XML-special characters and verify the plist decodes to the real executable. Preserve a customized or conflicting entry without replacing it.
+- [ ] GUI-23: On a fresh configuration, launch at login starts unchecked and no entry is created. Explicitly opt in and out; the OS entry and tray state agree, and the tray remains responsive. Repeat Linux creation under umasks 0022 and 0002, then restart after opt-out and external removal without restoring the entry. Include a candidate path with spaces and Unicode; on macOS include XML-special characters and verify the plist decodes to the real executable. Preserve a customized or conflicting entry without replacing it.
 - [ ] GUI-24: If launch at login is included in the release claim, reference a separate persisted logout/login run showing the actual tray starts once. Otherwise record why this platform is out of scope.
 - [ ] GUI-25: On Windows, observe the per-user installer and the UAC prompts for privileged setup. On macOS, observe the menu-bar and dock behavior. Record the actual platform and prompt count.
 - [ ] GUI-26: Install the candidate package, complete a trusted name, and verify any claimed upgrade preserves the expected secret, root, launch definitions, and login preference.

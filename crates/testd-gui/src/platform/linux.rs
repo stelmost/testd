@@ -42,10 +42,34 @@ pub fn show_error(message: &str) -> anyhow::Result<()> {
 	Ok(())
 }
 
+fn login_entry() -> std::path::PathBuf {
+	testd_core::config::config_dir()
+		.parent()
+		.unwrap()
+		.join("autostart/dev.testd.host.desktop")
+}
+
 pub fn check_autostart(executable: &Path) -> anyhow::Result<()> {
-	let directory = testd_core::config::config_dir().parent().unwrap().join("autostart");
-	crate::private::directory(&directory)?;
-	check_login_entry(&directory.join("dev.testd.host.desktop"), executable)
+	let entry = login_entry();
+	crate::private::directory(entry.parent().unwrap())?;
+	check_login_entry(&entry, executable)
+}
+
+pub fn enable_autostart(command: &str) -> anyhow::Result<()> {
+	write_login_entry(&login_entry(), command)
+}
+
+fn write_login_entry(path: &Path, command: &str) -> anyhow::Result<()> {
+	use std::io::Write;
+	crate::private::directory(path.parent().unwrap())?;
+	let mut file = testd_core::private_file::create_new(path)?;
+	write!(
+		file,
+		"[Desktop Entry]\nType=Application\nVersion=1.0\nName=dev.testd.host\n\
+		Comment=dev.testd.hoststartup script\nExec={command}\nStartupNotify=false\nTerminal=false\n"
+	)?;
+	file.sync_all()?;
+	Ok(())
 }
 
 fn check_login_entry(path: &Path, executable: &Path) -> anyhow::Result<()> {
@@ -152,6 +176,25 @@ mod tests {
 				.any(|entry| entry.to_string_lossy().starts_with(variable))
 		);
 		assert_eq!(std::env::var_os(variable), before);
+	}
+
+	#[test]
+	fn new_login_entries_are_private_valid_and_never_replace_existing_state() {
+		use std::os::unix::fs::{MetadataExt, symlink};
+		let home = crate::private::test_directory();
+		let entry = home.path().join("autostart/login.desktop");
+		let executable = Path::new("/home/me/a space/é%u.AppImage");
+		let command = crate::platform::desktop_exec(executable.to_str().unwrap());
+		write_login_entry(&entry, &command).unwrap();
+		assert_eq!(std::fs::metadata(&entry).unwrap().mode() & 0o777, 0o600);
+		check_login_entry(&entry, executable).unwrap();
+		let original = std::fs::read(&entry).unwrap();
+		assert!(write_login_entry(&entry, "/bin/sh").is_err());
+		assert_eq!(std::fs::read(&entry).unwrap(), original);
+		std::fs::rename(&entry, home.path().join("retained")).unwrap();
+		symlink(home.path().join("retained"), &entry).unwrap();
+		assert!(write_login_entry(&entry, &command).is_err());
+		assert_eq!(std::fs::read(home.path().join("retained")).unwrap(), original);
 	}
 
 	#[test]

@@ -371,7 +371,7 @@ async fn stop_desktop(
 }
 
 async fn initialize_login(proxy: &EventLoopProxy<UiEvent>) -> Option<bool> {
-	match tokio::task::spawn_blocking(crate::platform::enable_autostart_once).await {
+	match tokio::task::spawn_blocking(crate::platform::autostart_enabled).await {
 		Ok(Ok(enabled)) => Some(enabled),
 		Ok(Err(error)) => {
 			notify(proxy, error);
