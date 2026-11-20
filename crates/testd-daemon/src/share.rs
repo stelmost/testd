@@ -165,7 +165,7 @@ pub struct Front {
 /// The daemon's set of tunnels.
 #[derive(Clone)]
 pub struct Shares {
-	default: Provider,
+	default: Result<Provider, String>,
 	/// Overrides the binary for the selected provider; tests and odd installs.
 	binary: Option<PathBuf>,
 	/// The local edge, for providers that cannot reach the target themselves.
@@ -445,19 +445,22 @@ impl Active {
 impl Shares {
 	/// Default provider from `TESTD_TUNNEL_PROVIDER`, binary from `TESTD_TUNNEL`.
 	pub fn from_env(front: Option<Front>, registrations: Registrations) -> Self {
-		let default = std::env::var("TESTD_TUNNEL_PROVIDER")
-			.ok()
-			.and_then(|value| Provider::parse(&value))
-			.unwrap_or(Provider::Cloudflared);
 		let binary = std::env::var_os("TESTD_TUNNEL")
 			.filter(|value| !value.is_empty())
 			.map(PathBuf::from);
-		Self::new(default, binary, front, registrations)
+		let mut shares = Self::new(Provider::Cloudflared, binary, front, registrations);
+		/* Defer invalid-default errors so an explicit provider can still take precedence. */
+		shares.default = match std::env::var("TESTD_TUNNEL_PROVIDER") {
+			Ok(value) => Provider::parse(&value).ok_or_else(|| "invalid TESTD_TUNNEL_PROVIDER".to_owned()),
+			Err(std::env::VarError::NotPresent) => Ok(Provider::Cloudflared),
+			Err(std::env::VarError::NotUnicode(_)) => Err("TESTD_TUNNEL_PROVIDER is not valid Unicode".to_owned()),
+		};
+		shares
 	}
 
 	pub fn new(default: Provider, binary: Option<PathBuf>, front: Option<Front>, registrations: Registrations) -> Self {
 		Self {
-			default,
+			default: Ok(default),
 			binary,
 			front,
 			registrations,
@@ -500,7 +503,10 @@ impl Shares {
 	}
 
 	fn checked_provider(&self, provider: Option<Provider>) -> Result<Provider> {
-		let provider = provider.unwrap_or(self.default);
+		let provider = match provider {
+			Some(provider) => provider,
+			None => self.default.clone().map_err(anyhow::Error::msg)?,
+		};
 		if provider.needs_front() && self.front.is_none() {
 			bail!(
 				"{} needs the plain HTTP routing listener, and this daemon has none; \
