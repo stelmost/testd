@@ -54,11 +54,18 @@ pub struct Guard {
 	_lock: File,
 }
 
+impl Guard {
+	pub fn cleanup(&self) -> anyhow::Result<()> {
+		self._task.abort();
+		crate::private::remove_owned(&self.path, &self.file)?;
+		crate::browser::cleanup(self.path.parent().unwrap())
+	}
+}
+
 impl Drop for Guard {
 	fn drop(&mut self) {
-		self._task.abort();
-		if let Err(error) = crate::private::remove_owned(&self.path, &self.file) {
-			eprintln!("[warn] tray activation cleanup failed: {error}");
+		if let Err(error) = self.cleanup() {
+			eprintln!("[warn] tray state cleanup failed: {error}");
 		}
 	}
 }
@@ -91,6 +98,7 @@ pub fn acquire(
 		let _: Descriptor = serde_json::from_slice(&crate::private::read(&path)?)
 			.context("invalid existing tray activation state; left untouched")?;
 	}
+	crate::browser::cleanup(directory)?;
 	let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
 	listener.set_nonblocking(true)?;
 	let descriptor =
@@ -192,15 +200,68 @@ mod tests {
 		let guard = acquire(home.path(), Activation::ContinueSetup, &runtime, commands.clone())
 			.unwrap()
 			.unwrap();
+		let handoff =
+			crate::browser::Handoff::new(home.path(), "http://127.0.0.1:7737/#token=fixture-browser-token").unwrap();
+		let page = url::Url::parse(&handoff.file_url()).unwrap().to_file_path().unwrap();
 		assert!(
 			acquire(home.path(), Activation::TrustRoot, &runtime, commands)
 				.unwrap()
 				.is_none()
 		);
 		assert!(matches!(receive.recv().await, Some(Command::Activate(Activation::TrustRoot))));
+		assert!(page.exists());
+		guard.cleanup().unwrap();
+		assert!(!page.exists());
+		assert!(!home.path().join("tray-control.json").exists());
+		drop(handoff);
 		drop(guard);
 		assert!(!home.path().join("tray-control.json").exists());
 		assert!(home.path().join("tray.lock").exists());
+	}
+
+	#[test]
+	fn restart_removes_handoffs_and_replaces_activation_after_interrupted_exit() {
+		const FIXTURE: &str = "TESTD_INTERRUPTED_TRAY_FIXTURE";
+		if let Some(directory) = std::env::var_os(FIXTURE) {
+			let runtime = tokio::runtime::Runtime::new().unwrap();
+			let (commands, _receive) = mpsc::channel(4);
+			let _guard = acquire(Path::new(&directory), Activation::ContinueSetup, runtime.handle(), commands).unwrap();
+			let _handoff = crate::browser::Handoff::new(
+				Path::new(&directory),
+				"http://127.0.0.1:7737/#token=interrupted-browser-token",
+			)
+			.unwrap();
+			std::process::exit(0);
+		}
+		let home = crate::private::test_directory();
+		let status = std::process::Command::new(std::env::current_exe().unwrap())
+			.args([
+				"--exact",
+				"activation::tests::restart_removes_handoffs_and_replaces_activation_after_interrupted_exit",
+			])
+			.env(FIXTURE, home.path())
+			.status()
+			.unwrap();
+		assert!(status.success());
+		let path = home.path().join("tray-control.json");
+		let original = crate::private::read(&path).unwrap();
+		let pages = || {
+			std::fs::read_dir(home.path())
+				.unwrap()
+				.filter_map(Result::ok)
+				.filter(|entry| entry.file_name().to_string_lossy().starts_with("browser-"))
+				.count()
+		};
+		assert_eq!(pages(), 1);
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		let (commands, _receive) = mpsc::channel(4);
+		let guard = acquire(home.path(), Activation::ContinueSetup, runtime.handle(), commands)
+			.unwrap()
+			.unwrap();
+		assert_eq!(pages(), 0);
+		assert_ne!(crate::private::read(&path).unwrap(), original);
+		drop(guard);
+		assert!(!path.exists());
 	}
 
 	#[tokio::test]

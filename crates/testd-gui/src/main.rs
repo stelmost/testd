@@ -79,7 +79,7 @@ fn run() -> anyhow::Result<()> {
 	let runtime = tokio::runtime::Runtime::new().context("cannot create the desktop worker runtime")?;
 	let (commands, receive) = mpsc::channel(32);
 	let (stop, shutdown) = watch::channel(false);
-	let Some(_guard) =
+	let Some(guard) =
 		activation::acquire(&testd_core::config::config_dir(), action, runtime.handle(), commands.clone())?
 	else {
 		return Ok(());
@@ -87,7 +87,7 @@ fn run() -> anyhow::Result<()> {
 	if repair.is_some() {
 		commands.try_send(Command::Activate(action))?;
 	}
-	run_desktop(runtime, commands, receive, stop, shutdown)
+	run_desktop(runtime, commands, receive, stop, shutdown, &guard)
 }
 
 fn run_desktop(
@@ -96,6 +96,7 @@ fn run_desktop(
 	receive: mpsc::Receiver<Command>,
 	stop: watch::Sender<bool>,
 	shutdown: watch::Receiver<bool>,
+	guard: &activation::Guard,
 ) -> anyhow::Result<()> {
 	#[cfg(target_os = "linux")]
 	gtk::init().context("cannot initialize GTK; run the tray in a desktop session, or use testd host")?;
@@ -159,6 +160,13 @@ fn run_desktop(
 			},
 			Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
 				let _ = stop.send(true);
+			},
+			Event::LoopDestroyed => {
+				/* AppKit termination can exit without returning through Rust destructors. */
+				let _ = stop.send(true);
+				if let Err(error) = guard.cleanup() {
+					eprintln!("[warn] tray termination cleanup failed: {error:#}");
+				}
 			},
 			_ => {},
 		}

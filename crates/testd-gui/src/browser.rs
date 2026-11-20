@@ -1,7 +1,7 @@
 /*! Browser launchers receive a private file URL, never a bearer credential. */
 
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
@@ -38,6 +38,30 @@ impl Drop for Handoff {
 			eprintln!("[warn] browser handoff cleanup failed: {error}");
 		}
 	}
+}
+
+/* The caller must hold the tray lock so no other live handoff is removed. */
+pub fn cleanup(directory: &Path) -> anyhow::Result<()> {
+	crate::private::directory(directory)?;
+	for entry in std::fs::read_dir(directory)? {
+		let entry = entry?;
+		let name = entry.file_name();
+		let Some(name) = name.to_str() else { continue };
+		if !name.starts_with("browser-") || !name.ends_with(".html") {
+			continue;
+		}
+		let path = entry.path();
+		let file = crate::private::open(&path)?;
+		let mut page = String::new();
+		(&file).take(4097).read_to_string(&mut page)?;
+		let Some((_, destination)) = page.rsplit_once("<script>location.replace(") else { continue };
+		let Some(destination) = destination.strip_suffix(");</script></html>\n") else { continue };
+		let Ok(destination) = serde_json::from_str::<String>(destination) else { continue };
+		if handoff_page(&destination).ok().as_deref() == Some(page.as_str()) {
+			crate::private::remove_owned(&path, &file)?;
+		}
+	}
+	Ok(())
 }
 
 fn handoff_page(destination: &str) -> anyhow::Result<String> {
@@ -120,6 +144,45 @@ mod tests {
 		let path = handoff.path.clone();
 		drop(handoff);
 		assert!(!path.exists());
+	}
+
+	#[test]
+	fn cleanup_removes_only_verified_private_handoffs() {
+		let home = crate::private::test_directory();
+		let handoff = Handoff::new(home.path(), &format!("http://127.0.0.1:7737/#token={TOKEN}")).unwrap();
+		let path = handoff.path.clone();
+		let unrelated = home.path().join("browser-unrelated.html");
+		let _file = testd_core::private_file::create_new(&unrelated).unwrap();
+		std::fs::write(&unrelated, "keep this private document").unwrap();
+		cleanup(home.path()).unwrap();
+		assert!(!path.exists());
+		assert_eq!(std::fs::read_to_string(unrelated).unwrap(), "keep this private document");
+		drop(handoff);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn cleanup_refuses_symlinks_shared_files_and_hard_links() {
+		use std::os::unix::fs::{PermissionsExt, symlink};
+		for kind in ["symlink", "shared", "hard-link"] {
+			let home = crate::private::test_directory();
+			let original = home.path().join("retained");
+			let _file = testd_core::private_file::create_new(&original).unwrap();
+			let page = handoff_page(&format!("http://127.0.0.1:7737/#token={TOKEN}")).unwrap();
+			std::fs::write(&original, &page).unwrap();
+			let path = home.path().join("browser-unsafe.html");
+			match kind {
+				"symlink" => symlink(&original, &path).unwrap(),
+				"hard-link" => std::fs::hard_link(&original, &path).unwrap(),
+				_ => {
+					std::fs::copy(&original, &path).unwrap();
+					std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+				},
+			}
+			assert!(cleanup(home.path()).is_err());
+			assert!(path.exists());
+			assert_eq!(std::fs::read_to_string(original).unwrap(), page);
+		}
 	}
 
 	#[test]
