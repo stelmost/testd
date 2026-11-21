@@ -1,5 +1,19 @@
 # Developing
 
+## Support matrix
+
+The required first-release targets are exactly:
+
+| Required OS | Architecture | Required artifact target |
+|---|---|---|
+| Windows 10 22H2 | amd64 | `x86_64-pc-windows-msvc` |
+| Debian 13 | amd64 | `x86_64-unknown-linux-gnu` |
+| macOS 15 | arm64 | `aarch64-apple-darwin` |
+
+Everything else, including Intel macOS, is best effort. Physical-hardware-specific checks are deferred.
+
+Required automated runtime gates are `macos-15` arm64 and Debian 13 amd64 userspace. The Debian container is not native kernel, system, or desktop evidence. Hosted Windows Server is not Windows 10 validation; Windows 10 22H2 VM signoff remains required. All three artifact targets are required regardless of builder OS; `x86_64-apple-darwin` is optional. Native installation, browser/tray, resolver/trust cleanup, and signing approval remain separate release gates.
+
 ## Prerequisites
 
 - Rust toolchain from `rust-toolchain.toml`; MSRV 1.90
@@ -75,7 +89,7 @@ Use hosted CI for the repeatable platform matrix. Use the OS-detecting `tests/ru
 | Run | Scope |
 |---|---|
 | Push to `master` or open a pull request | Change-filtered automated checks; documentation-only changes may skip builds |
-| Manual `ci.yml` workflow run | Full platform matrix, minimum-runtime fixtures, website checks, native package builds, and workspace SBOMs; no release publishing |
+| Manual `ci.yml` workflow run | Required and best-effort platform matrix, minimum-runtime fixtures, website checks, native package builds, and workspace SBOMs; no release publishing |
 | Local default `check` profile | Non-GUI Rust checks, fixtures, audit, isolated website, and CLI/daemon checks; `--gui` includes native GUI compilation/tests |
 | Local `ci` profile | Unprivileged whole-workspace checks including GUI; the separate CI `site` job validates the website once |
 | Local `all` profile | `check` plus explicitly selected system, artifact, desktop, browser, and manual stages; incomplete selected evidence remains blocked |
@@ -101,7 +115,7 @@ gh run watch RUN_ID --repo LapilliWorks/testd --interval 45 --exit-status
 gh run view RUN_ID --repo LapilliWorks/testd --web
 ```
 
-`watch --exit-status` returns nonzero for an unsuccessful run. A transport error or a watch timeout is not itself a CI failure: inspect `run view` and resume watching the same run. The five platform summaries must each show every selected unprivileged stage passing and the expected GUI scope. For a full manual run, also require the website, minimum-runtime fixture, four bundle, and SBOM jobs to pass. An intentionally skipped release-publishing job is not missing test evidence.
+`watch --exit-status` returns nonzero for an unsuccessful run. A transport error or a watch timeout is not itself a CI failure: inspect `run view` and resume watching the same run. Require `ci-summary-macos-15` and `ci-summary-debian-13` to show every applicable selected unprivileged stage passing with the expected GUI scope. For a full manual run, also require the website, macOS 15 minimum-runtime fixtures, Windows x64/Linux x64/macOS arm64 bundle jobs, and SBOM job to pass. Other runtime summaries and Intel bundles are best effort; review their failures and incomplete coverage without relabelling them as passes. An intentionally skipped release-publishing job is not missing test evidence.
 
 ### Inspect failures and repeat a run
 
@@ -130,7 +144,7 @@ Each `ci-summary-*` artifact contains `ci-summary.json`, with source/OS/Python m
 
 ### Reproduce the unprivileged suite locally
 
-Install the [prerequisites](#prerequisites), including the native tray build libraries/compiler even if you only want to run `ci`. Python 3.12 or newer is supported; hosted CI currently uses 3.14, while its minimum-runtime fixtures use 3.12. Ensure the rustup shims and Bun are on `PATH`; a distro-provided `cargo` cannot interpret `+stable`. On Linux/macOS, load `source "$HOME/.cargo/env"` in the current shell if needed; on Windows, reopen PowerShell after installation. Prepare the shared tools and checkout dependencies once:
+Install the [prerequisites](#prerequisites), including the native tray build libraries/compiler even if you only want to run `ci`. Python 3.12 or newer is supported; hosted OS jobs use 3.14, userspace containers use their distro Python, and minimum-runtime fixtures use 3.12. Ensure the rustup shims and Bun are on `PATH`; a distro-provided `cargo` cannot interpret `+stable`. On Linux/macOS, load `source "$HOME/.cargo/env"` in the current shell if needed; on Windows, reopen PowerShell after installation. Prepare the shared tools and checkout dependencies once:
 
 ```sh
 rustup toolchain install stable 1.90.0 --profile minimal
@@ -143,7 +157,7 @@ python3 tests/run.py prepare --gui
 
 The runner installs nothing. Run it from a normal user terminal with no existing testd daemon occupying the fixture ports. Do not initialize testd or install system integration first: the host checks create their own isolated home. Unset `CARGO_BUILD_TARGET` for automatic native builds, or pass `--bin` with a separately verified candidate CLI. When working in a Git worktree, point `CARGO_TARGET_DIR` at the main checkout's `target/` to share the build cache.
 
-On Linux, including Fedora, and macOS:
+On Debian, other Linux distributions, and macOS:
 
 ```sh
 export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
@@ -175,7 +189,7 @@ Inspect `report.json` for consolidated stage/command evidence and `run.log` for 
 
 Missing prerequisites and unexpected skips are not passes. The `ci` profile excludes actual tray/login observations and privileged, installer, real-browser, and manual stages. `all` adds only explicitly selected sensitive stages; their incomplete evidence remains blocked. Unselected release checks are neither run nor passed.
 
-A Fedora container run establishes userspace behavior on the Ubuntu runner's kernel, not native Fedora system integration. Hosted Windows Server is not desktop Windows 11 evidence. Resolver/trust changes, service supervision, real browser trust, desktop setup, installation/uninstall, and signing/notarization remain separate checks. For those operations use the [release-validation commands](#release-validation) on a clean disposable host with a persisted full-system backup, retain reports outside the guest before recovery, and restore the baseline between sensitive stages. macOS and Windows product system/desktop checks remain blocked; do not bypass the guards or append `--system` to `ci`.
+Debian and Fedora containers establish userspace behavior on the Ubuntu runner's kernel, not native system or desktop integration. Hosted Windows Server is not Windows 10 22H2 evidence. Resolver/trust changes, service supervision, real browser trust, desktop setup, installation/uninstall, and signing/notarization remain separate checks. For those operations use the [release-validation commands](#release-validation) on a clean disposable host with a persisted full-system backup, retain reports outside the guest before recovery, and restore the baseline between sensitive stages. macOS supports installation-owned resolver/trust cleanup from a logged-in desktop terminal with native authorization; shared trust effects still need full-system comparison. Windows product system/desktop checks remain blocked pending native ownership validation. Do not bypass guards or append `--system` to `ci`.
 
 See [tests/README.md](tests/README.md) for individual suite commands, detailed contracts, browser preparation, and recovery requirements, and [CI coverage](#ci-coverage) for the hosted platform matrix. A green CI run is not release approval. Runner images, stable Rust, and installed tool versions can change between runs even when the source commit and lockfiles are unchanged.
 
@@ -194,11 +208,11 @@ The test command above includes ignored contracts. The default runner also inclu
 
 ## Release validation
 
-This is the runbook for checks **outside hosted CI**: actual OS resolver/trust changes, service supervision, real browsers, interactive desktop/login behavior, and installation/uninstall. Use individual suites on separately restored VMs, not one unattended `all --system --interactive` run. Incomplete artifact or system cleanup can block later stages of `all`.
+This is the runbook for checks **outside hosted CI**: actual OS resolver/trust changes, service supervision, real browsers, interactive desktop/login behavior, and installation/uninstall. Obtain owner authorization and use individual suites on separately restored VMs, not one unattended `all --system --interactive` run. Incomplete artifact or system cleanup can block later stages of `all`.
 
 ### What can currently run
 
-| Check | Linux desktop VM | macOS VM | Windows 11 VM |
+| Check | Debian 13 amd64 VM | macOS 15 arm64 VM | Windows 10 22H2 amd64 VM |
 |---|---|---|---|
 | Resolver/trust installation and owned cleanup | `host --system`; shared trust effects still require independent comparison | `host --system`; full-system trust comparison still required | Blocked by ownership safeguards |
 | Actual service supervision | `service` with a real systemd user session | `service` with a logged-in launchd GUI session | Not applicable: no CLI service shipped |
@@ -208,11 +222,11 @@ This is the runbook for checks **outside hosted CI**: actual OS resolver/trust c
 | Full installation/upgrade/uninstall | Manual checklist with owned integration and full-system comparison | Manual checklist with owned integration and full-system comparison | Resolver/trust cleanup coverage blocked |
 | Signing/notarization | Record packages as unsigned | Separate credentialed signing and verification | Separate credentialed signing and verification |
 
-A VM does not bypass a blocked runner. Do not remove its guards, force system checks through direct scripts, or mark blocked platform coverage passed. macOS 15 or another explicitly claimed supported macOS version can be tested; upgrading the host to Tahoe is not a requirement of this runbook.
+A VM does not bypass a blocked runner. Do not remove its guards, force system checks through direct scripts, or mark blocked platform coverage passed. Required native signoff uses Debian 13 amd64, macOS 15 arm64, and Windows 10 22H2 amd64. Other versions/architectures are best effort.
 
 ### Prepare and save the VM baseline
 
-1. Create a disposable VM with a real desktop and a fresh local test user. Use native Ubuntu 24.04 and Fedora 44 Workstation VMs for claimed Linux coverage, the claimed macOS versions/architectures on Apple hardware, and Windows 11 for desktop Windows evidence. Containers, WSL, and Windows Server do not substitute for these OS checks.
+1. Create a disposable VM with a real desktop and a fresh local test user. Use Debian 13 amd64, macOS 15 arm64 on Apple hardware, and Windows 10 22H2 amd64 for required signoff. Ubuntu, Fedora, Intel macOS, and other targets are best effort. Containers, WSL, and Windows Server do not substitute for the required OS checks.
 2. Before changing the guest, persist a complete restorable backup of its disks and VM configuration outside the guest and outside temporary storage. Check that your VM manager can restore it. Do not rely solely on an in-guest snapshot or `system-before/` report.
 3. Install Python 3.12 or newer, Git, and the suite-specific tools below. Install Bun for browser fixtures and the selected real browsers with clean profiles and no accounts. Install native GUI runtime dependencies for the candidate package; source builds additionally need the [build prerequisites](#prerequisites). Use only synthetic projects and credentials.
 4. Copy the exact candidate assets and a checkout of their source revision into the VM. Record the run URL, source SHA, OS image/version/architecture, tool/browser versions, and artifact SHA-256 digests. Do not execute candidate binaries on your everyday host merely to check their version.
@@ -223,11 +237,11 @@ A VM does not bypass a blocked runner. Do not remove its guards, force system ch
 On Linux, the resolver and service suites need a running systemd-resolved and systemd user manager. Provision tools **only inside the backed-up disposable guest**:
 
 ```sh
-# Ubuntu 24.04
+# Debian 13 (required), Ubuntu 24.04 (best effort)
 sudo apt-get update
 sudo apt-get install -y python3 git curl openssl systemd-resolved ca-certificates libnss3-tools libcap2-bin
 
-# Fedora 44: use this instead of the Ubuntu commands
+# Fedora 44 (best effort): use this instead of the apt commands
 sudo dnf install -y python3 git curl openssl systemd-resolved ca-certificates nss-tools libcap
 ```
 
@@ -244,7 +258,7 @@ If the resolver or user manager is unavailable, prepare a supported clean guest 
 
 ### Prepare the candidate and per-run paths
 
-Download only the matching `bundles-TARGET` artifact from the successful manual CI run. Targets are `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-apple-darwin`, and `x86_64-pc-windows-msvc`. Keep each target's files in its own candidate directory. Manual builds do not provide the release job's `SHA256SUMS`; generate a local manifest from the downloaded bytes before transferring them:
+Download only the matching `bundles-TARGET` artifact from the successful manual CI run. Required targets are `x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu`, and `aarch64-apple-darwin`; `x86_64-apple-darwin` is optional and may be absent. Keep each target's files in its own candidate directory. Manual builds do not provide the release job's `SHA256SUMS`; generate a local manifest from the downloaded bytes before transferring them:
 
 ```sh
 python3 scripts/release.py checksums /absolute/path/to/new-candidate-directory
@@ -297,7 +311,7 @@ Before saving the prepared baseline, install Playwright where Bun can resolve it
 bun install --frozen-lockfile
 bun add --no-save playwright
 bunx playwright --version
-# Ubuntu: installs browser dependencies as well as the selected engines
+# Debian/Ubuntu: installs browser dependencies as well as the selected engines
 bunx playwright install --with-deps chromium firefox webkit
 ```
 
@@ -326,7 +340,7 @@ On macOS, run system, browser-system, and desktop suites from Terminal in the lo
 
 ### Run Linux desktop, login, and installed-package checks
 
-Restore the baseline and install the actual selected `.deb` or prepare the verified AppImage/source-build executable and required GUI runtime libraries. Do not launch or initialize testd before the desktop runner: the test user must still have no testd configuration. On Ubuntu, install the verified package and inspect its paths:
+Restore the baseline and install the actual selected `.deb` or prepare the verified AppImage/source-build executable and required GUI runtime libraries. Do not launch or initialize testd before the desktop runner: the test user must still have no testd configuration. On Debian 13, or best-effort Ubuntu, install the verified package and inspect its paths:
 
 ```sh
 DEB='/absolute/path/to/candidate.deb'
@@ -357,13 +371,13 @@ python3 tests/run.py artifacts --artifacts "$ASSETS" --require-checksums --repor
 Windows equivalent, with a new report path on every attempt:
 
 ```powershell
-python tests\release\run.py artifacts --artifacts 'C:\candidate-assets' --require-checksums `
+python tests\run.py artifacts --artifacts 'C:\candidate-assets' --require-checksums `
   --report "${HOME}\testd-reports\artifacts-$((Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'))"
 ```
 
 Artifact smoke validates checksums, CLI extraction/version/init/re-init, and applicable package metadata/runtime; it deliberately reports real uninstall/purge as blocked. Expected exit `2` is **incomplete**, not a pass for the installed workflow. `--previous-bin /path/to/real-previous-testd` adds CLI configuration/root preservation checks, not actual package upgrade evidence.
 
-Complete [INSTALL-01 through INSTALL-10](tests/manual/installation.md) separately for each claimed package: actual installation and first setup, trusted browser workflow, stopped registration, upgrade from a real prior release, interrupted-upgrade rollback, disabled login item, owned integration removal, package removal, and purge/reinstall. On Linux, stop candidate processes and retain ownership/root evidence before `testd uninstall`; purge only after system cleanup succeeds. Compare unowned and shared state against the full-system baseline. Do not manually remove conflicting state. On macOS/Windows, complete cleanup/trusted first-run evidence remains blocked; archive smoke does not resolve it.
+Complete [INSTALL-01 through INSTALL-10](tests/manual/installation.md) separately for each claimed package: actual installation and first setup, trusted browser workflow, stopped registration, upgrade from a real prior release, interrupted-upgrade rollback, disabled login item, owned integration removal, package removal, and purge/reinstall. On Linux and macOS, stop candidate processes and retain ownership/root evidence before `testd uninstall`; purge only after system cleanup succeeds. Compare unowned and shared state against the full-system baseline. Do not manually remove conflicting state. macOS ownership-checked cleanup still needs native installed/trusted first-run and full-system comparison evidence. Windows cleanup/trusted first-run remains blocked pending native ownership validation; archive smoke does not resolve either gate.
 
 ### Verify signing and conditional network claims
 
@@ -441,7 +455,7 @@ Each script uses:
 - a high HTTPS port (`8443`) so it does not need root for the edge,
 - dedicated upstream ports for registration (`18080`) and quick launches (`18081`).
 
-The scripts do **not** call sudo themselves. On Linux and macOS they use `--cacert` for HTTPS; on Windows they use `--insecure` for edge and proxy checks because Schannel does not treat `--cacert` like OpenSSL. Only the Linux runner currently permits optional OS resolver and trust checks, with a cached sudo credential, a disposable-host confirmation, and a persisted full-system snapshot. macOS and Windows system checks are blocked.
+The scripts do **not** call sudo themselves. On Linux and macOS they use `--cacert` for HTTPS; on Windows they use `--insecure` for edge and proxy checks because Schannel does not treat `--cacert` like OpenSSL. Linux and macOS runners permit optional OS resolver/trust checks with owner authorization, a cached sudo credential, a disposable-host confirmation, and a persisted full-system snapshot. macOS also requires the logged-in GUI terminal and native trust-removal approval. Windows system checks remain blocked pending native ownership validation.
 
 ### Linux
 
@@ -474,7 +488,7 @@ cargo build --release -p testd
 tests/host/macos.sh
 ```
 
-The unprivileged host checks do not install a resolver or trust root. The product system checks, desktop runner, launchd service check, and resolver-specific probe are blocked until their ownership and cleanup can be established. The scoped self-test removes only a recorded exact fixture certificate and cannot verify all keychain trust settings or shared effects.
+The unprivileged host checks do not install a resolver or trust root. macOS system/browser/desktop checks use installation-owned resolver and certificate receipts and refuse changed or unowned integration. Run them from the logged-in desktop's terminal and approve native trust-removal authorization. The service suite uses a uniquely owned job with the packaged launchd template. Scoped snapshots and cleanup do not verify every keychain trust setting or shared effect; native full-system comparison remains required.
 
 ### Windows
 
@@ -482,9 +496,7 @@ Prerequisites: Python 3.12 or newer, PowerShell 5.1 or later, `curl.exe` (includ
 
 The unprivileged script prints the OS caption, version, build, and architecture at the start of every run. Compilation, PowerShell fixtures, and CLI checks do not validate NRPT, machine trust, or a desktop Windows release.
 
-CI's `windows-latest` runner is Windows Server, not a desktop Windows 11 host.
-It is useful for compilation and the CLI tests, but it does not replace the
-NRPT and trust-store checks above.
+CI's hosted Windows runners use Windows Server, not Windows 10 22H2. They are useful for compilation and CLI fixtures, but do not replace required Windows 10 VM signoff, NRPT/trust checks, or desktop/installer evidence.
 
 ```powershell
 cd testd
@@ -525,7 +537,7 @@ scripts stop at the HTTP layer on purpose; they cannot judge a padlock.
 
 ### GUI
 
-The tray is a public source build and an optional free release artifact. On a backed-up disposable Linux desktop, run `python3 tests/run.py desktop --app <candidate> --bin <candidate-cli> --report <new-report>` to record `tests/host/gui-checklist.md`. The app and CLI must come from the intended source. macOS and Windows desktop runs remain blocked until system ownership is proven. Attach/detach of existing processes is deferred and does not gate this release.
+The tray is a public source build and a free release artifact. On a backed-up disposable Debian 13 desktop, run `python3 tests/run.py desktop --app <candidate> --bin <candidate-cli> --report <new-report>` to record `tests/host/gui-checklist.md`. The app and CLI must come from the intended source. macOS 15 arm64 desktop runs use installation-owned resolver/trust cleanup and require the logged-in GUI session and native authorization. Windows desktop runs remain blocked pending native ownership validation. Attach/detach of existing processes is deferred and does not gate this release.
 
 ### Packaging and signing
 
@@ -575,13 +587,13 @@ Recovery requires the same platform and any necessary sudo or elevation. It leav
 
 ### CI coverage
 
-`.github/workflows/ci.yml` provisions and runs the `ci` suite on Ubuntu 24.04, macOS 15 Apple Silicon and Intel, and Windows Server 2025. It installs Python 3.14, stable and the MSRV Rust toolchain, `cargo-deny`, Bun, and website dependencies; Linux build libraries come from the local dependency action. Xcode and MSVC/Windows SDK prerequisites come from the hosted runner images. Rust build caches are isolated by platform, and only master runs save them.
+`.github/workflows/ci.yml` requires the `ci` suite on macOS 15 arm64 (`macos-15`) and Debian 13 amd64 userspace. Ubuntu 24.04, macOS 15 Intel, Windows Server 2025, and Fedora 44 userspace are best effort. Hosted OS jobs install Python 3.14; container jobs use their distro Python. Each job provisions stable and MSRV Rust, `cargo-deny`, Bun, and checkout dependencies. Linux build libraries come from the local dependency action; Xcode and MSVC/Windows SDK prerequisites come from hosted runner images. Rust caches are isolated by platform, and only master runs save them.
 
-A separate Fedora 44 container job installs Fedora build dependencies, uses its system Python, and runs the same suite as a normal user. It establishes Fedora userspace compilation and CLI/daemon behavior on the Ubuntu runner's kernel, not native Fedora resolver, trust, systemd-session, SELinux, or desktop integration. Hosted Windows Server is not desktop Windows 11 evidence.
+Debian 13 and Fedora 44 container jobs run as a normal user on the Ubuntu runner's kernel. They establish userspace compilation and CLI/daemon behavior, not native kernel, resolver, trust, systemd-session, SELinux, or desktop integration. Hosted Windows Server is not Windows 10 22H2 validation; the required Windows 10 VM signoff remains separate.
 
-Every applicable job runs ignored contracts and executable doctests, rather than reserving them for stable tags. Missing prerequisites, unexpected skips, and incomplete checks make the CI command nonzero. The workflow uploads only `ci-summary.json`; fixture state and full report files are not uploaded. Separate Python 3.12 system-state fixture jobs retain minimum-runtime coverage without changing the runner's resolver or trust store. The dedicated `site` profile runs isolated website checks once, rather than repeating builds across platform jobs.
+Every applicable job runs ignored contracts and executable doctests. Missing prerequisites, unexpected skips, and incomplete checks keep the CI command nonzero; best-effort jobs tolerate that result only at the workflow level, not by changing check statuses. The workflow uploads only `ci-summary.json`, never fixture state or full reports. Python 3.12 fake system-state fixtures retain minimum-runtime coverage; macOS 15 is required and Ubuntu/Windows Server are best effort. The dedicated `site` profile runs isolated website checks once.
 
-Real system, service, browser-trust, installer, and desktop checks still require an explicitly confirmed disposable host with a persisted full-system snapshot; hosted CI does not supply that snapshot and does not run them. Tags and manual workflow dispatches build and package artifacts and generate SBOMs after the platform, minimum-runtime fixture, and website gates pass, without executing the interactive artifact smoke runner. Manual dispatches use the workspace version and do not publish a release; publishing remains restricted to version tags. Source builds and package creation do not replace installation, signing, or uninstall evidence. A green workflow is not release approval. Required-check settings must use the current platform job names rather than the removed standalone MSRV/audit jobs.
+Real system, service, browser-trust, installer, and desktop checks still require owner authorization and a disposable host with a persisted full-system snapshot; hosted CI does not run them. Tag/manual runs build required Windows x64, Linux x64, and macOS arm64 artifacts and SBOMs after required runtime, minimum-runtime fixture, and website gates. Intel macOS artifacts are optional. Artifact requirements are keyed by target, not builder OS. Manual runs use the workspace version and do not publish; publishing is restricted to version tags. Package creation does not replace installation, signing, or uninstall evidence. A green workflow is not release approval. Repository required-check settings must track the required job names and must not make best-effort jobs mandatory.
 
 ### System checks need a running daemon
 
@@ -613,9 +625,9 @@ Manual checks that a name works in a real browser. Use a disposable host with a 
 
 ### Preconditions
 
-For the fixture-driven browser suite, follow [Run real Linux browsers](#run-real-linux-browsers); do not start a daemon beforehand. The following applies instead to a separately observed installed-app workflow on a backed-up disposable host. macOS/Windows product-managed DNS/trust setup remains blocked.
+For the fixture-driven browser suite, follow [Run real Linux browsers](#run-real-linux-browsers); do not start a daemon beforehand. The following applies instead to a separately authorized installed-app workflow on a backed-up disposable host. Linux and macOS use installation-owned DNS/trust setup and cleanup; Windows product-managed setup remains blocked pending native ownership validation.
 
-- Initialize the intended candidate, establish owned Linux DNS/trust integration, and start its host; `testd doctor` must exit `0`
+- Initialize the intended candidate, establish owned Linux or macOS DNS/trust integration, and start its host; `testd doctor` must exit `0`
 - Start a synthetic local service and register `testd run app.example:3000 -- <your dev server>`
 - Trust only the candidate's public root using the proven OS setup or a clean disposable browser profile; record its fingerprint and the import method
 
@@ -624,8 +636,8 @@ For the fixture-driven browser suite, follow [Run real Linux browsers](#run-real
 | Browser | Store | Import |
 |---|---|---|
 | Chrome, Edge (Linux) | Browser certificate manager or platform integration; varies by package | Import `root.crt` as a trusted authority in the browser certificate manager and verify the actual package's trust behavior |
-| Chrome, Edge (macOS), Safari | system keychain | `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain root.crt` |
-| Chrome, Edge (Windows) | machine store | `certutil -addstore -f Root root.crt` |
+| Chrome, Edge (macOS), Safari | System keychain | Use installation-owned `testd doctor --fix`; retain receipts and approve native trust dialogs |
+| Chrome, Edge (Windows) | Machine store | Product-managed checks blocked pending native ownership validation; preconfigured checks require separately proven setup |
 | Firefox (all) | Profile NSS store, or system roots when enabled | Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import; trust the root for websites |
 
 For NSS command-line imports, use `certutil -d sql:<actual browser profile directory> -A -t 'C,,' -n testd-root -i root.crt`. Do not assume `~/.pki/nssdb` is the Firefox profile. Firefox's `security.enterprise_roots.enabled` can use supported OS root stores; validate it on the actual platform/package rather than assuming system installation is sufficient.
@@ -649,7 +661,7 @@ For each browser: name and version, OS, pass or fail, and the leaf's SHA-256 fin
 
 ## Release
 
-A free release is a version tag, CLI archives, public tray bundles, workspace SBOMs, generated Homebrew definitions, and `SHA256SUMS`. The tag workflow attaches them to a draft GitHub release only after the test, dependency-policy, and MSRV jobs pass. No commercial service or updater participates.
+A free release is a version tag, CLI archives, public tray bundles, workspace SBOMs, generated Homebrew definitions, and `SHA256SUMS`. The tag workflow attaches them to a draft GitHub release only after required unprivileged checks (including dependency policy/MSRV), minimum-runtime fixtures, website, artifacts, and SBOM gates pass. No commercial service or updater participates.
 
 ### Before tagging
 
@@ -657,7 +669,7 @@ A free release is a version tag, CLI archives, public tray bundles, workspace SB
 - [ ] `python3 tests/run.py site`
 - [ ] `python3 scripts/release.py verify-version`
 - [ ] Enable GitHub private vulnerability reporting for the public repository
-- [ ] Run the release-validation suites above and retain reports for every claimed platform/browser
+- [ ] Retain required Debian 13 amd64, macOS 15 arm64, and Windows 10 22H2 amd64 VM signoffs and reports for each claimed browser; physical-hardware-specific checks are deferred
 - [ ] `scripts/release-sbom.sh` and attach the SBOMs to the release
 - [ ] Finalize the dated changelog entry; synchronize all Cargo package versions; packaging inherits the GUI package version, and refresh `Cargo.lock` when dependencies change
 - [ ] Run `testd doctor --json` against a clean VM and keep the output
@@ -681,13 +693,13 @@ cargo packager --release --packages testd-gui --formats default \
 
 Use the explicit release formats from the CI matrix, and a fresh output directory for each candidate. Package files are placed directly in `target/release/bundle/`; `scripts/release.py` stages their stable public names without collecting nested tool executables.
 
-Artifacts: CLI `.tar.gz` (Linux/macOS) or `.zip` (Windows), `.dmg` containing `.app` (macOS), `.exe` (Windows NSIS), `.AppImage`/`.deb` (Linux). CI builds macOS Apple Silicon and Intel, Linux x86-64, and Windows x86-64.
+Artifacts: CLI `.tar.gz` (Linux/macOS) or `.zip` (Windows), `.dmg` containing `.app` (macOS), `.exe` (Windows NSIS), `.AppImage`/`.deb` (Linux). CI requires macOS arm64, Linux x64, and Windows x64 builds; Intel macOS is best effort.
 
 AppImage bundles the linked GTK libraries and preserves ordinary GTK backend selection, including an explicit `GDK_BACKEND`. Its startup hook saves the host environment for browser and application launches before the bundled runtime changes it. Validate the actual desktop/tray host, host-browser handoff and a normal quick launch without XWayland before claiming support; packaging alone is not native desktop evidence.
 
 Windows ships only NSIS, configured in `crates/testd-gui/Cargo.toml` to install per user into `%LOCALAPPDATA%\Testd` without installer elevation. Resolver and trust changes retain their separate native authorization prompts. No MSI or machine-wide deployment is claimed. Preserve the actual installer/shortcut/URL-handler identity when validating upgrades; a matching visible product name alone is not evidence.
 
-Removing the app does not remove the machine trust root or the DNS route. CLI uninstall is blocked on macOS and Windows until system ownership can be verified; do not remove unowned state. On Linux, run `testd uninstall` before removing the app; add `--purge` to delete the local config directory after system cleanup succeeds.
+Removing the app does not remove the machine trust root or the DNS route. On Linux and macOS, run `testd uninstall` before removing the app; ownership-checked cleanup refuses changed or unowned integration. Add `--purge` only to delete local configuration after system cleanup succeeds. macOS cleanup requires the logged-in desktop session and native authorization. Windows CLI uninstall remains blocked pending native ownership validation.
 
 ### Sign
 
@@ -737,9 +749,11 @@ homebrew-testd/
   Casks/testd-gui.rb
 ```
 
-`packaging/homebrew/*.rb.in` are the source templates. The release generator fills a version and real source/DMG digests and attaches installable `.rb` definitions to the public release. The cask selects Apple Silicon or Intel DMGs explicitly.
+`packaging/homebrew/*.rb.in` are the source templates. The release generator fills a version and real source/DMG digests and attaches installable `.rb` definitions to the public release. The cask requires the Apple Silicon DMG and includes Intel only when its final asset exists; an arm-only cask explicitly requires arm64.
 
 ### Local test before publishing
+
+Run installation/audit checks only with owner authorization on a separately restored, backed-up macOS 15 arm64 VM. Definition generation is not installation or signing approval.
 
 ```sh
 # Definitions downloaded from the release (or generated locally from its final assets)
@@ -755,14 +769,14 @@ Verify Gatekeeper behavior on a clean Mac. An unsigned or unnotarized app may re
 
 ### Digests
 
-After the version tag exists and both final DMGs are in `dist/`:
+After the version tag exists and the required final Apple Silicon DMG is in `dist/` (include the optional Intel DMG only when available):
 
 ```sh
 python3 scripts/release.py homebrew --version 0.1.0 --artifacts dist --output dist
 python3 scripts/release.py checksums dist
 ```
 
-The source archive is fetched once and cached as `dist/testd-0.1.0-source.tar.gz`. The generator computes digests from that archive and both architecture-specific DMGs. It refuses to overwrite existing output definitions or checksums. Use a new staging directory after signing or changing assets; retain the previous bytes.
+The source archive is fetched once and cached as `dist/testd-0.1.0-source.tar.gz`. The generator hashes that archive, the required Apple Silicon DMG, and any supplied Intel DMG; missing arm assets or invalid supplied assets fail rather than receiving placeholder checksums. It refuses to overwrite existing definitions or checksums and retains failed downloads as `.partial`. These digests detect changed bytes, not signing or native installation provenance. Use a new staging directory after signing or changing assets; retain the previous bytes.
 
 ### Formula notes
 

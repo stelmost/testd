@@ -348,6 +348,22 @@ class ReleaseTests(unittest.TestCase):
 		with self.assertRaises(ValueError):
 			release.check_version('0.0.0')
 
+	def test_documented_first_release_support_matrix_and_native_gates_match(self):
+		expected = [('Windows 10 22H2', 'amd64'), ('Debian 13', 'amd64'), ('macOS 15', 'arm64')]
+		for name in ('README.md', 'DEVELOPING.md', 'tests/README.md'):
+			with self.subTest(document=name):
+				text = (ROOT / name).read_text(encoding='utf-8')
+				support = text.split('\n## Support matrix\n', 1)[1].split('\n## ', 1)[0]
+				self.assertEqual(re.findall(r'(?m)^\| (.+?) \| (.+?) \|', support)[1:], expected)
+				self.assertIn('best effort', support)
+				self.assertIn('Physical-hardware-specific checks are deferred', support)
+				self.assertIn('Windows 10 22H2 VM signoff remains required', support)
+				self.assertNotIn('Uninstall remains blocked on macOS', text)
+				self.assertNotIn('macOS and Windows product system/desktop checks remain blocked', text)
+				self.assertNotIn('macOS and Windows desktop runs remain blocked', text)
+				self.assertNotIn('macOS and Windows system checks are blocked', text)
+				self.assertNotIn('macOS/Windows product-managed DNS/trust setup remains blocked', text)
+
 	def test_homebrew_definitions_use_real_cached_bytes_and_supported_architectures(self):
 		version = workspace_version()
 		source = f'testd-{version}-source.tar.gz'

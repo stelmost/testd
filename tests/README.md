@@ -2,6 +2,20 @@
 
 `tests/run.py` is the single, OS-detecting test entry point. It works on Linux, macOS, and native Windows; use the Linux environment in WSL. Run it from a normal user terminal. Routine checks need no daemon, account, system integration, or disposable VM.
 
+## Support matrix
+
+The required first-release targets are exactly:
+
+| Required OS | Architecture | Automated coverage |
+|---|---|---|
+| Windows 10 22H2 | amd64 | Hosted Server builds/fixtures do not validate Windows 10 |
+| Debian 13 | amd64 | Required userspace CI; native VM signoff is separate |
+| macOS 15 | arm64 | Required `macos-15` CI; native VM signoff is separate |
+
+Everything else, including Intel macOS, is best effort. Physical-hardware-specific checks are deferred.
+
+Windows 10 22H2 VM signoff remains required. Debian containers share the Ubuntu runner's kernel and do not establish native kernel, resolver/trust, systemd-session, or desktop behavior. Required artifact builds are Windows x64, Linux x64, and macOS arm64 regardless of builder OS; Intel macOS artifacts are optional. Installation and signing approval remain separate from automated checks.
+
 ## Prepare once
 
 Install Python 3.12 or newer, Git, rustup, Bun, and the native Rust compiler prerequisites. Ensure the rustup shims and Bun are on `PATH`; on Unix, `source "$HOME/.cargo/env"` loads the usual Rust installation. Windows Rust builds require Visual Studio C++ tools and the Windows SDK; macOS requires Xcode command-line tools.
@@ -119,7 +133,7 @@ The browser report records engine/user agent, candidate/root hashes, certificate
 | Authentication, name ownership, disconnect, revocation, rollback | Engine, protocol, registry, and `product_flow.rs` tests | Platform workflows and local-user authority boundaries |
 | DNS answers and malformed/unknown names | DNS unit tests and real loopback UDP fixtures | OS resolver routing |
 | TLS validation, pairing, proxy routing, forwarding, and failures | Edge, PKI, `native_tls.rs`, and product-flow tests | Installed OS/browser trust |
-| Preserve unowned integration and remove only proven-owned state | Setup ownership/resolver/trust fixtures | Shared trust hooks, concurrent privileged changes, complete macOS/Windows ownership |
+| Preserve unowned integration and remove only proven-owned state | Setup ownership/resolver/trust fixtures | Shared trust hooks, concurrent privileged changes, native macOS cleanup and Windows ownership validation |
 | Dashboard, quick launches, lifecycle, and local request protections | Engine/launch tests, `tests/host/`, Bun dashboard fixtures | Actual tray/browser, local-user dashboard authorization |
 | Shares, provider exits, and revocation | Fake-provider lifecycle and reconciliation tests | Real providers, network-pause controls, crash recovery |
 | Packaging, rollback, and recovery reports | Python release/harness fixtures and protected artifact checks | Provenance, signing, installed upgrade/uninstall on each platform |
@@ -131,7 +145,7 @@ On macOS, native port-443 validation requires the logged-in user's launchd GUI s
 
 `product_flow.rs` composes registration, DNS, and TLS on ephemeral loopback sockets. Only its test client trusts the root, and its resolver wrapper forbids system integration. It is component evidence, not a full installed daemon, browser, or GUI. Dashboard and setup authorization have component coverage; native multi-user permission checks and Windows private-file ACL validation remain separate evidence. Explicit network-exposure/pause controls remain unfinished; local defaults and TLS do not establish network continuity or exposure policy.
 
-CI provisions the unprivileged profile on Ubuntu 24.04, macOS 15 Apple Silicon/Intel, Windows Server 2025, and Fedora 44 userspace. The Fedora container shares the Ubuntu kernel and has no actual desktop/systemd session; Windows Server is not Windows 11 desktop evidence. A separate website job avoids repeated cross-platform builds, and Python 3.12 fake-state jobs retain minimum-runtime coverage. Manual/tag runs also create unsigned packages/SBOMs after test gates; only tags publish releases. Artifact creation is not installation or signing approval.
+CI requires the unprivileged profile on macOS 15 arm64 and Debian 13 amd64 userspace. Ubuntu 24.04, Intel macOS 15, Windows Server 2025, and Fedora 44 userspace are best effort: their failed or incomplete checks remain visible but do not block required artifact builds. Both containers share the Ubuntu kernel and have no actual desktop/systemd session; hosted Windows Server is not Windows 10 22H2 validation. A separate website job avoids repeated cross-platform builds. Python 3.12 fake-state jobs retain minimum-runtime coverage; only the macOS 15 fixture job is required. Manual/tag runs require Windows x64, Linux x64, and macOS arm64 unsigned packages and SBOMs after required test gates; Intel bundles are optional and only tags publish releases. Artifact creation is not installation or signing approval.
 
 ## Files and manual contracts
 

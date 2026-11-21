@@ -27,6 +27,20 @@ No Caddy, no per-project `/etc/hosts` edits, and no per-project certificates. A 
 
 The same pages are published at <https://testd.dev/docs/>. The product site lives at <https://testd.dev>.
 
+## Support matrix
+
+The required first-release targets are exactly:
+
+| Required OS | Architecture |
+|---|---|
+| Windows 10 22H2 | amd64 |
+| Debian 13 | amd64 |
+| macOS 15 | arm64 |
+
+Everything else, including Intel macOS, is best effort. Physical-hardware-specific checks are deferred.
+
+CI's Debian 13 container covers userspace, not native kernel, system, or desktop behavior. Hosted Windows Server is not Windows 10 validation; Windows 10 22H2 VM signoff remains required. Automated macOS checks use `macos-15` arm64. Builds do not replace native installation, resolver/trust, browser/tray, or signing approval; see [release validation](DEVELOPING.md#release-validation).
+
 ## Install
 
 From source:
@@ -201,7 +215,7 @@ On Linux, `testd uninstall` removes only owned resolver and trust integration an
 
 Windows setup records newly created NRPT rules and machine-root trust under administrator-only `%ProgramData%/testd/ownership`. Removal requires this installation's private ID and unchanged recorded state. Compatible pre-existing state is reused without adoption; legacy or changed state is preserved and reported. Ownership-record backups remain administrator-only after cleanup.
 
-Uninstall remains blocked on macOS until equivalent resolver and trust safeguards exist, and on Windows until the new ownership safeguards are validated natively. This command does not remove the executable or desktop app. Removing the app with the OS uninstaller does not remove the certificate or DNS route.
+On macOS, uninstall uses installation-owned resolver and certificate receipts and refuses changed or unowned state. Run cleanup from the logged-in desktop session and approve the native trust-removal authorization. Windows uninstall remains blocked until its ownership safeguards are validated natively. This command does not remove the executable or desktop app. Removing the app with the OS uninstaller does not remove the certificate or DNS route.
 
 ## URL actions
 
