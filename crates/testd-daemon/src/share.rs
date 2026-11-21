@@ -1225,13 +1225,11 @@ impl Shares {
 		let binary = self.binary_for(share.provider);
 		let front = self.front.as_ref().context("the tailscale front is missing during cleanup")?;
 		let upstream = format!("http://{}", front.plain_addr);
-		let status =
-			match run_briefly(&binary, &["serve".to_owned(), "status".to_owned(), "--json".to_owned()], SWEEP_TIMEOUT)
-				.await
-			{
-				Ok(Some(output)) if output.status.success() => String::from_utf8_lossy(&output.stdout).into_owned(),
-				_ => bail!("could not inspect tailscale serve; leaving :443 alone"),
-			};
+		let status_args = ["serve".to_owned(), "status".to_owned(), "--json".to_owned()];
+		let status = match run_briefly(&binary, &status_args, SWEEP_TIMEOUT).await {
+			Ok(Some(output)) if output.status.success() => String::from_utf8_lossy(&output.stdout).into_owned(),
+			_ => bail!("could not inspect tailscale serve; leaving :443 alone"),
+		};
 		if serde_json::from_str::<serde_json::Value>(&status).is_err() {
 			bail!("tailscale serve returned malformed status; leaving :443 alone");
 		}
@@ -1243,6 +1241,13 @@ impl Shares {
 		let output = run_with_retry(&binary, &args).await?;
 		if !output.status.success() {
 			bail!("{} {} exited with {}; inspect the provider state", binary.display(), args.join(" "), output.status);
+		}
+		/* A successful command does not establish that persistent exposure was removed. */
+		let removal = run_briefly(&binary, &status_args, SWEEP_TIMEOUT).await?;
+		if !removal.is_some_and(|output| {
+			output.status.success() && is_443_available(&String::from_utf8_lossy(&output.stdout))
+		}) {
+			bail!("tailscale serve :443 removal is unverified; inspect the provider state");
 		}
 		Ok(())
 	}

@@ -611,6 +611,44 @@ async fn failed_tailscale_cleanup_blocks_replacement_and_reports_the_error() {
 }
 
 #[tokio::test]
+async fn a_successful_tailscale_stop_requires_confirmed_route_removal() {
+	const OWNED_STATUS: &str = r#"{"Web":{"node.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:7740"}}}}}"#;
+
+	for after_stop in [Some(OWNED_STATUS), Some("not json"), None] {
+		let dir = tempfile::tempdir().unwrap();
+		let started = dir.path().join("started");
+		let stopped = dir.path().join("stopped");
+		let report_after_stop = match after_stop {
+			Some(status) => format!("printf '%s\\n' '{status}'; exit 0"),
+			None => "exit 1".into(),
+		};
+		let body = format!(
+			"#!/bin/sh\n\
+			if [ \"$1\" = status ]; then echo '{{\"Self\":{{\"DNSName\":\"node.ts.net.\"}}}}'; exit; fi\n\
+			if [ \"$1\" = serve ] && [ \"$2\" = status ]; then\n\
+			if [ -e '{0}' ]; then {1}; fi\n\
+			if [ -e '{2}' ]; then printf '%s\\n' '{3}'; else echo '{{}}'; fi\nexit 0\nfi\n\
+			if [ \"$3\" = off ]; then : > '{0}'; else : > '{2}'; fi\nexit 0\n",
+			stopped.display(),
+			report_after_stop,
+			started.display(),
+			OWNED_STATUS,
+		);
+		let provider = script(dir.path(), "tailscale", &body);
+		let shares = Shares::new(Provider::Tailscale, Some(provider), Some(front()));
+		shares.start("app", "127.0.0.1:3000", None).await.unwrap();
+		let error = shares.try_stop("app").await.unwrap_err();
+		assert!(error.to_string().contains("could not stop share app"), "{error}");
+		assert!(stopped.exists(), "the provider's successful off command must be checked");
+		assert!(shares.list().await.is_empty());
+		assert!(shares.registrations.lock().await.route("node.ts.net").is_none());
+		assert!(shares.start("app", "127.0.0.1:3001", None).await.is_err());
+		assert!(shares.start("other", "127.0.0.1:3002", None).await.is_err());
+		assert!(shares.shutdown().await.is_err());
+	}
+}
+
+#[tokio::test]
 async fn a_restart_does_not_remove_or_adopt_a_matching_unowned_serve_entry() {
 	let dir = tempfile::tempdir().unwrap();
 	let (provider, args_file, stopped) = tailscale(dir.path());
