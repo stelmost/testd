@@ -251,7 +251,7 @@ class ReleaseTests(unittest.TestCase):
 		self.assertNotIn('cargo tauri', bundle)
 		release_job = workflow.split('\n  release:\n', 1)[1]
 		condition = next(line.strip() for line in release_job.splitlines() if line.strip().startswith('if:'))
-		self.assertEqual(condition, "if: startsWith(github.ref, 'refs/tags/v')")
+		self.assertEqual(condition, "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
 
 	def test_release_notes_cover_finalized_alpha_security_and_unsigned_policy(self):
 		version = workspace_version()
@@ -283,6 +283,8 @@ class ReleaseTests(unittest.TestCase):
 		self.assertIn('not trusted signing or Gatekeeper approval', text)
 		self.assertIn('SHA256SUMS', text)
 		self.assertIn('SBOM', text)
+		self.assertIn('On Linux and macOS, run `testd uninstall` before removing the app.', text)
+		self.assertIn('Windows CLI uninstall remains blocked.', text)
 
 	def test_ci_required_artifacts_are_selected_by_target_not_builder_os(self):
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')

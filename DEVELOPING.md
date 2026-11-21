@@ -101,14 +101,14 @@ Use hosted CI for the repeatable platform matrix. Use the OS-detecting `tests/ru
 
 No local Rust, Python, Bun, or VM setup is needed for hosted CI. The workflow provisions its tools and build libraries. With the [GitHub CLI](https://cli.github.com/) installed, check authentication with `gh auth status`; the account must be allowed to dispatch this repository's workflows. A personal access token also needs `workflow` scope when pushing changes to `.github/workflows/`.
 
-Commit and push the revision you want tested before dispatching. `--ref master` uses GitHub's copy of `master`, not local or uncommitted changes; replace `master` with a pushed branch name to test that branch. Do not create a version tag just to run tests: version tags can trigger release publishing.
+Commit and push the revision you want tested before dispatching. `--ref master` uses GitHub's copy of `master`, not local or uncommitted changes; replace `master` with a pushed branch name to test that branch. Do not push a version tag just to run tests: version-tag pushes can write GitHub Release assets.
 
 ```sh
 gh workflow run ci.yml --repo LapilliWorks/testd --ref master
 gh run list --repo LapilliWorks/testd --workflow ci.yml --event workflow_dispatch --limit 5
 ```
 
-Alternatively, open the repository's **Actions → ci → Run workflow**, select the branch, and start the run. Manual runs include package and SBOM builds only after the test gates pass. Their unsigned artifacts are retained by GitHub Actions; the release-publishing job stays skipped.
+Alternatively, open the repository's **Actions → ci → Run workflow**, select the branch, and start the run. Manual runs include package and SBOM builds only after the test gates pass. GitHub Actions retains their artifacts. The release-writing job stays skipped even when the dispatch ref is a version tag.
 
 Replace `RUN_ID` in the following commands with the numeric ID from the new run. Confirm its source SHA and URL before interpreting results:
 
@@ -596,7 +596,7 @@ Debian 13 and Fedora 44 container jobs run as a normal user on the Ubuntu runner
 
 Every applicable job runs ignored contracts and executable doctests. Missing prerequisites, unexpected skips, and incomplete checks keep the CI command nonzero; best-effort jobs tolerate that result only at the workflow level, not by changing check statuses. The workflow uploads only `ci-summary.json`, never fixture state or full reports. Python 3.12 fake system-state fixtures retain minimum-runtime coverage; both macOS 15 and 26 are required and Ubuntu/Windows Server are best effort. The dedicated `site` profile runs isolated website checks once.
 
-Real system, service, browser-trust, installer, and desktop checks still require owner authorization and a disposable host with a persisted full-system snapshot; hosted CI does not run them. Tag/manual runs build required Windows x64, Linux x64, and one macOS arm64 artifact on macOS 15, plus SBOMs after required runtime, minimum-runtime fixture, and website gates. Independently validate that same ARM artifact on native 15 and 26; a Mac 26 VM does not replace missing Mac 15 access. Intel macOS artifacts are optional. Artifact requirements are keyed by target, not builder OS. Manual runs use the workspace version and do not publish; publishing is restricted to version tags. Package creation does not replace installation, signing, or uninstall evidence. A green workflow is not release approval. Repository required-check settings must track the required job names and must not make best-effort jobs mandatory.
+Real system, service, browser-trust, installer, and desktop checks still require owner authorization and a disposable host with a persisted full-system snapshot; hosted CI does not run them. Tag/manual runs build required Windows x64, Linux x64, and one macOS arm64 artifact on macOS 15, plus SBOMs after required runtime, minimum-runtime fixture, and website gates. Independently validate that same ARM artifact on native 15 and 26; a Mac 26 VM does not replace missing Mac 15 access. Intel macOS artifacts are optional. Artifact requirements are keyed by target, not builder OS. Manual branch runs use the workspace version; tag-ref builds check the tag version against the workspace. Only version-tag pushes can write GitHub Releases. Package creation does not replace installation, signing, or uninstall evidence. A green workflow is not release approval. Repository required-check settings must track the required job names and must not make best-effort jobs mandatory.
 
 ### System checks need a running daemon
 
@@ -730,7 +730,7 @@ cannot produce notarized or Authenticode-signed artifacts.
 - [ ] Copy the generated `testd.rb` and `testd-gui.rb` into the Homebrew tap, then audit and install them locally
 - [ ] Publish the draft with the changelog entry and validation results
 
-The public workflow produces unsigned tray bundles and does not replace existing release assets on rerun. If an upload is already present, retain a backup before explicitly replacing it. Do not move an existing release tag to different source.
+The public workflow does not use trusted distribution signing. A tag-push run creates a draft only if the release does not already exist. A rerun can add missing assets to an existing release, including a public one, but does not replace existing assets. Do not rerun against a public release unless adding assets is intended. Back up any asset before explicitly replacing it, and do not move an existing release tag to different source.
 
 ### Rollback
 

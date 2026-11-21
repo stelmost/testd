@@ -310,7 +310,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [bundle, sbom]
     runs-on: ubuntu-latest
     permissions:

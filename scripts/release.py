@@ -198,8 +198,8 @@ def main():
 		print('\nUnsigned distribution: macOS is not Developer ID signed or notarized; Windows artifacts are unsigned.')
 		print('An optional macOS ad-hoc resource seal is bundle-integrity evidence only, '
 			'not trusted signing or Gatekeeper approval.')
-		print('Verify SHA256SUMS before installing. Workspace SBOMs accompany the release. '
-			'Run testd uninstall before removing system integration.')
+		print('Verify `SHA256SUMS` before installing. Workspace SBOMs accompany the release.')
+		print('On Linux and macOS, run `testd uninstall` before removing the app. Windows CLI uninstall remains blocked.')
 	elif args.command == 'package':
 		package(args)
 	elif args.command == 'homebrew':
