@@ -253,6 +253,20 @@ class ReleaseTests(unittest.TestCase):
 		condition = next(line.strip() for line in release_job.splitlines() if line.strip().startswith('if:'))
 		self.assertEqual(condition, "if: startsWith(github.ref, 'refs/tags/v')")
 
+	def test_release_notes_distinguish_ad_hoc_integrity_from_trusted_signing(self):
+		version = workspace_version()
+		with patch.object(sys, 'argv', ['release.py', 'release-notes', version]), \
+				redirect_stdout(io.StringIO()) as output:
+			release.main()
+		text = output.getvalue()
+		self.assertIn(f'## [{version}]', text)
+		self.assertIn('Windows artifacts are unsigned', text)
+		self.assertIn('macOS is not Developer ID signed or notarized', text)
+		self.assertIn('optional macOS ad-hoc resource seal', text)
+		self.assertIn('not trusted signing or Gatekeeper approval', text)
+		self.assertIn('SHA256SUMS', text)
+		self.assertIn('SBOM', text)
+
 	def test_ci_required_artifacts_are_selected_by_target_not_builder_os(self):
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
 		bundle = workflow.split('\n  bundle:\n', 1)[1].split('\n  sbom:\n', 1)[0]
@@ -356,6 +370,8 @@ class ReleaseTests(unittest.TestCase):
 				support = text.split('\n## Support matrix\n', 1)[1].split('\n## ', 1)[0]
 				self.assertEqual(re.findall(r'(?m)^\| (.+?) \| (.+?) \|', support)[1:], expected)
 				self.assertIn('best effort', support)
+				self.assertIn('unsigned alpha', text)
+				self.assertIn('ad-hoc', text)
 				self.assertIn('Physical-hardware-specific checks are deferred', support)
 				self.assertIn('Windows 10 22H2 VM signoff remains required', support)
 				self.assertNotIn('Uninstall remains blocked on macOS', text)

@@ -195,8 +195,11 @@ def main():
 		text = (ROOT / 'CHANGELOG.md').read_text()
 		section = text.split(f'## [{args.version}]', 1)[1].split('\n## [', 1)[0]
 		print(f'## [{args.version}]' + section)
-		print('\nUnsigned public tray bundles: macOS notarization and Windows signing are not part of this workflow.')
-		print('Verify SHA256SUMS before installing. Run testd uninstall before removing system integration.')
+		print('\nUnsigned distribution: macOS is not Developer ID signed or notarized; Windows artifacts are unsigned.')
+		print('An optional macOS ad-hoc resource seal is bundle-integrity evidence only, '
+			'not trusted signing or Gatekeeper approval.')
+		print('Verify SHA256SUMS before installing. Workspace SBOMs accompany the release. '
+			'Run testd uninstall before removing system integration.')
 	elif args.command == 'package':
 		package(args)
 	elif args.command == 'homebrew':

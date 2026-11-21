@@ -12,7 +12,7 @@ The required first-release targets are exactly:
 
 Everything else, including Intel macOS, is best effort. Physical-hardware-specific checks are deferred.
 
-Required automated runtime gates are `macos-15` arm64 and Debian 13 amd64 userspace. The Debian container is not native kernel, system, or desktop evidence. Hosted Windows Server is not Windows 10 validation; Windows 10 22H2 VM signoff remains required. All three artifact targets are required regardless of builder OS; `x86_64-apple-darwin` is optional. Native installation, browser/tray, resolver/trust cleanup, and signing approval remain separate release gates.
+Required automated runtime gates are `macos-15` arm64 and Debian 13 amd64 userspace. The Debian container is not native kernel, system, or desktop evidence. Hosted Windows Server is not Windows 10 validation; Windows 10 22H2 VM signoff remains required. All three artifact targets are required regardless of builder OS; `x86_64-apple-darwin` is optional. Native installation, browser/tray, resolver/trust cleanup, and approval of any claimed trusted signing remain separate from automated gates.
 
 ## Prerequisites
 
@@ -220,7 +220,7 @@ This is the runbook for checks **outside hosted CI**: actual OS resolver/trust c
 | Tray, setup, login, GUI workflow | `desktop`, plus separate logout/login evidence | `desktop --app candidate.app --bin candidate`, plus separate login evidence | Desktop runner blocked |
 | Archive/package smoke | `artifacts`; real uninstall remains incomplete | `artifacts`; not complete installed-app evidence | `artifacts`; not complete installed-app evidence |
 | Full installation/upgrade/uninstall | Manual checklist with owned integration and full-system comparison | Manual checklist with owned integration and full-system comparison | Resolver/trust cleanup coverage blocked |
-| Signing/notarization | Record packages as unsigned | Separate credentialed signing and verification | Separate credentialed signing and verification |
+| Signing/notarization | Unsigned alpha; checksums and SBOMs | Optional ad-hoc resource integrity only; not trusted or notarized | Unsigned alpha; no Authenticode claim |
 
 A VM does not bypass a blocked runner. Do not remove its guards, force system checks through direct scripts, or mark blocked platform coverage passed. Required native signoff uses Debian 13 amd64, macOS 15 arm64, and Windows 10 22H2 amd64. Other versions/architectures are best effort.
 
@@ -381,9 +381,9 @@ Complete [INSTALL-01 through INSTALL-10](tests/manual/installation.md) separatel
 
 ### Verify signing and conditional network claims
 
-Manual CI artifacts are unsigned. Record that fact rather than claiming signing/notarization passed. If signed desktop delivery is claimed, follow [Signing and notarization](#signing-and-notarization) and verify the final signed bytes on the target OS. Do not publish a release merely to test signing.
+The first release is an unsigned alpha, not a trusted-signed delivery. A successful free macOS ad-hoc resource seal is bundle-integrity evidence only, never Developer ID signing, notarization, or Gatekeeper approval. Windows remains unsigned; Linux provides checksums/SBOMs without additional signing infrastructure. Record observed OS security prompts and installation outcomes truthfully. The credentialed checks below apply only to a separately approved trusted-signed release, not this alpha.
 
-On macOS, verify the actual signed app and its notarization ticket:
+For a separately approved Developer ID signed and notarized release, verify the actual app and its ticket:
 
 ```sh
 codesign --verify --deep --strict --verbose=2 /path/to/Testd.app
@@ -392,13 +392,13 @@ spctl --assess --type execute -vv /path/to/Testd.app
 xcrun stapler validate /path/to/Testd.app
 ```
 
-On Windows, inspect the installer and installed executables:
+For a separately approved Authenticode-signed release, inspect the Windows installer and installed executables:
 
 ```powershell
 Get-AuthenticodeSignature 'C:\candidate\testd-setup.exe' | Format-List Status,StatusMessage,SignerCertificate
 ```
 
-Require the expected signer, not merely any valid or ad-hoc signature. SmartScreen reputation and actual OS prompts need separate observations. Missing signing credentials leave signed-delivery claims unverified, not passed.
+For trusted-signing claims, require the expected signer, not merely any valid or ad-hoc signature. SmartScreen reputation and actual OS prompts need separate observations. Missing credentials leave a signed-delivery claim unverified, not passed; the unsigned alpha makes no such claim.
 
 If a release claims real-provider sharing or non-loopback network behavior, use the separately authorized two-machine procedure in [network and sharing contracts](tests/manual/network-and-sharing.md). Fake providers do not establish real exposure or crash cleanup; unimplemented network controls remain blocked. Do not enable external exposure or a real provider without explicit approval.
 
@@ -541,7 +541,7 @@ The tray is a public source build and a free release artifact. On a backed-up di
 
 ### Packaging and signing
 
-These require credentials and hardware that do not belong in this repository:
+The unsigned alpha needs no paid signing credentials. The following credentialed reference applies only to separately approved trusted-signed delivery, not the alpha:
 
 - **macOS:** Developer ID certificate, notarization credentials, `codesign`,
   `spctl`, `xcrun stapler`.
@@ -703,14 +703,15 @@ Removing the app does not remove the machine trust root or the DNS route. On Lin
 
 ### Sign
 
-Notarization, Authenticode, and the Homebrew tap have their own runbooks:
-[Signing and notarization](#signing-and-notarization) and [Homebrew](#homebrew). Browser checks are in
-[Browser validation](#browser-validation).
+The first release is an unsigned alpha. Do not purchase signing certificates or Apple Developer Program membership for this alpha.
 
-- macOS: `codesign` with the Developer ID Application certificate, then
-  `xcrun notarytool submit --wait` and `xcrun stapler staple`. Ship the privacy
-  manifest from `packaging/macos/PrivacyInfo.xcprivacy`.
-- Windows: Authenticode sign the NSIS installer and the binaries; submit to SmartScreen.
+- macOS: Optional free ad-hoc sealing only when useful for bundle resource integrity; no Developer ID, notarization, or Gatekeeper approval claim
+- Windows: Remains unsigned; no Authenticode or SmartScreen reputation claim
+- Linux: Checksums and workspace SBOMs; no additional signing infrastructure
+
+Validate any ad-hoc seal on the final app before producing its DMG, then generate Homebrew definitions and checksums from those final bytes. Bundle sealing and package creation do not replace native installation approval. Keep the privacy manifest from `packaging/macos/PrivacyInfo.xcprivacy`.
+
+[Signing and notarization](#signing-and-notarization) is a credentialed reference outside this alpha. [Homebrew](#homebrew) and [Browser validation](#browser-validation) cover their separate checks.
 
 This repository does not ship an updater. Releases are installed by the user: the archive, `brew upgrade`, or the system package manager. The binaries never check for a new version.
 
@@ -722,7 +723,7 @@ cannot produce notarized or Authenticode-signed artifacts.
 - [ ] Tag `vX.Y.Z` and push the tag after the pre-tag checks
 - [ ] Let CI build CLI archives and tray bundles, generate SBOMs, Homebrew definitions and checksums, and attach them to a draft GitHub release
 - [ ] Download the draft assets and run artifact, host, browser, and desktop validation on the real supported platforms
-- [ ] Apply signing/notarization separately if shipping signed desktop downloads; regenerate definitions and checksums from the final signed bytes
+- [ ] Validate any useful, owner-approved free macOS ad-hoc resource sealing before generating definitions/checksums from final bytes; do not claim trusted signing or notarization
 - [ ] Copy the generated `testd.rb` and `testd-gui.rb` into the Homebrew tap, then audit and install them locally
 - [ ] Publish the draft with the changelog entry and validation results
 
@@ -765,7 +766,7 @@ brew uninstall --formula testd
 brew uninstall --cask testd-gui
 ```
 
-Verify Gatekeeper behavior on a clean Mac. An unsigned or unnotarized app may require a user override; do not claim a normal signed-install experience until signing and notarization have been verified.
+Verify actual installation and Gatekeeper behavior on an authorized clean Mac. An unsigned or unnotarized app may require a user override; successful ad-hoc resource sealing is not Gatekeeper approval or a trusted signed-install experience.
 
 ### Digests
 
@@ -799,7 +800,9 @@ The source archive is fetched once and cached as `dist/testd-0.1.0-source.tar.gz
 
 ## Signing and notarization
 
-Optional signing of the public desktop artifacts: macOS notarization and Windows Authenticode need operator-supplied credentials. The public CI workflow does not sign or notarize. Source publication and CLI source builds do not require these credentials.
+The first release is an unsigned alpha: Windows stays unsigned, and Linux uses checksums/SBOMs without new signing infrastructure. Free macOS ad-hoc resource sealing may be used only for bundle integrity; it is not Developer ID signing, notarization, or Gatekeeper approval. No paid certificate or Apple Developer Program purchase is required or authorized for this alpha.
+
+The credentialed macOS notarization and Windows Authenticode instructions below are reference material for separately approved trusted-signed delivery outside this alpha. They are not alpha prerequisites and do not authorize purchases. Source publication and CLI source builds do not require these credentials.
 
 ### macOS
 

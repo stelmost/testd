@@ -16,6 +16,8 @@ Everything else, including Intel macOS, is best effort. Physical-hardware-specif
 
 Windows 10 22H2 VM signoff remains required. Debian containers share the Ubuntu runner's kernel and do not establish native kernel, resolver/trust, systemd-session, or desktop behavior. Required artifact builds are Windows x64, Linux x64, and macOS arm64 regardless of builder OS; Intel macOS artifacts are optional. Installation and signing approval remain separate from automated checks.
 
+The release is an unsigned alpha. Optional free macOS ad-hoc resource sealing is integrity evidence, not Developer ID signing, notarization, or Gatekeeper approval. Windows remains unsigned; Linux uses checksums and SBOMs without new signing infrastructure. Record observed security prompts and installation results truthfully; no trusted-signing pass is implied.
+
 ## Prepare once
 
 Install Python 3.12 or newer, Git, rustup, Bun, and the native Rust compiler prerequisites. Ensure the rustup shims and Bun are on `PATH`; on Unix, `source "$HOME/.cargo/env"` loads the usual Rust installation. Windows Rust builds require Visual Studio C++ tools and the Windows SDK; macOS requires Xcode command-line tools.
