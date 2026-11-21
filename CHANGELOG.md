@@ -19,7 +19,7 @@ First public alpha. The CLI, daemon, and tray ship as one version; desktop bundl
 - Loopback dashboard with live names, shares, quick launches, access requests, issued tokens, and certificate controls; `testd dashboard` prints its authenticated URL, and tray and CLI links carry the owner-scoped per-run credential
 - Supervised quick launches: probe before registering, detect the child's listening port, rebind live, and stop the process group
 - Tray app with a setup wizard, health notices, quick launches, certificate management, and launch at login; its menu lists live names with open and stop beneath each, and saved quick launches with start or stop
-- `testd share` through spawned `cloudflared`, `ngrok`, or `tailscale serve`; the daemon owns the tunnel for the registration's lifetime
+- `testd share` through `cloudflared`, `ngrok`, or `tailscale serve`. All shares use the daemon's plain HTTP routing listener and a claim-bound alias. A fresh daemon does not restore aliases; after a crash, an empty share list does not prove provider cleanup.
 - `testd init`, `doctor [--json] [--fix]`, `url`, `uninstall`, and `export-caddyfile`
 - `doctor` checks the resolver, the root trust, and the edge, repairs them with `--fix` (macOS DNS cache and mDNSResponder, Windows NRPT rules and the machine root store), and reports when an external front owns TLS
 - Host opt-ins: `[host] allow_remote_targets` for explicit remote targets, `[host] trust_forwarded_for` for a trusted front proxy, and `[host] edge_enabled = false` to drop only the built-in TLS listener while plain HTTP routing stays up
