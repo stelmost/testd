@@ -76,27 +76,23 @@ test('Playwright evidence checks fail closed without trusted loopback results', 
 	expect(() => validateBrowserChecks(JSON.stringify(checks.map(check => ({ ...check, status: 'fail' }))))).toThrow();
 });
 
-test('Playwright browsers use isolated profiles and no inherited proxy or TLS overrides', () => {
+test('Playwright browsers use isolated profiles and no inherited proxy or TLS overrides', async () => {
 	const names = ['HTTPS_PROXY', 'http_proxy', 'SSL_CERT_FILE', 'NODE_TLS_REJECT_UNAUTHORIZED', 'SSLKEYLOGFILE'];
-	const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
-	try {
-		for (const name of names) process.env[name] = 'fixture';
-		const chromium = browserLaunchOptions('chromium', '/fixture/home', '/fixture/tmp');
-		for (const name of names) expect(chromium.env[name]).toBeUndefined();
-		expect(chromium.env.HOME).toBe('/fixture/home');
-		expect(chromium.env.TMPDIR).toBe('/fixture/tmp');
-		expect(chromium.channel).toBe('chromium');
-		expect(chromium.chromiumSandbox).toBe(true);
-		expect(chromium.args).toContain('--no-proxy-server');
-		const firefox = browserLaunchOptions('firefox', '/fixture/home', '/fixture/tmp');
-		expect(firefox.firefoxUserPrefs['network.proxy.type']).toBe(0);
-		expect(firefox.firefoxUserPrefs['network.trr.mode']).toBe(5);
-	} finally {
-		for (const name of names) {
-			if (previous[name] === undefined) delete process.env[name];
-			else process.env[name] = previous[name];
-		}
-	}
+	const environment = Object.fromEntries(names.map(name => [name, 'fixture']));
+	const chromium = browserLaunchOptions('chromium', '/fixture/home', '/fixture/tmp', environment);
+	for (const name of names) expect(chromium.env[name]).toBeUndefined();
+	expect(chromium.env.HOME).toBe('/fixture/home');
+	expect(chromium.env.TMPDIR).toBe('/fixture/tmp');
+	expect(chromium.channel).toBe('chromium');
+	expect(chromium.chromiumSandbox).toBe(true);
+	expect(chromium.args).toContain('--no-proxy-server');
+	const firefox = browserLaunchOptions('firefox', '/fixture/home', '/fixture/tmp', environment);
+	for (const name of names) expect(firefox.env[name]).toBeUndefined();
+	expect(firefox.firefoxUserPrefs['network.proxy.type']).toBe(0);
+	expect(firefox.firefoxUserPrefs['network.trr.mode']).toBe(5);
+	for (const name of names) expect(environment[name]).toBe('fixture');
+	// Constructing browser environments must not change Bun's native proxy state.
+	expect((await fetch(`${origin}/meta`)).ok).toBe(true);
 });
 
 test('binds concurrent fixtures to distinct ephemeral ports', async () => {

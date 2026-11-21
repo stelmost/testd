@@ -154,8 +154,13 @@ async function prepareBrowserTrust(engine: string, home: string, profile: string
 	await certificateTool(['-A', '-d', `sql:${store}`, '-n', 'testd fixture root', '-t', 'C,,', '-i', root]);
 }
 
-export function browserLaunchOptions(engine: string, home: string, temporary: string): any {
-	const contextEnv = { ...process.env, HOME: home, USERPROFILE: home,
+export function browserLaunchOptions(
+	engine: string,
+	home: string,
+	temporary: string,
+	environment: NodeJS.ProcessEnv,
+): any {
+	const contextEnv = { ...environment, HOME: home, USERPROFILE: home,
 		APPDATA: join(home, 'AppData', 'Roaming'), LOCALAPPDATA: join(home, 'AppData', 'Local'),
 		XDG_CONFIG_HOME: join(home, '.config'), XDG_CACHE_HOME: join(home, '.cache'),
 		XDG_DATA_HOME: join(home, '.local', 'share'), XDG_RUNTIME_DIR: join(home, '.runtime'),
@@ -216,7 +221,7 @@ async function browserRun(playwright: any, engine: string): Promise<void> {
 		await prepareBrowserTrust(engine, browserHome, profile, root);
 		launchAttempted = true;
 		context = await playwright[engine].launchPersistentContext(profile,
-			browserLaunchOptions(engine, browserHome, temporary));
+			browserLaunchOptions(engine, browserHome, temporary, process.env));
 		await context.route('**/*', (route: any) => {
 			const url = new URL(route.request().url());
 			if (['https:', 'wss:'].includes(url.protocol) && allowed.has(url.hostname) && Number(url.port || 443) === port) {
