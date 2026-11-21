@@ -9,10 +9,13 @@ The required first-release targets are exactly:
 | Windows 10 22H2 | amd64 | `x86_64-pc-windows-msvc` |
 | Debian 13 | amd64 | `x86_64-unknown-linux-gnu` |
 | macOS 15 | arm64 | `aarch64-apple-darwin` |
+| macOS 26 | arm64 | `aarch64-apple-darwin`, shared with macOS 15 |
 
 Everything else, including Intel macOS, is best effort. Physical-hardware-specific checks are deferred.
 
-Required automated runtime gates are `macos-15` arm64 and Debian 13 amd64 userspace. The Debian container is not native kernel, system, or desktop evidence. Hosted Windows Server is not Windows 10 validation; Windows 10 22H2 VM signoff remains required. All three artifact targets are required regardless of builder OS; `x86_64-apple-darwin` is optional. Native installation, browser/tray, resolver/trust cleanup, and approval of any claimed trusted signing remain separate from automated gates.
+Required automated runtime gates are `macos-15` arm64, `macos-26` arm64, and Debian 13 amd64 userspace. The Debian container is not native kernel, system, or desktop evidence. Hosted Windows Server is not Windows 10 validation; Windows 10 22H2 VM signoff remains required. All three unique artifact targets are required regardless of builder OS; `x86_64-apple-darwin` is optional.
+
+Native signoff on both macOS 15 and 26 remains required, using one ARM artifact built on macOS 15 and checking identical source/artifact hashes on each OS. Missing native macOS 15 access is an access gate, not a hardware-specific deferral; Mac 26 cannot close it. Native installation, browser/tray, resolver/trust cleanup, and approval of any claimed trusted signing remain separate from automated gates.
 
 ## Prerequisites
 
@@ -115,7 +118,7 @@ gh run watch RUN_ID --repo LapilliWorks/testd --interval 45 --exit-status
 gh run view RUN_ID --repo LapilliWorks/testd --web
 ```
 
-`watch --exit-status` returns nonzero for an unsuccessful run. A transport error or a watch timeout is not itself a CI failure: inspect `run view` and resume watching the same run. Require `ci-summary-macos-15` and `ci-summary-debian-13` to show every applicable selected unprivileged stage passing with the expected GUI scope. For a full manual run, also require the website, macOS 15 minimum-runtime fixtures, Windows x64/Linux x64/macOS arm64 bundle jobs, and SBOM job to pass. Other runtime summaries and Intel bundles are best effort; review their failures and incomplete coverage without relabelling them as passes. An intentionally skipped release-publishing job is not missing test evidence.
+`watch --exit-status` returns nonzero for an unsuccessful run. A transport error or a watch timeout is not itself a CI failure: inspect `run view` and resume watching the same run. Require `ci-summary-macos-15`, `ci-summary-macos-26`, and `ci-summary-debian-13` to show every applicable selected unprivileged stage passing with the expected GUI scope. For a full manual run, also require the website, macOS 15 and 26 minimum-runtime fixtures, Windows x64/Linux x64/macOS arm64 bundle jobs, and SBOM job to pass. Only one required ARM bundle is built, on macOS 15. Other runtime summaries and Intel bundles are best effort; review their failures and incomplete coverage without relabelling them as passes. An intentionally skipped release-publishing job is not missing test evidence.
 
 ### Inspect failures and repeat a run
 
@@ -212,7 +215,7 @@ This is the runbook for checks **outside hosted CI**: actual OS resolver/trust c
 
 ### What can currently run
 
-| Check | Debian 13 amd64 VM | macOS 15 arm64 VM | Windows 10 22H2 amd64 VM |
+| Check | Debian 13 amd64 VM | macOS 15 and 26 arm64 VMs | Windows 10 22H2 amd64 VM |
 |---|---|---|---|
 | Resolver/trust installation and owned cleanup | `host --system`; shared trust effects still require independent comparison | `host --system`; full-system trust comparison still required | Blocked by ownership safeguards |
 | Actual service supervision | `service` with a real systemd user session | `service` with a logged-in launchd GUI session | Not applicable: no CLI service shipped |
@@ -222,11 +225,11 @@ This is the runbook for checks **outside hosted CI**: actual OS resolver/trust c
 | Full installation/upgrade/uninstall | Manual checklist with owned integration and full-system comparison | Manual checklist with owned integration and full-system comparison | Resolver/trust cleanup coverage blocked |
 | Signing/notarization | Unsigned alpha; checksums and SBOMs | Optional ad-hoc resource integrity only; not trusted or notarized | Unsigned alpha; no Authenticode claim |
 
-A VM does not bypass a blocked runner. Do not remove its guards, force system checks through direct scripts, or mark blocked platform coverage passed. Required native signoff uses Debian 13 amd64, macOS 15 arm64, and Windows 10 22H2 amd64. Other versions/architectures are best effort.
+A VM does not bypass a blocked runner. Do not remove its guards, force system checks through direct scripts, or mark blocked platform coverage passed. Required native signoff uses Debian 13 amd64, macOS 15 arm64, macOS 26 arm64, and Windows 10 22H2 amd64. Run the Mac column separately on 15 and 26 using the same Mac 15-built ARM artifact and record its source/hash in each report. Other versions/architectures are best effort. Missing native Mac 15 access remains an access gate, not a deferred hardware-specific check.
 
 ### Prepare and save the VM baseline
 
-1. Create a disposable VM with a real desktop and a fresh local test user. Use Debian 13 amd64, macOS 15 arm64 on Apple hardware, and Windows 10 22H2 amd64 for required signoff. Ubuntu, Fedora, Intel macOS, and other targets are best effort. Containers, WSL, and Windows Server do not substitute for the required OS checks.
+1. Create a disposable VM with a real desktop and a fresh local test user. Use Debian 13 amd64, macOS 15 arm64, macOS 26 arm64, and Windows 10 22H2 amd64 for required signoff. Ubuntu, Fedora, Intel macOS, and other targets are best effort. Containers, WSL, Windows Server, and a different Mac major version do not substitute for the required OS checks.
 2. Before changing the guest, persist a complete restorable backup of its disks and VM configuration outside the guest and outside temporary storage. Check that your VM manager can restore it. Do not rely solely on an in-guest snapshot or `system-before/` report.
 3. Install Python 3.12 or newer, Git, and the suite-specific tools below. Install Bun for browser fixtures and the selected real browsers with clean profiles and no accounts. Install native GUI runtime dependencies for the candidate package; source builds additionally need the [build prerequisites](#prerequisites). Use only synthetic projects and credentials.
 4. Copy the exact candidate assets and a checkout of their source revision into the VM. Record the run URL, source SHA, OS image/version/architecture, tool/browser versions, and artifact SHA-256 digests. Do not execute candidate binaries on your everyday host merely to check their version.
@@ -537,7 +540,7 @@ scripts stop at the HTTP layer on purpose; they cannot judge a padlock.
 
 ### GUI
 
-The tray is a public source build and a free release artifact. On a backed-up disposable Debian 13 desktop, run `python3 tests/run.py desktop --app <candidate> --bin <candidate-cli> --report <new-report>` to record `tests/host/gui-checklist.md`. The app and CLI must come from the intended source. macOS 15 arm64 desktop runs use installation-owned resolver/trust cleanup and require the logged-in GUI session and native authorization. Windows desktop runs remain blocked pending native ownership validation. Attach/detach of existing processes is deferred and does not gate this release.
+The tray is a public source build and a free release artifact. On a backed-up disposable Debian 13 desktop, run `python3 tests/run.py desktop --app <candidate> --bin <candidate-cli> --report <new-report>` to record `tests/host/gui-checklist.md`. The app and CLI must come from the intended source. macOS 15 and 26 arm64 desktop runs use installation-owned resolver/trust cleanup and require the logged-in GUI session and native authorization. Windows desktop runs remain blocked pending native ownership validation. Attach/detach of existing processes is deferred and does not gate this release.
 
 ### Packaging and signing
 
@@ -587,13 +590,13 @@ Recovery requires the same platform and any necessary sudo or elevation. It leav
 
 ### CI coverage
 
-`.github/workflows/ci.yml` requires the `ci` suite on macOS 15 arm64 (`macos-15`) and Debian 13 amd64 userspace. Ubuntu 24.04, macOS 15 Intel, Windows Server 2025, and Fedora 44 userspace are best effort. Hosted OS jobs install Python 3.14; container jobs use their distro Python. Each job provisions stable and MSRV Rust, `cargo-deny`, Bun, and checkout dependencies. Linux build libraries come from the local dependency action; Xcode and MSVC/Windows SDK prerequisites come from hosted runner images. Rust caches are isolated by platform, and only master runs save them.
+`.github/workflows/ci.yml` requires the `ci` suite on macOS 15 arm64 (`macos-15`), macOS 26 arm64 (`macos-26`), and Debian 13 amd64 userspace. Both Mac labels are listed as arm64 in GitHub's [available runner images](https://github.com/actions/runner-images#available-images); Intel uses separate labels. Ubuntu 24.04, macOS 15 Intel, Windows Server 2025, and Fedora 44 userspace are best effort. Hosted OS jobs install Python 3.14; container jobs use their distro Python. Each job provisions stable and MSRV Rust, `cargo-deny`, Bun, and checkout dependencies. Linux build libraries come from the local dependency action; Xcode and MSVC/Windows SDK prerequisites come from hosted runner images. Rust caches are isolated by platform, and only master runs save them.
 
 Debian 13 and Fedora 44 container jobs run as a normal user on the Ubuntu runner's kernel. They establish userspace compilation and CLI/daemon behavior, not native kernel, resolver, trust, systemd-session, SELinux, or desktop integration. Hosted Windows Server is not Windows 10 22H2 validation; the required Windows 10 VM signoff remains separate.
 
-Every applicable job runs ignored contracts and executable doctests. Missing prerequisites, unexpected skips, and incomplete checks keep the CI command nonzero; best-effort jobs tolerate that result only at the workflow level, not by changing check statuses. The workflow uploads only `ci-summary.json`, never fixture state or full reports. Python 3.12 fake system-state fixtures retain minimum-runtime coverage; macOS 15 is required and Ubuntu/Windows Server are best effort. The dedicated `site` profile runs isolated website checks once.
+Every applicable job runs ignored contracts and executable doctests. Missing prerequisites, unexpected skips, and incomplete checks keep the CI command nonzero; best-effort jobs tolerate that result only at the workflow level, not by changing check statuses. The workflow uploads only `ci-summary.json`, never fixture state or full reports. Python 3.12 fake system-state fixtures retain minimum-runtime coverage; both macOS 15 and 26 are required and Ubuntu/Windows Server are best effort. The dedicated `site` profile runs isolated website checks once.
 
-Real system, service, browser-trust, installer, and desktop checks still require owner authorization and a disposable host with a persisted full-system snapshot; hosted CI does not run them. Tag/manual runs build required Windows x64, Linux x64, and macOS arm64 artifacts and SBOMs after required runtime, minimum-runtime fixture, and website gates. Intel macOS artifacts are optional. Artifact requirements are keyed by target, not builder OS. Manual runs use the workspace version and do not publish; publishing is restricted to version tags. Package creation does not replace installation, signing, or uninstall evidence. A green workflow is not release approval. Repository required-check settings must track the required job names and must not make best-effort jobs mandatory.
+Real system, service, browser-trust, installer, and desktop checks still require owner authorization and a disposable host with a persisted full-system snapshot; hosted CI does not run them. Tag/manual runs build required Windows x64, Linux x64, and one macOS arm64 artifact on macOS 15, plus SBOMs after required runtime, minimum-runtime fixture, and website gates. Independently validate that same ARM artifact on native 15 and 26; a Mac 26 VM does not replace missing Mac 15 access. Intel macOS artifacts are optional. Artifact requirements are keyed by target, not builder OS. Manual runs use the workspace version and do not publish; publishing is restricted to version tags. Package creation does not replace installation, signing, or uninstall evidence. A green workflow is not release approval. Repository required-check settings must track the required job names and must not make best-effort jobs mandatory.
 
 ### System checks need a running daemon
 
@@ -669,7 +672,7 @@ A free release is a version tag, CLI archives, public tray bundles, workspace SB
 - [ ] `python3 tests/run.py site`
 - [ ] `python3 scripts/release.py verify-version`
 - [ ] Enable GitHub private vulnerability reporting for the public repository
-- [ ] Retain required Debian 13 amd64, macOS 15 arm64, and Windows 10 22H2 amd64 VM signoffs and reports for each claimed browser; physical-hardware-specific checks are deferred
+- [ ] Retain required Debian 13 amd64, macOS 15 arm64, macOS 26 arm64, and Windows 10 22H2 amd64 VM signoffs and browser reports; both Macs must validate the same Mac 15-built ARM artifact; physical-hardware-specific checks are deferred
 - [ ] `scripts/release-sbom.sh` and attach the SBOMs to the release
 - [ ] Finalize the dated changelog entry; synchronize all Cargo package versions; packaging inherits the GUI package version, and refresh `Cargo.lock` when dependencies change
 - [ ] Run `testd doctor --json` against a clean VM and keep the output
@@ -693,7 +696,7 @@ cargo packager --release --packages testd-gui --formats default \
 
 Use the explicit release formats from the CI matrix, and a fresh output directory for each candidate. Package files are placed directly in `target/release/bundle/`; `scripts/release.py` stages their stable public names without collecting nested tool executables.
 
-Artifacts: CLI `.tar.gz` (Linux/macOS) or `.zip` (Windows), `.dmg` containing `.app` (macOS), `.exe` (Windows NSIS), `.AppImage`/`.deb` (Linux). CI requires macOS arm64, Linux x64, and Windows x64 builds; Intel macOS is best effort.
+Artifacts: CLI `.tar.gz` (Linux/macOS) or `.zip` (Windows), `.dmg` containing `.app` (macOS), `.exe` (Windows NSIS), `.AppImage`/`.deb` (Linux). CI requires macOS arm64, Linux x64, and Windows x64 builds; Intel macOS is best effort. Build one ARM artifact on macOS 15 for separate native validation on 15 and 26, not competing ARM bundles from different builders.
 
 AppImage bundles the linked GTK libraries and preserves ordinary GTK backend selection, including an explicit `GDK_BACKEND`. Its startup hook saves the host environment for browser and application launches before the bundled runtime changes it. Validate the actual desktop/tray host, host-browser handoff and a normal quick launch without XWayland before claiming support; packaging alone is not native desktop evidence.
 
@@ -754,7 +757,7 @@ homebrew-testd/
 
 ### Local test before publishing
 
-Run installation/audit checks only with owner authorization on a separately restored, backed-up macOS 15 arm64 VM. Definition generation is not installation or signing approval.
+Run installation/audit checks only with owner authorization on separately restored, backed-up macOS 15 and 26 arm64 VMs using the same Mac 15-built ARM artifact. Retain separate results for each OS. Definition generation is not installation or signing approval.
 
 ```sh
 # Definitions downloaded from the release (or generated locally from its final assets)

@@ -11,10 +11,11 @@ The required first-release targets are exactly:
 | Windows 10 22H2 | amd64 | Hosted Server builds/fixtures do not validate Windows 10 |
 | Debian 13 | amd64 | Required userspace CI; native VM signoff is separate |
 | macOS 15 | arm64 | Required `macos-15` CI; native VM signoff is separate |
+| macOS 26 | arm64 | Required `macos-26` CI; native VM signoff is separate |
 
 Everything else, including Intel macOS, is best effort. Physical-hardware-specific checks are deferred.
 
-Windows 10 22H2 VM signoff remains required. Debian containers share the Ubuntu runner's kernel and do not establish native kernel, resolver/trust, systemd-session, or desktop behavior. Required artifact builds are Windows x64, Linux x64, and macOS arm64 regardless of builder OS; Intel macOS artifacts are optional. Installation and signing approval remain separate from automated checks.
+Windows 10 22H2 VM signoff remains required. Debian containers share the Ubuntu runner's kernel and do not establish native kernel, resolver/trust, systemd-session, or desktop behavior. Required artifact builds are Windows x64, Linux x64, and macOS arm64 regardless of builder OS; Intel macOS artifacts are optional. Native signoff on both macOS 15 and 26 remains required, using one ARM artifact built on macOS 15 with the same source and artifact hashes on each OS. Missing native macOS 15 access is an access gate, not a hardware-specific deferral. Installation and signing approval remain separate from automated checks.
 
 The release is an unsigned alpha. Optional free macOS ad-hoc resource sealing is integrity evidence, not Developer ID signing, notarization, or Gatekeeper approval. Windows remains unsigned; Linux uses checksums and SBOMs without new signing infrastructure. Record observed security prompts and installation results truthfully; no trusted-signing pass is implied.
 
@@ -87,6 +88,8 @@ The console is quiet by default and shows a bounded output tail on command failu
 
 Ignored, skipped, inapplicable, blocked, and unrun checks are never passes. A completed unprivileged profile is not native UI, browser trust, installer, provider, or release approval. Review individual outcomes and candidate provenance, not only the exit code.
 
+Interpret earlier reports by their recorded source revision and selected scope. A newly required OS does not retroactively turn older best-effort or syntax-only Mac 26 observations into native release approval; retain those results unchanged and require matching candidate provenance for current signoff.
+
 ## System and interactive checks
 
 System, artifact, browser, and desktop checks require a clean disposable machine, an interactive terminal, a new persisted report, and a persisted full-system snapshot. Scoped runner backups do not cover the full OS, user profile, browser stores, package installation, login items, or shared CA-store effects. Unix system checks need `sudo -v` in the same terminal. macOS resolver/trust, browser-system, and desktop checks must start in the logged-in desktop's terminal (`launchctl managername` reports `Aqua`); SSH cannot present the authorization required to remove system trust. Approve the native trust dialogs during the run. The standalone `service` suite uses a private home, high ports, and a uniquely named owned systemd or launchd job; it requires the real user session but no resolver/trust changes or elevated privileges. Do not use elevated privileges for routine `check` or `ci`.
@@ -147,7 +150,7 @@ On macOS, native port-443 validation requires the logged-in user's launchd GUI s
 
 `product_flow.rs` composes registration, DNS, and TLS on ephemeral loopback sockets. Only its test client trusts the root, and its resolver wrapper forbids system integration. It is component evidence, not a full installed daemon, browser, or GUI. Dashboard and setup authorization have component coverage; native multi-user permission checks and Windows private-file ACL validation remain separate evidence. Explicit network-exposure/pause controls remain unfinished; local defaults and TLS do not establish network continuity or exposure policy.
 
-CI requires the unprivileged profile on macOS 15 arm64 and Debian 13 amd64 userspace. Ubuntu 24.04, Intel macOS 15, Windows Server 2025, and Fedora 44 userspace are best effort: their failed or incomplete checks remain visible but do not block required artifact builds. Both containers share the Ubuntu kernel and have no actual desktop/systemd session; hosted Windows Server is not Windows 10 22H2 validation. A separate website job avoids repeated cross-platform builds. Python 3.12 fake-state jobs retain minimum-runtime coverage; only the macOS 15 fixture job is required. Manual/tag runs require Windows x64, Linux x64, and macOS arm64 unsigned packages and SBOMs after required test gates; Intel bundles are optional and only tags publish releases. Artifact creation is not installation or signing approval.
+CI requires the unprivileged profile on macOS 15 arm64, macOS 26 arm64, and Debian 13 amd64 userspace. Ubuntu 24.04, Intel macOS 15, Windows Server 2025, and Fedora 44 userspace are best effort: their failed or incomplete checks remain visible but do not block required artifact builds. Both containers share the Ubuntu kernel and have no actual desktop/systemd session; hosted Windows Server is not Windows 10 22H2 validation. A separate website job avoids repeated cross-platform builds. Python 3.12 fake-state jobs retain minimum-runtime coverage; both macOS 15 and 26 fixture jobs are required. Manual/tag runs require Windows x64, Linux x64, and one macOS arm64 unsigned bundle built on macOS 15, plus SBOMs after required test gates. The same ARM artifact needs separate native signoff on 15 and 26; Intel bundles are optional and only tags publish releases. Artifact creation is not installation or signing approval.
 
 ## Files and manual contracts
 

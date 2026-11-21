@@ -145,7 +145,7 @@ class ReleaseTests(unittest.TestCase):
 		test_job = workflow.split('\n  test:\n', 1)[1].split('\n  linux-userspace:\n', 1)[0]
 		userspace = workflow.split('\n  linux-userspace:\n', 1)[1].split('\n  site:\n', 1)[0]
 		matrix = dict(re.findall(r'(?m)^          - os: (.+)\n            required: (true|false)$', test_job))
-		self.assertEqual(matrix, {'ubuntu-24.04': 'false', 'macos-15': 'true',
+		self.assertEqual(matrix, {'ubuntu-24.04': 'false', 'macos-15': 'true', 'macos-26': 'true',
 			'macos-15-intel': 'false', 'windows-2025': 'false'})
 		self.assertIn("python-version: '3.14'", test_job)
 		for job in (test_job, userspace):
@@ -294,12 +294,15 @@ class ReleaseTests(unittest.TestCase):
 		self.assertNotRegex(bundle, r'(?m)^ {6,}continue-on-error:')
 		self.assertIn('if-no-files-found: error', bundle)
 		self.assertIn('- os: macos-15\n            target: aarch64-apple-darwin', bundle)
+		self.assertEqual(bundle.count('target: aarch64-apple-darwin'), 1)
+		self.assertNotIn('- os: macos-26', bundle)
 
-	def test_ci_minimum_runtime_fixtures_only_require_the_supported_native_mac(self):
+	def test_ci_minimum_runtime_fixtures_require_both_supported_macos_versions(self):
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
 		fixtures = workflow.split('\n  system-state-fixtures:\n', 1)[1].split('\n  bundle:\n', 1)[0]
 		matrix = dict(re.findall(r'(?m)^          - os: (.+)\n            required: (true|false)$', fixtures))
-		self.assertEqual(matrix, {'ubuntu-latest': 'false', 'macos-15': 'true', 'windows-latest': 'false'})
+		self.assertEqual(matrix, {'ubuntu-latest': 'false', 'macos-15': 'true', 'macos-26': 'true',
+			'windows-latest': 'false'})
 		self.assertIn('\n    continue-on-error: ${{ !matrix.required }}\n', fixtures)
 		self.assertIn("python-version: '3.12'", fixtures)
 		self.assertIn('-k SystemStateTests', fixtures)
@@ -380,7 +383,8 @@ class ReleaseTests(unittest.TestCase):
 			release.check_version('0.0.0')
 
 	def test_documented_first_release_support_matrix_and_native_gates_match(self):
-		expected = [('Windows 10 22H2', 'amd64'), ('Debian 13', 'amd64'), ('macOS 15', 'arm64')]
+		expected = [('Windows 10 22H2', 'amd64'), ('Debian 13', 'amd64'),
+			('macOS 15', 'arm64'), ('macOS 26', 'arm64')]
 		for name in ('README.md', 'DEVELOPING.md', 'tests/README.md'):
 			with self.subTest(document=name):
 				text = (ROOT / name).read_text(encoding='utf-8')
@@ -391,6 +395,9 @@ class ReleaseTests(unittest.TestCase):
 				self.assertIn('ad-hoc', text)
 				self.assertIn('Physical-hardware-specific checks are deferred', support)
 				self.assertIn('Windows 10 22H2 VM signoff remains required', support)
+				self.assertIn('Native signoff on both macOS 15 and 26 remains required', support)
+				self.assertIn('one ARM artifact built on macOS 15', support)
+				self.assertIn('access gate, not a hardware-specific deferral', support)
 				self.assertNotIn('Uninstall remains blocked on macOS', text)
 				self.assertNotIn('macOS and Windows product system/desktop checks remain blocked', text)
 				self.assertNotIn('macOS and Windows desktop runs remain blocked', text)
