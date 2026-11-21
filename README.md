@@ -6,7 +6,7 @@ Stable HTTPS names for projects running in containers, VMs, WSL, or remote boxes
 dev environment (VM, container, WSL, remote box)
   testd run app.example:3000
         │
-        │  NDJSON over TCP, leaf token
+        │  Network intake: TLS 1.3, leaf token
         ▼
 host machine (browser machine)
   testd host
@@ -178,7 +178,7 @@ The daemon owns the tunnel, not the CLI process, so closing the terminal does no
 
 `serve --bg` keeps its config across restarts while the alias does not. On startup, `testd` warns about matching routes but does not delete or adopt them: an edge target alone is not proof of ownership. An existing `:443` route blocks a new Tailscale share. Inspect the provider's state after a crash; an empty testd share list does not prove that a provider or route has stopped.
 
-Providers are spawned, never linked: no SDK, no account integration, no vendor API in the product. `testd` sets `TESTD_TUNNEL_PROVIDER` for a default other than `cloudflared`, and `TESTD_TUNNEL` to point at a provider binary outside `PATH`.
+Providers are spawned, never linked: no SDK, no account integration, no vendor API in the product. Set `TESTD_TUNNEL_PROVIDER` for a default other than `cloudflared`, and `TESTD_TUNNEL` to point at a provider binary outside `PATH`.
 
 The dashboard has a **Shares** card: provider URL, the registered name, the exposure, and a stop button. Shares are listed separately from active names because they are provider URLs, not testd names; stopping one leaves the name in place. The tray does the same from the menu. One provider terminating TLS means the share is as private as that provider makes it: a public share is a public route to the app, and a tailnet share is only as closed as the tailnet.
 
