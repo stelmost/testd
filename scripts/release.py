@@ -90,8 +90,12 @@ def homebrew(args):
 	check_version(args.version)
 	arm_sha256 = digest(args.artifacts / f'Testd_{args.version}_aarch64.dmg')
 	intel = args.artifacts / f'Testd_{args.version}_x64.dmg'
-	intel_support = '  depends_on arch: :arm64'
-	if intel.exists():
+	# Path.exists() can hide broken links and access errors.
+	try:
+		intel.lstat()
+	except FileNotFoundError:
+		intel_support = '  depends_on arch: :arm64'
+	else:
 		intel_support = f"  on_intel do\n    sha256 '{digest(intel)}'\n  end"
 	args.output.mkdir(parents=True, exist_ok=True)
 	source = args.artifacts / f'testd-{args.version}-source.tar.gz'

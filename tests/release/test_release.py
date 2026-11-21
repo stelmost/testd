@@ -420,6 +420,37 @@ class ReleaseTests(unittest.TestCase):
 			download.assert_not_called()
 			self.assertFalse((root / 'tap').exists())
 
+	def test_homebrew_does_not_ignore_a_broken_optional_intel_symlink(self):
+		version = workspace_version()
+		with tempfile.TemporaryDirectory() as temporary:
+			root = pathlib.Path(temporary)
+			(root / f'Testd_{version}_aarch64.dmg').write_bytes(b'arm')
+			(root / f'testd-{version}-source.tar.gz').write_bytes(b'source')
+			fixture_symlink(self, root / f'Testd_{version}_x64.dmg', root / 'missing-intel.dmg')
+			with patch.object(release.urllib.request, 'urlopen') as download, self.assertRaises(FileNotFoundError):
+				release.homebrew(SimpleNamespace(version=version, artifacts=root, output=root / 'tap'))
+			download.assert_not_called()
+			self.assertFalse((root / 'tap').exists())
+
+	def test_homebrew_propagates_optional_intel_metadata_errors(self):
+		version = workspace_version()
+		with tempfile.TemporaryDirectory() as temporary:
+			root = pathlib.Path(temporary)
+			intel = root / f'Testd_{version}_x64.dmg'
+			for path in (intel, root / f'Testd_{version}_aarch64.dmg', root / f'testd-{version}-source.tar.gz'):
+				path.write_bytes(path.name.encode())
+			lstat = pathlib.Path.lstat
+
+			def unreadable_metadata(path, *args, **kwargs):
+				if path == intel:
+					raise PermissionError('fixture metadata denied')
+				return lstat(path, *args, **kwargs)
+
+			with patch.object(pathlib.Path, 'lstat', unreadable_metadata), \
+					self.assertRaisesRegex(PermissionError, 'fixture metadata denied'):
+				release.homebrew(SimpleNamespace(version=version, artifacts=root, output=root / 'tap'))
+			self.assertFalse((root / 'tap').exists())
+
 	def test_homebrew_rejects_unexpanded_checksum_placeholders(self):
 		version = workspace_version()
 		template = ROOT / 'packaging/homebrew/testd-gui.rb.in'
