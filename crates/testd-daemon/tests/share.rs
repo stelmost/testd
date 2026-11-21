@@ -179,7 +179,7 @@ fn provider_waiting_to_exit(dir: &Path) -> (PathBuf, PathBuf) {
 	let body = format!(
 		"#!/bin/sh\necho 'INF https://fixture.trycloudflare.com' >&2\n\
 		 echo 'INF https://fixture.ngrok-free.app' >&2\n\
-		 case \"$*\" in *:3000*|*:3002*) while [ ! -f '{}' ]; do sleep 0.05; done; exit 23 ;; \
+		 case \"$*\" in *:3000*|*:3002*|*:7740*) while [ ! -f '{}' ]; do sleep 0.05; done; exit 23 ;; \
 		 *) exec sleep 30 ;; esac\n",
 		exit.display()
 	);
@@ -213,6 +213,64 @@ async fn a_provider_exit_removes_only_its_share_and_notifies_observers() {
 	.await
 	.expect("provider exit should update the share list");
 	assert!(shares.stop("second.example").await);
+}
+
+#[tokio::test]
+async fn secure_provider_exit_removes_owned_aliases_and_preserves_replacements() {
+	use testd_daemon::registry::UpstreamTls;
+	use testd_pki::transport::{HOST_NAME, Identity, LEAF_NAME};
+
+	for provider in [Provider::Cloudflared, Provider::Ngrok] {
+		for replacement in [None, Some("127.0.0.1:9443")] {
+			let dir = tempfile::tempdir().unwrap();
+			let (binary, exit) = provider_waiting_to_exit(dir.path());
+			let host = Identity::ephemeral(HOST_NAME).unwrap();
+			let root = Identity::ephemeral(LEAF_NAME).unwrap().root_der().unwrap();
+			let registry = Arc::new(AsyncMutex::new(Registry::default()));
+			let shares = ManagedShares::new(provider, Some(binary), Some(front()), Arc::clone(&registry));
+			registry
+				.lock()
+				.await
+				.register_with_transport(
+					1,
+					testd_core::Registration { domain: "app.test".into(), target: "127.0.0.1:9443".into() },
+					Some(UpstreamTls { root: root.clone(), client: host.mutual_client_config(&root).unwrap() }),
+					false,
+					&[],
+				)
+				.unwrap();
+			let url = shares.start("app", "app.test", None).await.unwrap();
+			let alias = url.strip_prefix("https://").unwrap();
+			registry.lock().await.set_alias("unrelated.fixture", "127.0.0.1:9000");
+			if let Some(target) = replacement {
+				registry.lock().await.set_alias(alias, target);
+			}
+			let mut changes = shares.state_changes();
+			std::fs::write(exit, "exit").unwrap();
+			tokio::time::timeout(std::time::Duration::from_secs(5), changes.changed())
+				.await
+				.expect("provider exit must notify observers")
+				.unwrap();
+			assert!(shares.list().await.is_empty());
+			assert_eq!(
+				registry.lock().await.route("unrelated.fixture").unwrap().registration.target,
+				"127.0.0.1:9000"
+			);
+			let claim = registry.lock().await.claim("app.test").unwrap().clone();
+			assert_eq!(claim.transport.unwrap().root, root);
+			match replacement {
+				None => assert!(registry.lock().await.route(alias).is_none(), "an exited share left its alias live"),
+				Some(target) => {
+					let route = registry.lock().await.route(alias).unwrap();
+					assert_eq!(route.registration.target, target);
+					assert!(route.transport.is_none(), "a replaced alias must not be adopted");
+					assert!(shares.stop("app").await.is_err(), "changed alias cleanup must stay unverified");
+					let error = shares.start("app", "app.test", None).await.unwrap_err();
+					assert!(error.to_string().contains("already starting or stopping"), "{error}");
+				},
+			}
+		}
+	}
 }
 
 #[tokio::test]
@@ -511,16 +569,18 @@ async fn an_alias_replaced_during_startup_is_not_overwritten() {
 
 #[tokio::test]
 async fn a_replaced_tailscale_alias_is_not_removed_or_used_to_stop_a_provider() {
-	let dir = tempfile::tempdir().unwrap();
-	let (provider, _, stopped) = tailscale(dir.path());
-	let shares = Shares::new(Provider::Tailscale, Some(provider), Some(front()));
-	let registry = Arc::clone(&shares.registrations);
-	shares.start("app", "127.0.0.1:3000", None).await.unwrap();
-	registry.lock().await.set_alias("node-a.tailnet.ts.net", "127.0.0.1:9000");
-	assert!(shares.try_stop("app").await.is_err());
-	assert_eq!(registry.lock().await.get("node-a.tailnet.ts.net").unwrap().target, "127.0.0.1:9000");
-	assert!(!stopped.exists(), "unowned provider state must be left alone");
-	assert!(shares.start("other", "127.0.0.1:3002", None).await.is_err());
+	for target in ["127.0.0.1:9000", "127.0.0.1:3000"] {
+		let dir = tempfile::tempdir().unwrap();
+		let (provider, _, stopped) = tailscale(dir.path());
+		let shares = Shares::new(Provider::Tailscale, Some(provider), Some(front()));
+		let registry = Arc::clone(&shares.registrations);
+		shares.start("app", "127.0.0.1:3000", None).await.unwrap();
+		registry.lock().await.set_alias("node-a.tailnet.ts.net", target);
+		assert!(shares.try_stop("app").await.is_err());
+		assert_eq!(registry.lock().await.get("node-a.tailnet.ts.net").unwrap().target, target);
+		assert!(!stopped.exists(), "unowned provider state must be left alone");
+		assert!(shares.start("other", "127.0.0.1:3002", None).await.is_err());
+	}
 }
 
 #[tokio::test]

@@ -715,12 +715,15 @@ impl Shares {
 	/// Remove an exited child without confusing it with a replacement share.
 	fn watch_provider(&self, name: String, identity: Arc<()>) {
 		let state = Arc::downgrade(&self.state);
+		let registrations = Arc::downgrade(&self.registrations);
 		let revision = self.revision.clone();
 		tokio::spawn(async move {
 			let mut reported_failure = false;
 			loop {
 				tokio::time::sleep(PROVIDER_EXIT_CHECK_INTERVAL).await;
 				let Some(state) = state.upgrade() else { return };
+				let Some(registrations) = registrations.upgrade() else { return };
+				let mut registry = registrations.lock().await;
 				let mut shares = state.lock().await;
 				let Some(ShareLifecycle::Active(share)) = shares.entries.get_mut(&name) else { return };
 				if !Arc::ptr_eq(&share.identity, &identity) {
@@ -731,8 +734,22 @@ impl Shares {
 					Ok(None) => reported_failure = false,
 					Ok(Some(status)) => {
 						let provider = share.provider.name();
-						shares.entries.remove(&name);
+						/* The child is reaped; explicit stop's alias ownership checks still apply. */
+						let mut batch = StopBatch::default();
+						Self::detach_name(&mut shares, &mut registry, &name, &mut batch);
+						if batch.errors.is_empty() {
+							let pending = shares
+								.entries
+								.remove(&name)
+								.and_then(ShareLifecycle::into_pending)
+								.expect("an exited share was detached");
+							pending.finished.send_replace(PendingResult::Cleaned);
+						}
 						drop(shares);
+						drop(registry);
+						for error in batch.errors {
+							eprintln!("[error]  share cleanup failed: {error}");
+						}
 						eprintln!("[share]  {name} closed: {provider} exited with {status}");
 						revision.send_modify(|value| *value = value.wrapping_add(1));
 						return;
@@ -789,12 +806,12 @@ impl Shares {
 				let (cancel, _) = watch::channel(true);
 				let (finished, _) = watch::channel(PendingResult::Running);
 				let alias_error = share.resource.alias().and_then(|alias| {
-					if registry
-						.aliases()
-						.iter()
-						.any(|entry| entry.domain == alias && entry.target == share.binding.target)
-					{
-						registry.remove_alias(alias);
+					let owns_alias = registry.route(alias).is_some_and(|claim| {
+						claim.connection == share.binding.connection
+							&& claim.registration.target == share.binding.target
+							&& claim.transport.as_ref().map(|tls| &tls.root) == share.binding.root.as_ref()
+					});
+					if owns_alias && registry.remove_alias(alias) {
 						None
 					} else {
 						Some(format!("provider alias {alias} changed; leaving provider state untouched"))
