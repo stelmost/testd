@@ -1232,22 +1232,11 @@ impl Shares {
 		};
 		let config: serde_json::Value =
 			serde_json::from_str(&status).context("tailscale serve returned malformed status; leaving :443 alone")?;
-		let route = format!("{alias}:443");
-		let handlers = config
-			.get("Web")
-			.and_then(|web| web.get(&route))
-			.and_then(|entry| entry.get("Handlers"))
-			.and_then(serde_json::Value::as_object);
-		let owns_route = handlers.is_some_and(|handlers| {
-			handlers.len() == 1
-				&& handlers
-					.get("/")
-					.and_then(|handler| handler.get("Proxy"))
-					.and_then(serde_json::Value::as_str)
-					== Some(upstream.as_str())
-		});
-		if !owns_route {
-			bail!("tailscale serve :443 changed; leaving it in place");
+		if serve_config_has_free_443(&config) {
+			return Ok(());
+		}
+		if !owns_private_serve_443(&config, &alias, &upstream) {
+			bail!("tailscale serve :443 changed or is not private; leaving it in place");
 		}
 		/* Scope cleanup to this serve port, leaving unrelated entries alone. */
 		let args = ["serve".to_owned(), "--https=443".to_owned(), "off".to_owned()];
@@ -1305,6 +1294,31 @@ fn serve_ports_pointing_at(status: &str, upstream: &str) -> Vec<u16> {
 /** Do not adopt any existing :443 route, including an identical edge target. */
 fn is_443_available(status: &str) -> bool {
 	serde_json::from_str::<serde_json::Value>(status).is_ok_and(|value| serve_config_has_free_443(&value))
+}
+
+/** Remove only the expected private route from a copy; any other :443 state prevents cleanup. */
+fn owns_private_serve_443(config: &serde_json::Value, alias: &str, upstream: &str) -> bool {
+	use serde_json::{Value, json};
+
+	let mut remaining = config.clone();
+	let route = format!("{alias}:443");
+	let Some(web) = remaining.get_mut("Web").and_then(Value::as_object_mut) else { return false };
+	if web.remove(&route) != Some(json!({"Handlers": {"/": {"Proxy": upstream}}})) {
+		return false;
+	}
+	let Some(tcp) = remaining.get_mut("TCP").and_then(Value::as_object_mut) else { return false };
+	if tcp.remove("443") != Some(json!({"HTTPS": true})) {
+		return false;
+	}
+	if let Some(funnel) = remaining.get_mut("AllowFunnel")
+		&& !funnel.is_null()
+	{
+		let Some(entries) = funnel.as_object_mut() else { return false };
+		if !matches!(entries.remove(&route), None | Some(Value::Bool(false))) {
+			return false;
+		}
+	}
+	serve_config_has_free_443(&remaining)
 }
 
 fn serve_config_has_free_443(value: &serde_json::Value) -> bool {

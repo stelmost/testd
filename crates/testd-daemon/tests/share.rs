@@ -376,24 +376,37 @@ async fn an_ngrok_share_reports_its_url_from_a_log_record() {
 	shares.stop("app.example").await;
 }
 
+fn private_serve_config() -> serde_json::Value {
+	serde_json::json!({
+		"TCP": {"443": {"HTTPS": true}, "8443": {"HTTPS": true}},
+		"Web": {
+			"node-a.tailnet.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:7740"}}},
+			"node-a.tailnet.ts.net:8443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:9000"}}}
+		},
+		"AllowFunnel": {"node-a.tailnet.ts.net:443": false}
+	})
+}
+
 /** Fake status retains a foreign :8443 handler and records changes to :443. */
 fn tailscale(dir: &Path) -> (PathBuf, PathBuf, PathBuf) {
 	let args = dir.join("serve-args");
 	let started = dir.join("serve-on");
 	let stopped = dir.join("serve-off");
+	let external = dir.join("external-status.json");
 	let body = r#"#!/bin/sh
 if [ "$1" = "serve" ] && [ "$2" = "status" ]; then
+	if [ -e 'EXTERNAL' ]; then cat 'EXTERNAL'; exit 0; fi
 	if [ -e 'STARTED' ]; then
-		echo '{"Web":{"node-a.tailnet.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:7740"}}},"node-a.tailnet.ts.net:8443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:9000"}}}}}'
+		echo 'OWNED_CONFIG'
 	else
-		echo '{"Web":{"node-a.tailnet.ts.net:8443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:9000"}}}}}'
+		echo '{"TCP":{"8443":{"HTTPS":true}},"Web":{"node-a.tailnet.ts.net:8443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:9000"}}}}}'
 	fi
 	exit 0
 fi
 case "$1" in
 	serve)
 		echo "$@" >> 'ARGS'
-		if [ "$3" = "off" ]; then touch 'STOPPED'; rm -f 'STARTED'; else touch 'STARTED'; fi
+		if [ "$3" = "off" ]; then touch 'STOPPED'; rm -f 'STARTED'; else touch 'STARTED'; rm -f 'EXTERNAL'; fi
 		exit 0 ;;
 	status)
 		echo '{"Self":{"DNSName":"node-a.tailnet.ts.net."}}'
@@ -403,7 +416,9 @@ exit 1
 "#
 	.replace("ARGS", &args.display().to_string())
 	.replace("STARTED", &started.display().to_string())
-	.replace("STOPPED", &stopped.display().to_string());
+	.replace("STOPPED", &stopped.display().to_string())
+	.replace("EXTERNAL", &external.display().to_string())
+	.replace("OWNED_CONFIG", &private_serve_config().to_string());
 	(script(dir, "tailscale", &body), args, stopped)
 }
 
@@ -446,7 +461,7 @@ async fn a_stopping_tailscale_share_cannot_remove_its_replacement() {
 	let body = format!(
 		"#!/bin/sh\nif [ \"$1\" = status ]; then echo '{{\"Self\":{{\"DNSName\":\"node.ts.net.\"}}}}'; exit; fi\n\
 		if [ \"$1\" = serve ] && [ \"$2\" = status ]; then \
-		if [ -e '{0}' ]; then echo '{{\"Web\":{{\"node.ts.net:443\":{{\"Handlers\":{{\"/\":{{\"Proxy\":\"http://127.0.0.1:7740\"}}}}}}}}}}'; \
+		if [ -e '{0}' ]; then echo '{{\"TCP\":{{\"443\":{{\"HTTPS\":true}}}},\"Web\":{{\"node.ts.net:443\":{{\"Handlers\":{{\"/\":{{\"Proxy\":\"http://127.0.0.1:7740\"}}}}}}}}}}'; \
 		else echo '{{\"Web\":{{}}}}'; fi; exit; fi\n\
 		if [ \"$3\" = off ]; then : > '{1}'; while [ ! -e '{2}' ]; do sleep 0.02; done; rm -f '{0}'; \
 		else : > '{0}'; fi\nexit 0\n",
@@ -602,6 +617,81 @@ async fn a_changed_tailscale_route_identity_is_not_stopped() {
 }
 
 #[tokio::test]
+async fn tailscale_cleanup_preserves_changed_exposure_transport_and_handler_state() {
+	use serde_json::json;
+	const ROUTE: &str = "node-a.tailnet.ts.net:443";
+
+	for change in [
+		"funnel", "tcp-forward", "tcp-http", "tcp-extra", "handler-path", "handler-text", "extra-handler",
+		"foreign-web", "foreign-funnel", "foreground", "service",
+	] {
+		let dir = tempfile::tempdir().unwrap();
+		let (provider, args, stopped) = tailscale(dir.path());
+		let shares = Shares::new(Provider::Tailscale, Some(provider), Some(front()));
+		shares.start("app", "127.0.0.1:3000", None).await.unwrap();
+		let mut changed = private_serve_config();
+		match change {
+			"funnel" => changed["AllowFunnel"][ROUTE] = json!(true),
+			"tcp-forward" => changed["TCP"]["443"]["TCPForward"] = json!("127.0.0.1:9000"),
+			"tcp-http" => changed["TCP"]["443"] = json!({"HTTP": true}),
+			"tcp-extra" => changed["TCP"]["443"]["TerminateTLS"] = json!("foreign.ts.net"),
+			"handler-path" => changed["Web"][ROUTE]["Handlers"]["/"]["Path"] = json!("/foreign"),
+			"handler-text" => changed["Web"][ROUTE]["Handlers"]["/"]["Text"] = json!("foreign"),
+			"extra-handler" => changed["Web"][ROUTE]["Handlers"]["/foreign"] = json!({"Text": "foreign"}),
+			"foreign-web" => changed["Web"]["foreign.ts.net:443"] = json!({"Handlers": {"/": {"Text": "foreign"}}}),
+			"foreign-funnel" => changed["AllowFunnel"]["foreign.ts.net:443"] = json!(true),
+			"foreground" => changed["Foreground"] = json!({"foreign": {"TCP": {"443": {"HTTPS": true}}}}),
+			"service" => changed["Services"] = json!({"foreign": {"TCP": {"443": {"HTTPS": true}}}}),
+			_ => unreachable!(),
+		}
+		let external = dir.path().join("external-status.json");
+		let status = changed.to_string();
+		std::fs::write(&external, &status).unwrap();
+		let before_args = std::fs::read_to_string(&args).unwrap();
+		assert!(shares.try_stop("app").await.is_err(), "{change}");
+		assert!(!stopped.exists(), "{change}: changed provider configuration must not be stopped");
+		assert!(dir.path().join("serve-on").exists(), "{change}: foreign provider state was modified");
+		assert_eq!(std::fs::read_to_string(&args).unwrap(), before_args, "{change}");
+		assert_eq!(std::fs::read_to_string(&external).unwrap(), status, "{change}");
+		assert!(shares.start("other", "127.0.0.1:3001", None).await.is_err(), "{change}");
+		assert!(shares.shutdown().await.is_err(), "{change}: unknown cleanup cannot become success");
+	}
+}
+
+#[tokio::test]
+async fn an_already_removed_tailscale_route_stops_idempotently_without_off() {
+	use serde_json::json;
+
+	for absent in [
+		serde_json::Value::Null,
+		json!({}),
+		json!({"TCP": {"8443": {"HTTPS": true}}, "Web": {"foreign.ts.net:8443": {"Handlers": {"/": {"Text": "foreign"}}}}}),
+		json!({"Foreground": {"foreign": {"TCP": {"8443": {"HTTPS": true}}}}}),
+		json!({"Services": {"foreign": {"TCP": {"8443": {"HTTPS": true}}}}}),
+	] {
+		let dir = tempfile::tempdir().unwrap();
+		let (provider, args, stopped) = tailscale(dir.path());
+		let shares = Shares::new(Provider::Tailscale, Some(provider), Some(front()));
+		shares.start("app", "127.0.0.1:3000", None).await.unwrap();
+		let status = absent.to_string();
+		let external = dir.path().join("external-status.json");
+		std::fs::write(&external, &status).unwrap();
+		std::fs::remove_file(dir.path().join("serve-on")).unwrap();
+		let before_args = std::fs::read_to_string(&args).unwrap();
+		assert!(shares.try_stop("app").await.unwrap(), "{status}");
+		assert!(!shares.try_stop("app").await.unwrap(), "{status}: repeated stop must be idempotent");
+		assert!(!stopped.exists(), "{status}: no off command is needed for verified absence");
+		assert_eq!(std::fs::read_to_string(&args).unwrap(), before_args);
+		assert_eq!(std::fs::read_to_string(&external).unwrap(), status);
+		assert!(shares.registrations.lock().await.claim("app.test").is_some());
+		assert!(shares.registrations.lock().await.route("node-a.tailnet.ts.net").is_none());
+		assert!(shares.list().await.is_empty());
+		shares.start("app", "127.0.0.1:3000", None).await.unwrap();
+		assert!(shares.try_stop("app").await.unwrap(), "verified absence must not quarantine the name");
+	}
+}
+
+#[tokio::test]
 async fn failed_tailscale_cleanup_blocks_replacement_and_reports_the_error() {
 	let dir = tempfile::tempdir().unwrap();
 	let started = dir.path().join("started");
@@ -630,7 +720,8 @@ async fn failed_tailscale_cleanup_blocks_replacement_and_reports_the_error() {
 
 #[tokio::test]
 async fn a_successful_tailscale_stop_requires_confirmed_route_removal() {
-	const OWNED_STATUS: &str = r#"{"Web":{"node.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:7740"}}}}}"#;
+	const OWNED_STATUS: &str =
+		r#"{"TCP":{"443":{"HTTPS":true}},"Web":{"node.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:7740"}}}}}"#;
 
 	for after_stop in [Some(OWNED_STATUS), Some("not json"), None] {
 		let dir = tempfile::tempdir().unwrap();
