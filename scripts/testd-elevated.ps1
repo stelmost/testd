@@ -253,6 +253,11 @@ function Remove-TestdNrpt([string]$tld, [string]$owner) {
 	}
 	$record.State = 'removing'
 	Write-OwnershipRecord $key $record
+	# Keep recovery records if another administrator changed the rule while intent was being recorded.
+	$current = @(Get-NamespaceRules $namespace | Where-Object { $_.Name -eq $record.Name })
+	if ($current.Count -ne 1 -or (Get-RuleSnapshot $current[0]) -cne $record.Snapshot) {
+		Stop-OwnershipConflict 'NRPT rule changed while recording removal; left untouched'
+	}
 	Remove-DnsClientNrptRule -Name $record.Name -Force -Confirm:$false -ErrorAction Stop
 	if (@(Get-NamespaceRules $namespace | Where-Object { $_.Name -eq $record.Name }).Count) {
 		throw 'owned NRPT rule remains; removal is incomplete'
@@ -385,6 +390,12 @@ function Remove-TestdRoot([string]$thumbprint, [string]$fingerprint, [string]$ow
 	}
 	$record.State = 'removing'
 	Write-OwnershipRecord $key $record
+	# Keep recovery records if another administrator changed trust while intent was being recorded.
+	$roots = @(Get-MachineRoots $thumbprint)
+	if ($roots.Count -ne 1 -or (Get-CertificateFingerprint $roots[0]) -ne $fingerprint -or
+		(Get-RootSnapshot $roots[0]) -cne $record.Snapshot) {
+		Stop-OwnershipConflict 'root trust changed while recording removal; left untouched'
+	}
 	Remove-MachineRoot $roots[0]
 	if (@(Get-MachineRoots $thumbprint).Count) { throw 'owned root remains; removal is incomplete' }
 	Archive-OwnershipRecord $key

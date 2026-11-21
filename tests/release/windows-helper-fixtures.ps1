@@ -42,6 +42,7 @@ function Reset-Fixture {
 	$script:removed = 0
 	$script:failActivation = $false
 	$script:failRemoval = $false
+	$script:removalRecordHook = $null
 	$script:rootTag = 'original properties'
 	$script:raceRoot = $false
 	$script:cases++
@@ -56,6 +57,9 @@ function Write-OwnershipRecord([string]$key, $record) {
 	if ($script:failActivation -and $record.State -eq 'active') { throw 'fixture ownership write failed' }
 	if ($script:records.ContainsKey($key)) { $script:history += Copy-Record $script:records[$key] }
 	$script:records[$key] = Copy-Record $record
+	if ($record.State -eq 'removing' -and $null -ne $script:removalRecordHook) {
+		& $script:removalRecordHook
+	}
 }
 function Archive-OwnershipRecord([string]$key) {
 	$script:history += Copy-Record $script:records[$key]
@@ -138,6 +142,24 @@ $script:rules[0].DnsSecValidationRequired = $true
 Assert-Fails { Remove-TestdNrpt testdcheck $owner } 'changed'
 Assert ($script:removed -eq 0) 'changed or foreign rule was removed'
 
+foreach ($change in @(
+	{ $script:rules[0].Comment = 'changed while recording removal' },
+	{
+		$replacement = Copy-Record $script:rules[0]
+		$replacement.Name = 'replacement'
+		$script:rules = @($replacement)
+	}
+)) {
+	Reset-Fixture
+	Install-TestdNrpt testdcheck 127.0.0.1 $owner
+	$script:removalRecordHook = $change
+	Assert-Fails { Remove-TestdNrpt testdcheck $owner } 'changed while recording removal'
+	Assert ($script:removed -eq 0) 'a rule changed after removal intent was deleted'
+	Assert ($script:records.Count -eq 1 -and
+		$script:records['resolver-testdcheck'].State -eq 'removing') 'NRPT recovery record was lost'
+	Assert ($script:history[-1].State -eq 'active') 'NRPT active-state backup was lost'
+}
+
 Reset-Fixture
 Install-TestdNrpt testdcheck 127.0.0.1 $owner
 $script:rules[0].Name = 'replacement'
@@ -208,6 +230,20 @@ try {
 	$script:rootTag = 'later trust-property edit'
 	Assert-Fails { Remove-TestdRoot $thumbprint $fingerprint $owner } 'changed'
 	Assert ($script:removed -eq 0) 'foreign or changed root was deleted'
+
+	foreach ($change in @(
+		{ $script:rootTag = 'changed while recording removal' },
+		{ $script:roots = @() }
+	)) {
+		Reset-Fixture
+		Install-TestdRoot $path $thumbprint $fingerprint $owner
+		$script:removalRecordHook = $change
+		Assert-Fails { Remove-TestdRoot $thumbprint $fingerprint $owner } 'changed while recording removal'
+		Assert ($script:removed -eq 0) 'root removal used a stale certificate snapshot'
+		Assert ($script:records.Count -eq 1 -and
+			$script:records[$recordKey].State -eq 'removing') 'root recovery record was lost'
+		Assert ($script:history[-1].State -eq 'active') 'root active-state backup was lost'
+	}
 
 	Reset-Fixture
 	$script:failActivation = $true

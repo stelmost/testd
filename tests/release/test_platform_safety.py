@@ -20,4 +20,4 @@ class ResolverSafetyTests(unittest.TestCase):
 					'-Helper', str(ROOT / 'scripts/testd-elevated.ps1')],
 					capture_output=True, text=True, timeout=30)
 				self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-				self.assertIn('16 isolated ownership cases', result.stdout)
+				self.assertIn('20 isolated ownership cases', result.stdout)
