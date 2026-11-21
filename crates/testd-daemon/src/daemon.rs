@@ -8,17 +8,18 @@ use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
-use testd_core::config::{DEFAULT_DNS_PORT, config_dir, load_host_config};
+use testd_core::config::{DEFAULT_DNS_PORT, HostConfig, config_dir, load_host_config};
 use testd_setup::Elevation;
 
 use crate::access::{Access, PendingView};
 use crate::control::ControlServer;
 use crate::edge::{self, Edge, EdgeContext};
-use crate::engine::{HostEngine, OperatorAction};
+use crate::engine::{HostEngine, OperatorAction, Registrations};
 use crate::health::{Action, Health, HealthMonitor, Notice, PkiRoot, RootAuthority};
 use crate::launch::LaunchBook;
 use crate::resolver::Resolver;
 use crate::resolver::dns::DnsResolver;
+use crate::share::Front;
 
 /// A configured, ready-to-run host daemon.
 pub struct Daemon {
@@ -90,9 +91,7 @@ impl Daemon {
 			health_for_http.probe(true);
 		});
 
-		// Providers that cannot reach a container or LAN target point at the plain
-		// edge listener instead; the edge learns the share's name as an alias.
-		let front = crate::share::Front { plain_addr: local_client_addr(config.http_addr) };
+		let (edge, front) = start_edge(&config, &tld, engine.registrations())?;
 		let shares = Arc::new(crate::share::Shares::from_env(Some(front), engine.registrations()));
 		engine.set_shares(Arc::clone(&shares));
 
@@ -131,13 +130,6 @@ impl Daemon {
 
 		let engine = Arc::new(engine);
 
-		// The plain listener is always needed: an external front owns TLS when the
-		// built-in edge is disabled. Only the TLS listener follows `edge_enabled`.
-		let mut context = EdgeContext::new(tld.clone(), engine.registrations());
-		context.dashboard_addr = Some(config.local_client_addr());
-		context.trust_forwarded_for = config.trust_forwarded_for;
-		let tls_addr = config.edge_enabled.then_some(config.edge_addr);
-		let edge = edge::start(Arc::new(context), tls_addr, config.http_addr, &config.pki_dir)?;
 		if config.edge_enabled {
 			eprintln!("[edge]   https://*.{} on {}", tld, edge.tls_addr);
 		}
@@ -333,6 +325,17 @@ fn acquire_instance_lock() -> std::io::Result<std::fs::File> {
 	Ok(file)
 }
 
+fn start_edge(config: &HostConfig, tld: &str, registrations: Registrations) -> anyhow::Result<(Edge, Front)> {
+	/* External fronts and share providers use the plain listener even when built-in TLS is disabled. */
+	let mut context = EdgeContext::new(tld, registrations);
+	context.dashboard_addr = Some(config.local_client_addr());
+	context.trust_forwarded_for = config.trust_forwarded_for;
+	let tls_addr = config.edge_enabled.then_some(config.edge_addr);
+	let edge = edge::start(Arc::new(context), tls_addr, config.http_addr, &config.pki_dir)?;
+	let front = Front { plain_addr: local_client_addr(edge.http_addr) };
+	Ok((edge, front))
+}
+
 /// The local client connects to the same listener over loopback.
 fn local_client_addr(listen: SocketAddr) -> SocketAddr {
 	if listen.ip().is_unspecified() { SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), listen.port()) } else { listen }
@@ -363,24 +366,36 @@ mod tests {
 		}
 	}
 
+	fn share_front() -> Front {
+		Front { plain_addr: "127.0.0.1:7740".parse().unwrap() }
+	}
+
 	#[tokio::test]
 	async fn daemon_shutdown_stops_its_owned_provider() {
 		let dir = tempfile::tempdir().unwrap();
 		let provider = dir.path().join("provider");
-		std::fs::write(&provider, "#!/bin/sh\necho 'https://fixture.trycloudflare.com' >&2\nexec sleep 30\n").unwrap();
+		std::fs::write(
+			&provider,
+			"#!/bin/sh\nprintf '%s' \"$4\" > \"$0.origin\"\n\
+			 echo 'https://fixture.trycloudflare.com' >&2\nexec sleep 30\n",
+		)
+		.unwrap();
 		std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).unwrap();
 		let resolver: Arc<dyn Resolver> = Arc::new(FixtureResolver);
 		let access = Arc::new(Access::load(dir.path().join("tokens.json")).unwrap());
-		let config = serde_json::from_str("{}").unwrap();
-		let engine = Arc::new(HostEngine::new(config, Arc::clone(&resolver), Arc::clone(&access)));
-		let shares = Arc::new(Shares::new(Provider::Cloudflared, Some(provider), None, engine.registrations()));
+		let config: HostConfig = serde_json::from_str(r#"{"http_addr":"127.0.0.1:0","edge_enabled":false}"#).unwrap();
+		let engine = Arc::new(HostEngine::new(config.clone(), Arc::clone(&resolver), Arc::clone(&access)));
+		let (edge, front) = start_edge(&config, "test", engine.registrations()).unwrap();
+		assert_ne!(edge.http_addr.port(), 0);
+		let expected_origin = format!("http://{}", edge.http_addr);
+		let shares = Arc::new(Shares::new(Provider::Cloudflared, Some(provider), Some(front), engine.registrations()));
 		let launches = Arc::new(LaunchBook::load_from(dir.path().join("launches.json")).unwrap());
 		let health = Arc::new(HealthMonitor::new("test".into(), Arc::clone(&resolver), None, Elevation::Sudo));
 		let daemon = Daemon {
 			engine,
 			resolver,
 			tld: "test".into(),
-			edge: None,
+			edge: Some(edge),
 			health,
 			shares: Arc::clone(&shares),
 			access,
@@ -395,9 +410,12 @@ mod tests {
 			let owner = registry.connection_id();
 			registry.register(owner, claim("127.0.0.1:3000"), false, &[]).unwrap();
 		}
-		shares.start("app", "app.test", None).await.unwrap();
+		let url = shares.start("app", "app.test", None).await.unwrap();
+		assert_eq!(std::fs::read_to_string(dir.path().join("provider.origin")).unwrap(), expected_origin);
 		assert_eq!(shares.list().await.len(), 1);
 		daemon.shutdown().await.unwrap();
+		let alias = url.strip_prefix("https://").unwrap();
+		assert!(!daemon.engine.registrations().lock().await.contains(alias));
 		let stopped = shares.list().await.is_empty();
 		if !stopped {
 			shares.shutdown().await.unwrap();
@@ -417,7 +435,7 @@ mod tests {
 		std::fs::write(&provider, "#!/bin/sh\necho 'https://fixture.trycloudflare.com' >&2\nexec sleep 30\n").unwrap();
 		std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).unwrap();
 		let registry = Arc::new(tokio::sync::Mutex::new(crate::registry::Registry::default()));
-		let shares = Shares::new(Provider::Cloudflared, Some(provider), None, Arc::clone(&registry));
+		let shares = Shares::new(Provider::Cloudflared, Some(provider), Some(share_front()), Arc::clone(&registry));
 		let (owner, replacement) = {
 			let mut registry = registry.lock().await;
 			let owner = registry.connection_id();
@@ -425,7 +443,7 @@ mod tests {
 			registry.register(owner, claim("127.0.0.1:3000"), false, &[]).unwrap();
 			(owner, replacement)
 		};
-		shares.start("app", "app.test", None).await.unwrap();
+		let url = shares.start("app", "app.test", None).await.unwrap();
 		let mut revisions = shares.state_changes();
 		revisions.borrow_and_update();
 		{
@@ -446,6 +464,8 @@ mod tests {
 			is_listed: shares.list().await.iter().any(|share| share.name == "app"),
 			did_notify: revisions.has_changed().unwrap(),
 		};
+		let alias = url.strip_prefix("https://").unwrap();
+		assert_eq!(registry.lock().await.contains(alias), outcome.is_listed);
 		if outcome.is_listed {
 			assert!(shares.stop("app").await.unwrap());
 		}
@@ -501,7 +521,12 @@ mod tests {
 		.unwrap();
 		std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).unwrap();
 		let registry = Arc::new(tokio::sync::Mutex::new(crate::registry::Registry::default()));
-		let shares = Arc::new(Shares::new(Provider::Cloudflared, Some(provider), None, Arc::clone(&registry)));
+		let shares = Arc::new(Shares::new(
+			Provider::Cloudflared,
+			Some(provider),
+			Some(share_front()),
+			Arc::clone(&registry),
+		));
 		let owner = {
 			let mut registry = registry.lock().await;
 			let owner = registry.connection_id();
@@ -548,7 +573,7 @@ mod tests {
 		std::fs::write(&provider, "#!/bin/sh\necho 'https://fixture.trycloudflare.com' >&2\nexec sleep 30\n").unwrap();
 		std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).unwrap();
 		let registry = Arc::new(tokio::sync::Mutex::new(crate::registry::Registry::default()));
-		let shares = Shares::new(Provider::Cloudflared, Some(provider), None, Arc::clone(&registry));
+		let shares = Shares::new(Provider::Cloudflared, Some(provider), Some(share_front()), Arc::clone(&registry));
 		let (owner, replacement) = {
 			let mut registry = registry.lock().await;
 			let owner = registry.connection_id();
@@ -556,7 +581,8 @@ mod tests {
 			registry.register(owner, claim("127.0.0.1:3000"), false, &[]).unwrap();
 			(owner, replacement)
 		};
-		shares.start("app", "app.test", None).await.unwrap();
+		let url = shares.start("app", "app.test", None).await.unwrap();
+		let alias = url.strip_prefix("https://").unwrap();
 		let (change, detached) = {
 			let mut registry = registry.lock().await;
 			let mut transition = shares.claim_transition().await;
@@ -566,6 +592,7 @@ mod tests {
 		shares.finish_detached(detached).await.unwrap();
 		reconcile_shares(&shares).await;
 		assert_eq!(shares.list().await[0].target, "127.0.0.1:3000");
+		assert_eq!(registry.lock().await.route(alias).unwrap().connection, owner);
 		registry
 			.lock()
 			.await
@@ -573,6 +600,7 @@ mod tests {
 			.unwrap();
 		change.finish().await.unwrap();
 		assert_eq!(shares.list().await.len(), 1);
+		assert_eq!(registry.lock().await.route(alias).unwrap().connection, owner);
 		assert!(shares.stop("app").await.unwrap());
 	}
 
@@ -580,10 +608,16 @@ mod tests {
 	async fn stale_change_events_do_not_close_a_share_for_a_current_claim() {
 		let dir = tempfile::tempdir().unwrap();
 		let provider = dir.path().join("provider");
-		std::fs::write(&provider, "#!/bin/sh\necho 'https://fixture.trycloudflare.com' >&2\nexec sleep 30\n").unwrap();
+		std::fs::write(&provider, "#!/bin/sh\necho \"https://fixture-$$.trycloudflare.com\" >&2\nexec sleep 30\n")
+			.unwrap();
 		std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).unwrap();
 		let registry = Arc::new(tokio::sync::Mutex::new(crate::registry::Registry::default()));
-		let shares = Arc::new(Shares::new(Provider::Cloudflared, Some(provider), None, Arc::clone(&registry)));
+		let shares = Arc::new(Shares::new(
+			Provider::Cloudflared,
+			Some(provider),
+			Some(share_front()),
+			Arc::clone(&registry),
+		));
 		let owner = {
 			let mut registry = registry.lock().await;
 			let connection = registry.connection_id();
@@ -628,7 +662,12 @@ mod tests {
 		std::fs::write(&provider, "#!/bin/sh\necho 'https://fixture.trycloudflare.com' >&2\nexec sleep 30\n").unwrap();
 		std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).unwrap();
 		let registry = Arc::new(tokio::sync::Mutex::new(crate::registry::Registry::default()));
-		let shares = Arc::new(Shares::new(Provider::Cloudflared, Some(provider), None, Arc::clone(&registry)));
+		let shares = Arc::new(Shares::new(
+			Provider::Cloudflared,
+			Some(provider),
+			Some(share_front()),
+			Arc::clone(&registry),
+		));
 		let owner = {
 			let mut registry = registry.lock().await;
 			let owner = registry.connection_id();

@@ -6,9 +6,19 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
+use http_body_util::Full;
+use hyper::body::{Bytes, Incoming};
+use hyper::service::service_fn;
+use hyper::{Request, Response};
+use hyper_util::rt::TokioIo;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::time::timeout;
 
+use testd_daemon::edge::{self, EdgeContext};
 use testd_daemon::engine::Registrations;
 use testd_daemon::registry::Registry;
 use testd_daemon::share::{Exposure, Front, Provider, Shares as ManagedShares};
@@ -79,11 +89,134 @@ async fn a_share_requires_a_claim_not_just_an_edge_alias() {
 	let marker = dir.path().join("started");
 	let provider = script(dir.path(), "tunnel", &format!("#!/bin/sh\ntouch '{}'\n", marker.display()));
 	let registry = Arc::new(AsyncMutex::new(Registry::default()));
-	let shares = ManagedShares::new(Provider::Cloudflared, Some(provider), None, Arc::clone(&registry));
+	let shares = ManagedShares::new(Provider::Cloudflared, Some(provider), Some(front()), Arc::clone(&registry));
 	registry.lock().await.set_alias("app.test", "127.0.0.1:3000");
 	let error = shares.start("app", "app.test", None).await.unwrap_err();
 	assert!(error.to_string().contains("not registered"), "{error}");
 	assert!(!marker.exists(), "a missing claim must not launch a provider");
+}
+
+#[tokio::test]
+async fn shares_without_a_front_are_refused_before_spawning() {
+	for provider in [Provider::Cloudflared, Provider::Ngrok, Provider::Tailscale] {
+		let dir = tempfile::tempdir().unwrap();
+		let binary = script(dir.path(), "tunnel", "#!/bin/sh\n: > \"$0.started\"\nexit 23\n");
+		let shares = Shares::new(provider, Some(binary), None);
+		let error = shares.start("app", "127.0.0.1:3000", None).await.unwrap_err();
+		assert!(error.to_string().contains("plain HTTP routing listener"), "{error}");
+		assert!(!dir.path().join("tunnel.started").exists(), "{provider:?} must not start");
+		assert!(shares.list().await.is_empty());
+	}
+}
+
+#[tokio::test]
+async fn plain_public_shares_route_only_with_a_current_alias() {
+	for provider in [Provider::Cloudflared, Provider::Ngrok] {
+		for trust_forwarded_for in [false, true] {
+			check_public_alias(provider, trust_forwarded_for).await;
+		}
+	}
+}
+
+async fn check_public_alias(provider: Provider, trust_forwarded_for: bool) {
+	let dir = tempfile::tempdir().unwrap();
+	let app = TcpListener::bind("127.0.0.1:0").await.unwrap();
+	let target = app.local_addr().unwrap();
+	let service = tokio::spawn(serve_header_echo(app));
+	let start_front = |registry| {
+		let mut context = EdgeContext::new("test", registry);
+		context.trust_forwarded_for = trust_forwarded_for;
+		edge::start(Arc::new(context), None, "127.0.0.1:0".parse().unwrap(), dir.path()).unwrap()
+	};
+	let binary = script(
+		dir.path(),
+		"tunnel",
+		"#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.arguments\"\n\
+		 echo https://fixture.trycloudflare.com >&2\n\
+		 echo https://fixture.ngrok-free.app >&2\nexec sleep 30\n",
+	);
+	let (registry, owner) = public_fixture_claim(target);
+	let edge = start_front(Arc::clone(&registry));
+	let addr = edge.http_addr.to_string();
+	let origin = format!("http://{addr}");
+	let (host, arguments) = match provider {
+		Provider::Cloudflared => ("fixture.trycloudflare.com", vec!["tunnel", "--no-autoupdate", "--url", &origin]),
+		Provider::Ngrok => ("fixture.ngrok-free.app", vec!["http", &addr]),
+		Provider::Tailscale => unreachable!(),
+	};
+	let shares = ManagedShares::new(
+		provider,
+		Some(binary),
+		Some(Front { plain_addr: edge.http_addr }),
+		Arc::clone(&registry),
+	);
+	assert!(edge_response(edge.http_addr, host).await.starts_with("HTTP/1.1 404 "));
+	assert_eq!(shares.start("app", "app.test", None).await.unwrap(), format!("https://{host}"));
+	let actual_args = std::fs::read_to_string(dir.path().join("tunnel.arguments")).unwrap();
+	assert_eq!(actual_args.lines().collect::<Vec<_>>(), arguments);
+	let route = registry.lock().await.route(host).unwrap();
+	assert_eq!(route.connection, owner);
+	assert_eq!(route.registration.target, target.to_string());
+
+	let scheme = if trust_forwarded_for { "https" } else { "http" };
+	let response = edge_response(edge.http_addr, host).await;
+	assert!(response.starts_with("HTTP/1.1 200 "), "{response}");
+	assert!(response.ends_with(&format!("\r\n\r\n{host} {scheme}")), "{response}");
+
+	shares.shutdown().await.unwrap();
+	assert!(shares.list().await.is_empty());
+	assert!(registry.lock().await.claim("app.test").is_some());
+	assert!(edge_response(edge.http_addr, host).await.starts_with("HTTP/1.1 404 "));
+	let response = edge_response(edge.http_addr, "app.test").await;
+	assert!(response.starts_with("HTTP/1.1 200 "), "{response}");
+	drop(edge);
+
+	let (fresh, _) = public_fixture_claim(target);
+	let edge = start_front(fresh);
+	assert!(edge_response(edge.http_addr, host).await.starts_with("HTTP/1.1 404 "));
+	let response = edge_response(edge.http_addr, "app.test").await;
+	assert!(response.starts_with("HTTP/1.1 200 "), "{response}");
+	service.abort();
+	assert!(service.await.unwrap_err().is_cancelled());
+}
+
+fn public_fixture_claim(target: SocketAddr) -> (Registrations, u64) {
+	let mut registry = Registry::default();
+	let owner = registry.connection_id();
+	let claim = testd_core::Registration { domain: "app.test".into(), target: target.to_string() };
+	registry.register(owner, claim, false, &[]).unwrap();
+	(Arc::new(AsyncMutex::new(registry)), owner)
+}
+
+async fn serve_header_echo(listener: TcpListener) {
+	loop {
+		let (stream, _) = listener.accept().await.unwrap();
+		let echo = service_fn(|request: Request<Incoming>| async move {
+			let headers = request.headers();
+			let host = headers[hyper::header::HOST].to_str().unwrap();
+			let scheme = headers["x-forwarded-proto"].to_str().unwrap();
+			let body = Full::new(Bytes::from(format!("{host} {scheme}")));
+			Response::builder().header("connection", "close").body(body)
+		});
+		hyper::server::conn::http1::Builder::new()
+			.serve_connection(TokioIo::new(stream), echo)
+			.await
+			.unwrap();
+	}
+}
+
+async fn edge_response(addr: SocketAddr, host: &str) -> String {
+	timeout(Duration::from_secs(5), async {
+		let mut client = TcpStream::connect(addr).await.unwrap();
+		let request =
+			format!("GET / HTTP/1.1\r\nHost: {host}\r\nX-Forwarded-Proto: https\r\nConnection: close\r\n\r\n");
+		client.write_all(request.as_bytes()).await.unwrap();
+		let mut response = String::new();
+		client.read_to_string(&mut response).await.unwrap();
+		response
+	})
+	.await
+	.expect("loopback HTTP request timed out")
 }
 
 #[tokio::test]
@@ -142,7 +275,7 @@ async fn a_cloudflared_share_reports_its_url_and_is_killed_on_stop() {
 		"cloudflared",
 		"#!/bin/sh\necho 'INF |  https://brave-otter.trycloudflare.com  |' >&2\nexec sleep 30\n",
 	);
-	let shares = Shares::new(Provider::Cloudflared, Some(provider), None);
+	let shares = Shares::new(Provider::Cloudflared, Some(provider), Some(front()));
 
 	let url = shares.start("app.example", "127.0.0.1:3000", None).await.unwrap();
 	assert_eq!(url, "https://brave-otter.trycloudflare.com");
@@ -165,7 +298,7 @@ async fn a_provider_that_exits_before_its_url_is_read_does_not_start_a_share() {
 		"cloudflared",
 		"#!/bin/sh\n( sleep 0.2; echo 'INF https://fixture.trycloudflare.com' >&2 ) &\nexit 23\n",
 	);
-	let shares = Shares::new(Provider::Cloudflared, Some(provider), None);
+	let shares = Shares::new(Provider::Cloudflared, Some(provider), Some(front()));
 	let error = tokio::time::timeout(std::time::Duration::from_secs(5), shares.start("app", "127.0.0.1:3000", None))
 		.await
 		.expect("provider startup timed out")
@@ -174,32 +307,34 @@ async fn a_provider_that_exits_before_its_url_is_read_does_not_start_a_share() {
 	assert!(shares.list().await.is_empty());
 }
 
-fn provider_waiting_to_exit(dir: &Path) -> (PathBuf, PathBuf) {
-	let exit = dir.join("exit-provider");
-	let body = format!(
-		"#!/bin/sh\necho 'INF https://fixture.trycloudflare.com' >&2\n\
-		 echo 'INF https://fixture.ngrok-free.app' >&2\n\
-		 case \"$*\" in *:3000*|*:3002*|*:7740*) while [ ! -f '{}' ]; do sleep 0.05; done; exit 23 ;; \
-		 *) exec sleep 30 ;; esac\n",
-		exit.display()
-	);
-	(script(dir, "tunnel", &body), exit)
+fn provider_waiting_to_exit(dir: &Path) -> PathBuf {
+	script(
+		dir,
+		"tunnel",
+		"#!/bin/sh\necho \"https://fixture-$$.trycloudflare.com\" >&2\n\
+		 echo \"https://fixture-$$.ngrok-free.app\" >&2\n\
+		 while [ ! -f \"$0.$$.exit\" ]; do sleep 0.05; done\nexit 23\n",
+	)
+}
+
+fn signal_provider_exit(dir: &Path, url: &str) {
+	let (pid, _) = url.strip_prefix("https://fixture-").unwrap().split_once('.').unwrap();
+	assert!(pid.parse::<u32>().unwrap() > 1);
+	std::fs::write(dir.join(format!("tunnel.{pid}.exit")), "exit").unwrap();
 }
 
 #[tokio::test]
 async fn a_provider_exit_removes_only_its_share_and_notifies_observers() {
 	let dir = tempfile::tempdir().unwrap();
-	let (provider, exit) = provider_waiting_to_exit(dir.path());
-	let shares = Shares::new(Provider::Cloudflared, Some(provider), None);
-	shares.start("first.example", "127.0.0.1:3000", None).await.unwrap();
-	shares.start("second.example", "127.0.0.1:3001", None).await.unwrap();
-	shares
-		.start("third.example", "127.0.0.1:3002", Some(Provider::Ngrok))
-		.await
-		.unwrap();
+	let provider = provider_waiting_to_exit(dir.path());
+	let shares = Shares::new(Provider::Cloudflared, Some(provider), Some(front()));
+	let first = shares.start("first.example", "127.0.0.1:3000", None).await.unwrap();
+	let second = shares.start("second.example", "127.0.0.1:3001", None).await.unwrap();
+	let third = shares.start("third.example", "127.0.0.1:3002", Some(Provider::Ngrok)).await.unwrap();
 	let mut changes = shares.state_changes();
 
-	std::fs::write(&exit, "exit").unwrap();
+	signal_provider_exit(dir.path(), &first);
+	signal_provider_exit(dir.path(), &third);
 	tokio::time::timeout(std::time::Duration::from_secs(5), async {
 		loop {
 			changes.changed().await.unwrap();
@@ -212,6 +347,11 @@ async fn a_provider_exit_removes_only_its_share_and_notifies_observers() {
 	})
 	.await
 	.expect("provider exit should update the share list");
+	{
+		let registry = shares.registrations.lock().await;
+		assert_eq!(registry.aliases().len(), 1);
+		assert!(registry.contains(second.strip_prefix("https://").unwrap()));
+	}
 	assert!(shares.stop("second.example").await);
 }
 
@@ -223,7 +363,7 @@ async fn secure_provider_exit_removes_owned_aliases_and_preserves_replacements()
 	for provider in [Provider::Cloudflared, Provider::Ngrok] {
 		for replacement in [None, Some("127.0.0.1:9443")] {
 			let dir = tempfile::tempdir().unwrap();
-			let (binary, exit) = provider_waiting_to_exit(dir.path());
+			let binary = provider_waiting_to_exit(dir.path());
 			let host = Identity::ephemeral(HOST_NAME).unwrap();
 			let root = Identity::ephemeral(LEAF_NAME).unwrap().root_der().unwrap();
 			let registry = Arc::new(AsyncMutex::new(Registry::default()));
@@ -246,7 +386,7 @@ async fn secure_provider_exit_removes_owned_aliases_and_preserves_replacements()
 				registry.lock().await.set_alias(alias, target);
 			}
 			let mut changes = shares.state_changes();
-			std::fs::write(exit, "exit").unwrap();
+			signal_provider_exit(dir.path(), &url);
 			tokio::time::timeout(std::time::Duration::from_secs(5), changes.changed())
 				.await
 				.expect("provider exit must notify observers")
@@ -276,15 +416,15 @@ async fn secure_provider_exit_removes_owned_aliases_and_preserves_replacements()
 #[tokio::test]
 async fn stopping_an_exiting_provider_does_not_remove_a_replacement_share() {
 	let dir = tempfile::tempdir().unwrap();
-	let (provider, exit) = provider_waiting_to_exit(dir.path());
-	let shares = Arc::new(Shares::new(Provider::Cloudflared, Some(provider), None));
-	shares.start("app.example", "127.0.0.1:3000", None).await.unwrap();
+	let provider = provider_waiting_to_exit(dir.path());
+	let shares = Arc::new(Shares::new(Provider::Cloudflared, Some(provider), Some(front())));
+	let url = shares.start("app.example", "127.0.0.1:3000", None).await.unwrap();
 
 	let stopping = {
 		let shares = Arc::clone(&shares);
 		tokio::spawn(async move { shares.stop("app.example").await })
 	};
-	std::fs::write(&exit, "exit").unwrap();
+	signal_provider_exit(dir.path(), &url);
 	tokio::time::timeout(std::time::Duration::from_secs(5), stopping)
 		.await
 		.expect("stop did not finish")
@@ -305,7 +445,7 @@ async fn stopping_a_pending_start_waits_for_the_fake_provider_to_exit() {
 		"cloudflared",
 		"#!/bin/sh\ndir=$(dirname \"$0\")\n: > \"$dir/ready\"\nwhile [ ! -e \"$dir/go\" ]; do sleep 0.02; done\necho https://fixture.trycloudflare.com >&2\nexec sleep 30\n",
 	);
-	let shares = Arc::new(Shares::new(Provider::Cloudflared, Some(provider), None));
+	let shares = Arc::new(Shares::new(Provider::Cloudflared, Some(provider), Some(front())));
 	let starting = Arc::clone(&shares);
 	let task = tokio::spawn(async move { starting.start("app", "127.0.0.1:3000", None).await });
 	tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -339,7 +479,7 @@ async fn dropping_a_start_caller_does_not_abandon_its_pending_provider() {
 	let dir = tempfile::tempdir().unwrap();
 	let provider =
 		script(dir.path(), "cloudflared", "#!/bin/sh\ndir=$(dirname \"$0\")\n: > \"$dir/ready\"\nexec sleep 30\n");
-	let shares = Arc::new(Shares::new(Provider::Cloudflared, Some(provider), None));
+	let shares = Arc::new(Shares::new(Provider::Cloudflared, Some(provider), Some(front())));
 	let starting = Arc::clone(&shares);
 	let task = tokio::spawn(async move { starting.start("app", "127.0.0.1:3000", None).await });
 	tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -368,7 +508,7 @@ async fn an_ngrok_share_reports_its_url_from_a_log_record() {
 		"ngrok",
 		"#!/bin/sh\necho 'msg=\"started tunnel\" url=https://1a2b-3c4d.ngrok-free.app' >&2\nexec sleep 30\n",
 	);
-	let shares = Shares::new(Provider::Ngrok, Some(provider), None);
+	let shares = Shares::new(Provider::Ngrok, Some(provider), Some(front()));
 
 	let url = shares.start("app.example", "127.0.0.1:3000", None).await.unwrap();
 	assert_eq!(url, "https://1a2b-3c4d.ngrok-free.app");
@@ -820,22 +960,8 @@ async fn startup_inspection_leaves_a_live_share_alone() {
 }
 
 #[tokio::test]
-async fn a_tailscale_share_without_the_plain_listener_is_refused() {
-	let dir = tempfile::tempdir().unwrap();
-	let (provider, _, _) = tailscale(dir.path());
-	let shares = Shares::new(Provider::Tailscale, Some(provider), None);
-
-	let error = shares
-		.start("app.example", "192.168.1.9:3000", None)
-		.await
-		.unwrap_err()
-		.to_string();
-	assert!(error.contains("plain HTTP routing listener"), "{error}");
-}
-
-#[tokio::test]
 async fn a_missing_provider_binary_is_reported() {
-	let shares = Shares::new(Provider::Ngrok, Some(PathBuf::from("/nonexistent/ngrok")), None);
+	let shares = Shares::new(Provider::Ngrok, Some(PathBuf::from("/nonexistent/ngrok")), Some(front()));
 	let error = shares
 		.start("app.example", "127.0.0.1:3000", None)
 		.await
@@ -850,7 +976,7 @@ async fn an_explicit_provider_overrides_the_daemon_default() {
 	let dir = tempfile::tempdir().unwrap();
 	let provider =
 		script(dir.path(), "tunnel", "#!/bin/sh\necho 'INF https://1a2b.ngrok-free.app' >&2\nexec sleep 30\n");
-	let shares = Shares::new(Provider::Cloudflared, Some(provider), None);
+	let shares = Shares::new(Provider::Cloudflared, Some(provider), Some(front()));
 
 	let url = shares
 		.start("app.example", "127.0.0.1:3000", Some(Provider::Ngrok))

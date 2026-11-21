@@ -119,7 +119,7 @@ async fn start_on(bind: &str, provider: Option<std::path::PathBuf>) -> Harness {
 		Arc::new(testd_daemon::share::Shares::new(
 			testd_daemon::share::Provider::Cloudflared,
 			Some(provider),
-			None,
+			Some(testd_daemon::share::Front { plain_addr: "127.0.0.1:7740".parse().unwrap() }),
 			registrations.clone(),
 		))
 	});
@@ -245,12 +245,11 @@ mod share_lifetime {
 		shares.start("app", "app.test", None).await.unwrap();
 	}
 
-	const TRACKED_PROVIDER: &str = "#!/bin/sh\nprintf '%s\\n' \"$$\" > \"$0.${4##*:}.pid\"\n\
-		echo https://fixture.trycloudflare.com >&2\nexec sleep 30\n";
+	const TRACKED_PROVIDER: &str = "#!/bin/sh\necho \"https://fixture-$$.trycloudflare.com\" >&2\nexec sleep 30\n";
 
-	fn provider_pid(directory: &std::path::Path, port: u16) -> u32 {
-		let path = directory.join(format!("provider.{port}.pid"));
-		let pid = std::fs::read_to_string(path).unwrap().trim().parse::<u32>().unwrap();
+	fn provider_pid(url: &str) -> u32 {
+		let pid = url.strip_prefix("https://fixture-").unwrap().strip_suffix(".trycloudflare.com").unwrap();
+		let pid = pid.parse::<u32>().unwrap();
 		assert!(pid > 1, "invalid fake provider pid: {pid}");
 		pid
 	}
@@ -338,14 +337,14 @@ mod share_lifetime {
 
 	#[tokio::test]
 	async fn deleting_an_established_name_grant_stops_only_its_share() {
-		let (directory, harness, shares) = start_fixture(TRACKED_PROVIDER).await;
+		let (_directory, harness, shares) = start_fixture(TRACKED_PROVIDER).await;
 		let (mut leaf, _token) = approved_leaf(&harness, &["app", "api"]).await;
 		assert!(matches!(leaf.request(register("app", "3000", false)).await, Response::Ok));
 		assert!(matches!(leaf.request(register("api", "4000", false)).await, Response::Ok));
-		shares.start("app", "app.test", None).await.unwrap();
-		shares.start("api", "api.test", None).await.unwrap();
-		let app_pid = provider_pid(directory.path(), 3000);
-		let api_pid = provider_pid(directory.path(), 4000);
+		let app_url = shares.start("app", "app.test", None).await.unwrap();
+		let api_url = shares.start("api", "api.test", None).await.unwrap();
+		let app_pid = provider_pid(&app_url);
+		let api_pid = provider_pid(&api_url);
 		assert!(is_process_running(app_pid) && is_process_running(api_pid));
 
 		harness
@@ -372,15 +371,15 @@ mod share_lifetime {
 
 	#[tokio::test]
 	async fn revoking_an_established_token_stops_only_its_shares() {
-		let (directory, harness, shares) = start_fixture(TRACKED_PROVIDER).await;
+		let (_directory, harness, shares) = start_fixture(TRACKED_PROVIDER).await;
 		let (mut leaf, token) = approved_leaf(&harness, &["app"]).await;
 		let mut other = Client::connect(harness.addr, &harness.token).await;
 		assert!(matches!(leaf.request(register("app", "3000", false)).await, Response::Ok));
 		assert!(matches!(other.request(register("other", "5000", false)).await, Response::Ok));
-		shares.start("app", "app.test", None).await.unwrap();
-		shares.start("other", "other.test", None).await.unwrap();
-		let app_pid = provider_pid(directory.path(), 3000);
-		let other_pid = provider_pid(directory.path(), 5000);
+		let app_url = shares.start("app", "app.test", None).await.unwrap();
+		let other_url = shares.start("other", "other.test", None).await.unwrap();
+		let app_pid = provider_pid(&app_url);
+		let other_pid = provider_pid(&other_url);
 		assert!(is_process_running(app_pid) && is_process_running(other_pid));
 
 		let body = format!("{{\"id\":\"{}\"}}", token.id);

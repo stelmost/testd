@@ -100,12 +100,6 @@ impl Provider {
 		self.name()
 	}
 
-	/// Whether the provider must be pointed at the local edge instead of at the
-	/// registration target.
-	pub fn needs_front(self) -> bool {
-		matches!(self, Provider::Tailscale)
-	}
-
 	/// Arguments that start the share, given the address it proxies to.
 	fn start_args(self, upstream: &str) -> Vec<String> {
 		match self {
@@ -151,11 +145,7 @@ pub struct ShareView {
 	pub url: String,
 }
 
-/// The local edge a provider can point at instead of the raw target.
-///
-/// Pointing a provider here keeps the request shape browsers get: the edge
-/// answers the share's name and proxies to the registration target, so a
-/// container or LAN target works and the app sees its registered name.
+/// The local edge that routes a provider's hostname to its authorizing claim.
 #[derive(Clone)]
 pub struct Front {
 	/// Plain HTTP listener of the edge.
@@ -427,15 +417,14 @@ struct Active {
 }
 
 enum ProviderResource {
-	Process { child: Box<Child>, alias: Option<String> },
+	Process { child: Box<Child>, alias: String },
 	Tailscale { alias: String },
 }
 
 impl ProviderResource {
-	fn alias(&self) -> Option<&str> {
+	fn alias(&self) -> &str {
 		match self {
-			Self::Process { alias, .. } => alias.as_deref(),
-			Self::Tailscale { alias } => Some(alias),
+			Self::Process { alias, .. } | Self::Tailscale { alias } => alias,
 		}
 	}
 }
@@ -517,12 +506,8 @@ impl Shares {
 			Some(provider) => provider,
 			None => self.default.clone().map_err(anyhow::Error::msg)?,
 		};
-		if provider.needs_front() && self.front.is_none() {
-			bail!(
-				"{} needs the plain HTTP routing listener, and this daemon has none; \
-				 share with cloudflared or ngrok instead",
-				provider.name()
-			);
+		if self.front.is_none() {
+			bail!("{} needs the plain HTTP routing listener, and this daemon has none", provider.name());
 		}
 		Ok(provider)
 	}
@@ -648,12 +633,11 @@ impl Shares {
 		if !valid || !may_publish || state.is_shutting_down {
 			return Err((PublishFailure::ClaimChanged, Box::new(share)));
 		}
-		if let Some(alias) = share.resource.alias() {
-			if registry.contains(alias) {
-				return Err((PublishFailure::AliasConflict, Box::new(share)));
-			}
-			registry.set_claim_alias(alias, &share.binding.domain);
+		let alias = share.resource.alias();
+		if registry.contains(alias) {
+			return Err((PublishFailure::AliasConflict, Box::new(share)));
 		}
+		registry.set_claim_alias(alias, &share.binding.domain);
 		let url = share.url.clone();
 		let child_identity = match &share.resource {
 			ProviderResource::Process { .. } => Some(Arc::clone(&share.identity)),
@@ -815,18 +799,17 @@ impl Shares {
 			ShareLifecycle::Active(share) => {
 				let (cancel, _) = watch::channel(true);
 				let (finished, _) = watch::channel(PendingResult::Running);
-				let alias_error = share.resource.alias().and_then(|alias| {
-					let owns_alias = registry.route(alias).is_some_and(|claim| {
-						claim.connection == share.binding.connection
-							&& claim.registration.target == share.binding.target
-							&& claim.transport.as_ref().map(|tls| &tls.root) == share.binding.root.as_ref()
-					});
-					if owns_alias && registry.remove_alias(alias) {
-						None
-					} else {
-						Some(format!("provider alias {alias} changed; leaving provider state untouched"))
-					}
+				let alias = share.resource.alias();
+				let owns_alias = registry.route(alias).is_some_and(|claim| {
+					claim.connection == share.binding.connection
+						&& claim.registration.target == share.binding.target
+						&& claim.transport.as_ref().map(|tls| &tls.root) == share.binding.root.as_ref()
 				});
+				let alias_error = if owns_alias && registry.remove_alias(alias) {
+					None
+				} else {
+					Some(format!("provider alias {alias} changed; leaving provider state untouched"))
+				};
 				let pending = Pending {
 					identity: Arc::clone(&share.identity),
 					binding: share.binding.clone(),
@@ -1068,23 +1051,15 @@ impl Shares {
 		cancellation: &mut watch::Receiver<bool>,
 	) -> Result<Active> {
 		let ShareStart { name, provider, .. } = start;
-		let target = &start.owner.target;
-		if provider.needs_front() {
-			return self.spawn_through_front(start, binary, cancellation).await;
+		if *provider == Provider::Tailscale {
+			return self.spawn_tailscale(start, binary, cancellation).await;
 		}
 		if *cancellation.borrow() {
 			bail!("share start for {name} was cancelled");
 		}
-		/* Secure claims go through the edge so providers never bypass leaf TLS or receive host private keys. */
-		let upstream = if start.owner.root.is_some() {
-			self.front
-				.as_ref()
-				.context("secure shares require the local routing edge")?
-				.plain_addr
-				.to_string()
-		} else {
-			target.clone()
-		};
+		/* Never let a public provider outlive the claim by pointing it at the raw target. */
+		let front = self.front.as_ref().context("public shares require the local routing edge")?;
+		let upstream = front.plain_addr.to_string();
 		let args = provider.start_args(&upstream);
 		let mut child = spawn_with_retry(binary, &args, true)
 			.await
@@ -1103,15 +1078,7 @@ impl Shares {
 				return Err(error);
 			},
 		};
-		let alias = if start.owner.root.is_some() {
-			Some(
-				url.strip_prefix("https://")
-					.context("provider returned a non-HTTPS URL")?
-					.to_owned(),
-			)
-		} else {
-			None
-		};
+		let alias = url.strip_prefix("https://").context("provider returned a non-HTTPS URL")?.to_owned();
 		Ok(Active {
 			identity: Arc::clone(&start.identity),
 			binding: start.owner.clone(),
@@ -1121,12 +1088,8 @@ impl Shares {
 		})
 	}
 
-	/// Point a provider at the local edge and teach the edge the name it serves.
-	///
-	/// Requests then look exactly like browser requests: the edge answers the
-	/// share's name and proxies to the registration target, so a container or LAN
-	/// target works and the app sees the name it was registered under.
-	async fn spawn_through_front(
+	/// Configure persistent Serve state without overwriting an existing HTTPS route.
+	async fn spawn_tailscale(
 		&self,
 		start: &ShareStart,
 		binary: &Path,
@@ -1466,7 +1429,10 @@ mod tests {
 	fn invalid_environment_does_not_fall_back_or_override_an_explicit_provider() {
 		const FIXTURE: &str = "TESTD_INVALID_PROVIDER_FIXTURE";
 		if std::env::var_os(FIXTURE).is_some() {
-			let shares = Shares::from_env(None, Arc::new(Mutex::new(Registry::default())));
+			let shares = Shares::from_env(
+				Some(Front { plain_addr: "127.0.0.1:7740".parse().unwrap() }),
+				Arc::new(Mutex::new(Registry::default())),
+			);
 			let error = shares.checked_provider(None).unwrap_err().to_string();
 			assert!(error.contains("TESTD_TUNNEL_PROVIDER"), "{error}");
 			assert_eq!(shares.checked_provider(Some(Provider::Cloudflared)).unwrap(), Provider::Cloudflared);
@@ -1551,7 +1517,7 @@ mod tests {
 		assert!(!registry.contains("node.tailnet.ts.net"));
 		let (_, stopping) = batch.stopping.pop().unwrap();
 		assert!(Arc::ptr_eq(&stopping.identity, &identity));
-		assert_eq!(stopping.resource.alias(), Some("node.tailnet.ts.net"));
+		assert_eq!(stopping.resource.alias(), "node.tailnet.ts.net");
 		Shares::detach_name(&mut state, &mut registry, "app", &mut batch);
 		assert!(batch.stopping.is_empty(), "only one task owns provider cleanup");
 		drop(state);
@@ -1678,13 +1644,6 @@ mod tests {
 		for status in ["null", r#"{}"#, r#"{"Web":{}}"#, r#"{"TCP":{"8443":{}}}"#] {
 			assert!(is_443_available(status), "{status}");
 		}
-	}
-
-	#[test]
-	fn only_tailscale_needs_the_local_front() {
-		assert!(Provider::Tailscale.needs_front());
-		assert!(!Provider::Cloudflared.needs_front());
-		assert!(!Provider::Ngrok.needs_front());
 	}
 
 	#[test]
