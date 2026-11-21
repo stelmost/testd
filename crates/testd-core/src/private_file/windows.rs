@@ -440,8 +440,7 @@ mod tests {
 		let directory = root.path().join("d".repeat(220usize.saturating_sub(length + 1).max(1)));
 		std::fs::create_dir(&directory).unwrap();
 		let staging_length = directory.as_os_str().encode_wide().count()
-			+ 1
-			+ ".testd-private-".len()
+			+ 1 + ".testd-private-".len()
 			+ crate::config::generate_operator_secret().unwrap().len();
 		assert!(staging_length >= 260);
 		let short = directory.join("issued");
