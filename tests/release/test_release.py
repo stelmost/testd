@@ -253,13 +253,30 @@ class ReleaseTests(unittest.TestCase):
 		condition = next(line.strip() for line in release_job.splitlines() if line.strip().startswith('if:'))
 		self.assertEqual(condition, "if: startsWith(github.ref, 'refs/tags/v')")
 
-	def test_release_notes_distinguish_ad_hoc_integrity_from_trusted_signing(self):
+	def test_release_notes_cover_finalized_alpha_security_and_unsigned_policy(self):
 		version = workspace_version()
 		with patch.object(sys, 'argv', ['release.py', 'release-notes', version]), \
 				redirect_stdout(io.StringIO()) as output:
 			release.main()
 		text = output.getvalue()
-		self.assertIn(f'## [{version}]', text)
+		heading = next(line for line in (ROOT / 'CHANGELOG.md').read_text().splitlines()
+			if line.startswith(f'## [{version}]'))
+		self.assertIn(heading, text)
+		implemented_notes = (
+			'Native TLS 1.3 registration with explicit host pairing',
+			'Owner-authenticated dashboard and setup requests',
+			'Mutually authenticated host-to-leaf application forwarding',
+			'mutual TLS (mTLS)',
+			'daemon restart invalidates dashboard sessions',
+			'Tailscale startup no longer deletes or adopts an unowned route',
+			'The Tauri framework, webview runtime',
+		)
+		for note in implemented_notes:
+			self.assertIn(note, text)
+		self.assertNotIn('## [Unreleased]', text)
+		self.assertNotIn('Remote registration is plain TCP', text)
+		self.assertNotIn('per-run control token', text)
+		self.assertNotIn('root CA installation never stages a certificate in a user-writable temp file', text)
 		self.assertIn('Windows artifacts are unsigned', text)
 		self.assertIn('macOS is not Developer ID signed or notarized', text)
 		self.assertIn('optional macOS ad-hoc resource seal', text)
