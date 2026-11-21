@@ -359,7 +359,7 @@ def snapshot(host, directory, artifacts=None):
 	artifacts = files(host) if artifacts is None else artifacts
 	missing_directories = set()
 	for item in artifacts:
-		parent = str(pathlib.Path(item['path']).parent)
+		parent = str(pathlib.PurePosixPath(item['path']).parent)
 		if not host.directory(parent):
 			if host.system == 'Darwin' and parent == '/etc/resolver' and not host.exists(parent):
 				missing_directories.add(parent)

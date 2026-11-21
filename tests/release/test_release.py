@@ -2862,7 +2862,7 @@ class BrowserTests(unittest.TestCase):
 			self.assertEqual(run.results[-1]['name'], 'host-resolution')
 			self.assertEqual(run.results[-1]['status'], 'pass')
 
-	@unittest.skipIf(sys.platform == 'win32', 'Unix fixture config location')
+	@unittest.skipIf(sys.platform == 'win32', 'not applicable: browser fixture uses Unix config locations')
 	def test_browser_status_uses_the_transient_dashboard_credential(self):
 		with tempfile.TemporaryDirectory() as directory:
 			config = pathlib.Path(directory) / '.config/testd'

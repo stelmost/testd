@@ -11,6 +11,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
+@unittest.skipIf(os.name == 'nt', 'not applicable: AppImage hook fixtures require Unix execution')
 @unittest.skipUnless(shutil.which('bash'), 'Bash is required for AppImage hook checks')
 class AppImageTests(unittest.TestCase):
 	def hook_environment(self, original):
