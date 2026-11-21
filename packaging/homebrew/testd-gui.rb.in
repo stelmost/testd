@@ -4,9 +4,7 @@ cask "testd-gui" do
   on_arm do
     sha256 '@ARM_SHA256@'
   end
-  on_intel do
-    sha256 '@INTEL_SHA256@'
-  end
+@INTEL_SUPPORT@
 
   url "https://github.com/LapilliWorks/testd/releases/download/v#{version}/Testd_#{version}_#{arch}.dmg"
   name "Testd"

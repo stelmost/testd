@@ -317,24 +317,79 @@ class ReleaseTests(unittest.TestCase):
 		with self.assertRaises(ValueError):
 			release.check_version('0.0.0')
 
-	def test_homebrew_definitions_use_real_cached_bytes_and_both_architectures(self):
+	def test_homebrew_definitions_use_real_cached_bytes_and_supported_architectures(self):
 		version = workspace_version()
 		source = f'testd-{version}-source.tar.gz'
 		arm = f'Testd_{version}_aarch64.dmg'
 		intel = f'Testd_{version}_x64.dmg'
+		for has_intel in (False, True):
+			with self.subTest(has_intel=has_intel), tempfile.TemporaryDirectory() as temporary:
+				root = pathlib.Path(temporary)
+				for name in [source, arm, *([intel] if has_intel else [])]:
+					(root / name).write_bytes(name.encode())
+				args = SimpleNamespace(version=version, artifacts=root, output=root / 'tap')
+				with patch.object(release.urllib.request, 'urlopen') as download:
+					release.homebrew(args)
+					download.assert_not_called()
+				formula = (root / 'tap/testd.rb').read_text()
+				cask = (root / 'tap/testd-gui.rb').read_text()
+				self.assertIn(release.digest(root / source), formula)
+				self.assertIn(release.digest(root / arm), cask)
+				if has_intel:
+					self.assertIn(release.digest(root / intel), cask)
+					self.assertIn('on_intel do', cask)
+					self.assertNotIn('depends_on arch:', cask)
+				else:
+					self.assertIn('depends_on arch: :arm64', cask)
+					self.assertNotIn('on_intel do', cask)
+				self.assertNotRegex(formula + cask, r'@[A-Z0-9_]+@')
+				self.assertIn('arch arm:', cask)
+				self.assertIn('doctor --json", 1', formula)
+				with self.assertRaises(FileExistsError):
+					release.homebrew(args)
+
+	def test_homebrew_requires_arm_assets_before_downloading_or_writing(self):
+		version = workspace_version()
+		for has_intel in (False, True):
+			with self.subTest(has_intel=has_intel), tempfile.TemporaryDirectory() as temporary:
+				root = pathlib.Path(temporary)
+				if has_intel:
+					(root / f'Testd_{version}_x64.dmg').write_bytes(b'intel')
+				with patch.object(release.urllib.request, 'urlopen') as download:
+					with self.assertRaises(FileNotFoundError) as missing:
+						release.homebrew(SimpleNamespace(version=version, artifacts=root, output=root / 'tap'))
+					download.assert_not_called()
+				self.assertEqual(missing.exception.filename, str(root / f'Testd_{version}_aarch64.dmg'))
+				self.assertFalse((root / 'tap').exists())
+
+	def test_homebrew_does_not_ignore_an_invalid_optional_intel_asset(self):
+		version = workspace_version()
 		with tempfile.TemporaryDirectory() as temporary:
 			root = pathlib.Path(temporary)
-			for name in [source, arm, intel]:
+			(root / f'Testd_{version}_aarch64.dmg').write_bytes(b'arm')
+			(root / f'Testd_{version}_x64.dmg').mkdir()
+			with patch.object(release.urllib.request, 'urlopen') as download, self.assertRaises(OSError):
+				release.homebrew(SimpleNamespace(version=version, artifacts=root, output=root / 'tap'))
+			download.assert_not_called()
+			self.assertFalse((root / 'tap').exists())
+
+	def test_homebrew_rejects_unexpanded_checksum_placeholders(self):
+		version = workspace_version()
+		template = ROOT / 'packaging/homebrew/testd-gui.rb.in'
+		read_text = pathlib.Path.read_text
+
+		def unknown_checksum(path, *args, **kwargs):
+			text = read_text(path, *args, **kwargs)
+			return text.replace('@ARM_SHA256@', '@UNKNOWN_SHA256@') if path == template else text
+
+		with tempfile.TemporaryDirectory() as temporary:
+			root = pathlib.Path(temporary)
+			for name in (f'testd-{version}-source.tar.gz', f'Testd_{version}_aarch64.dmg',
+					f'Testd_{version}_x64.dmg'):
 				(root / name).write_bytes(name.encode())
-			release.homebrew(SimpleNamespace(version=version, artifacts=root, output=root / 'tap'))
-			formula = (root / 'tap/testd.rb').read_text()
-			cask = (root / 'tap/testd-gui.rb').read_text()
-			self.assertIn(release.digest(root / source), formula)
-			self.assertIn(release.digest(root / arm), cask)
-			self.assertIn(release.digest(root / intel), cask)
-			self.assertNotIn('@VERSION@', formula + cask)
-			self.assertIn('arch arm:', cask)
-			self.assertIn('doctor --json", 1', formula)
+			with patch.object(pathlib.Path, 'read_text', unknown_checksum), \
+					self.assertRaisesRegex(ValueError, 'unexpanded Homebrew template'):
+				release.homebrew(SimpleNamespace(version=version, artifacts=root, output=root / 'tap'))
 
 	def test_checksums_detect_modification_and_unlisted_files(self):
 		with tempfile.TemporaryDirectory() as temporary:

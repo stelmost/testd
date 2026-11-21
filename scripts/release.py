@@ -88,6 +88,11 @@ def copy_bundles(args, platform, arch):
 
 def homebrew(args):
 	check_version(args.version)
+	arm_sha256 = digest(args.artifacts / f'Testd_{args.version}_aarch64.dmg')
+	intel = args.artifacts / f'Testd_{args.version}_x64.dmg'
+	intel_support = '  depends_on arch: :arm64'
+	if intel.exists():
+		intel_support = f"  on_intel do\n    sha256 '{digest(intel)}'\n  end"
 	args.output.mkdir(parents=True, exist_ok=True)
 	source = args.artifacts / f'testd-{args.version}-source.tar.gz'
 	if not source.exists():
@@ -101,14 +106,14 @@ def homebrew(args):
 	values = {
 		'VERSION': args.version,
 		'SOURCE_SHA256': digest(source),
-		'ARM_SHA256': digest(args.artifacts / f'Testd_{args.version}_aarch64.dmg'),
-		'INTEL_SHA256': digest(args.artifacts / f'Testd_{args.version}_x64.dmg'),
+		'ARM_SHA256': arm_sha256,
+		'INTEL_SUPPORT': intel_support,
 	}
 	for name in ['testd', 'testd-gui']:
 		text = (ROOT / f'packaging/homebrew/{name}.rb.in').read_text()
 		for key, value in values.items():
 			text = text.replace(f'@{key}@', value)
-		if re.search(r'@[A-Z_]+@', text):
+		if re.search(r'@[A-Z0-9_]+@', text):
 			raise ValueError(f'unexpanded Homebrew template: {name}')
 		path = args.output / f'{name}.rb'
 		if path.exists():
