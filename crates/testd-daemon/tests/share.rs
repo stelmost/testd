@@ -692,6 +692,40 @@ async fn an_already_removed_tailscale_route_stops_idempotently_without_off() {
 }
 
 #[tokio::test]
+async fn verified_absence_clears_a_previous_tailscale_cleanup_quarantine() {
+	use serde_json::json;
+
+	for absent in [
+		serde_json::Value::Null,
+		json!({}),
+		json!({"TCP": {"8443": {"HTTPS": true}}}),
+	] {
+		let dir = tempfile::tempdir().unwrap();
+		let (provider, args, stopped) = tailscale(dir.path());
+		let shares = Shares::new(Provider::Tailscale, Some(provider), Some(front()));
+		shares.start("app", "127.0.0.1:3000", None).await.unwrap();
+		let external = dir.path().join("external-status.json");
+		let mut foreign = private_serve_config();
+		foreign["AllowFunnel"]["node-a.tailnet.ts.net:443"] = json!(true);
+		std::fs::write(&external, foreign.to_string()).unwrap();
+		assert!(shares.try_stop("app").await.is_err());
+		assert!(shares.try_stop("app").await.is_err(), "present foreign state must remain quarantined");
+		assert!(!stopped.exists(), "retry must not delete changed provider state");
+		let before_args = std::fs::read_to_string(&args).unwrap();
+		let status = absent.to_string();
+		std::fs::write(&external, &status).unwrap();
+		std::fs::remove_file(dir.path().join("serve-on")).unwrap();
+		assert!(shares.try_stop("app").await.unwrap(), "verified absence must clear prior quarantine");
+		assert!(!shares.try_stop("app").await.unwrap());
+		assert!(!stopped.exists(), "verified absence must not send off");
+		assert_eq!(std::fs::read_to_string(&args).unwrap(), before_args);
+		assert_eq!(std::fs::read_to_string(&external).unwrap(), status);
+		shares.start("app", "127.0.0.1:3000", None).await.unwrap();
+		assert!(shares.try_stop("app").await.unwrap());
+	}
+}
+
+#[tokio::test]
 async fn failed_tailscale_cleanup_blocks_replacement_and_reports_the_error() {
 	let dir = tempfile::tempdir().unwrap();
 	let started = dir.path().join("started");

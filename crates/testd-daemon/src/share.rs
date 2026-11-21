@@ -262,7 +262,17 @@ impl ShareLifecycle {
 struct StopBatch {
 	stopping: Vec<(String, StoppingShare)>,
 	waiting: Vec<watch::Receiver<PendingResult>>,
+	absence_checks: Vec<(String, Arc<()>)>,
 	errors: Vec<String>,
+}
+
+impl StopBatch {
+	fn is_empty(&self) -> bool {
+		self.stopping.is_empty()
+			&& self.waiting.is_empty()
+			&& self.absence_checks.is_empty()
+			&& self.errors.is_empty()
+	}
 }
 
 #[derive(Default)]
@@ -773,7 +783,7 @@ impl Shares {
 		Self::detach_name(&mut state, &mut registry, name, &mut batch);
 		drop(state);
 		drop(registry);
-		let found = !batch.stopping.is_empty() || !batch.waiting.is_empty() || !batch.errors.is_empty();
+		let found = !batch.is_empty();
 		let detached = self.queue_cleanup(batch);
 		self.finish_detached(detached).await?;
 		Ok(found)
@@ -841,10 +851,17 @@ impl Shares {
 				detached.waiting.push(pending.finished.subscribe());
 				ShareLifecycle::Stopping(pending)
 			},
-			entry @ (ShareLifecycle::Stopping(_) | ShareLifecycle::CleanupUnverified(_)) => {
-				let pending = entry.pending().expect("pending lifecycle");
+			ShareLifecycle::Stopping(pending) => {
 				detached.waiting.push(pending.finished.subscribe());
-				entry
+				ShareLifecycle::Stopping(pending)
+			},
+			ShareLifecycle::CleanupUnverified(pending) => {
+				if pending.provider == Provider::Tailscale {
+					detached.absence_checks.push((name.to_owned(), Arc::clone(&pending.identity)));
+				} else {
+					detached.waiting.push(pending.finished.subscribe());
+				}
+				ShareLifecycle::CleanupUnverified(pending)
 			},
 		};
 		state.entries.insert(name.to_owned(), next);
@@ -856,7 +873,7 @@ impl Shares {
 	}
 
 	fn queue_cleanup(&self, batch: StopBatch) -> DetachedShares {
-		if batch.stopping.is_empty() && batch.waiting.is_empty() && batch.errors.is_empty() {
+		if batch.is_empty() {
 			return DetachedShares::default();
 		}
 		let shares = self.clone();
@@ -889,6 +906,11 @@ impl Shares {
 			}
 			self.bump();
 		}
+		for (name, identity) in detached.absence_checks {
+			if let Err(error) = self.finish_tailscale_absence_check(&name, &identity).await {
+				errors.push(error.to_string());
+			}
+		}
 		for mut finished in detached.waiting {
 			loop {
 				let result = finished.borrow_and_update().clone();
@@ -912,6 +934,29 @@ impl Shares {
 		if !errors.is_empty() {
 			bail!("{}", errors.join("; "));
 		}
+		Ok(())
+	}
+
+	async fn finish_tailscale_absence_check(&self, name: &str, identity: &Arc<()>) -> Result<()> {
+		let _guard = self.tailscale_actions.lock().await;
+		{
+			let state = self.state.lock().await;
+			if !matches!(state.entries.get(name), Some(ShareLifecycle::CleanupUnverified(pending))
+				if Arc::ptr_eq(&pending.identity, identity))
+			{
+				return Ok(());
+			}
+		}
+		/* An operator may have removed the route after a failed cleanup; never delete it on a retry. */
+		let binary = self.binary_for(Provider::Tailscale);
+		let status = run_briefly(&binary, &["serve".into(), "status".into(), "--json".into()], SWEEP_TIMEOUT)
+			.await?
+			.context("tailscale serve status timed out while verifying prior cleanup")?;
+		if !status.status.success() || !is_443_available(&String::from_utf8_lossy(&status.stdout)) {
+			bail!("share {name} cleanup remains unverified; provider state was left untouched");
+		}
+		self.finish_pending(name, identity).await;
+		self.bump();
 		Ok(())
 	}
 
@@ -1546,7 +1591,8 @@ mod tests {
 		let mut batch = StopBatch::default();
 		Shares::detach_name(&mut *shares.state.lock().await, &mut registry, "app", &mut batch);
 		assert!(matches!(shares.state.lock().await.entries.get("app"), Some(ShareLifecycle::CleanupUnverified(_))));
-		assert!(matches!(&*batch.waiting[0].borrow(), PendingResult::Unverified(error) if error == "cleanup failed"));
+		assert_eq!(batch.absence_checks[0].0, "app");
+		assert!(Arc::ptr_eq(&batch.absence_checks[0].1, &share.identity));
 		let binding = share.binding.clone();
 		assert!(matches!(shares.publish("app", share, &mut registry).await, Err((PublishFailure::ClaimChanged, _))));
 		drop(registry);
