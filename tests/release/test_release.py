@@ -568,6 +568,7 @@ class ReleaseTests(unittest.TestCase):
 		self.assertNotIn('version', packager)
 		self.assertEqual(packager['product-name'], 'Testd')
 		self.assertEqual(packager['identifier'], 'dev.testd.host')
+		self.assertEqual(packager['macos']['signing-identity'], '-')
 		self.assertEqual(packager['deep-link-protocols'], [{'schemes': ['testd'], 'name': 'dev.testd.host'}])
 		hook = packager['nsis']['preinstall-section']
 		self.assertIn('!define BUNDLEID "${IDENTIFIER}"', hook)

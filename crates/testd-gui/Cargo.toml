@@ -67,6 +67,7 @@ resources = [{ src = '../../packaging/macos/PrivacyInfo.xcprivacy', target = 'Pr
 
 [package.metadata.packager.macos]
 info-plist-path = 'Info.plist'
+signing-identity = '-'
 
 [package.metadata.packager.deb]
 desktop-template = '../../packaging/linux/testd.desktop'
