@@ -100,8 +100,6 @@
 		flex: none;
 		color: var(--text);
 	}
-	.brand-ink { fill: var(--bg); }
-	.brand-stroke { fill: none; stroke: var(--bg); stroke-width: 3; stroke-linecap: round; }
 	.brand-name { font-size: 16px; font-weight: 650; letter-spacing: -.02em; }
 	.badge-free {
 		display: inline-flex;
