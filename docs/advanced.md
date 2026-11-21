@@ -149,19 +149,17 @@ Running state is not persisted. Definitions live in `~/.config/testd/launches.js
 
 `testd share` asks the running daemon to start a provider. The provider is spawned from `PATH`, never linked or called through an SDK.
 
-| Provider | Exposure | Target | URL source |
-|---|---|---|---|
-| `cloudflared` | Public internet | Any reachable target | Provider output |
-| `ngrok` | Public internet | Any reachable target | Provider output |
-| `tailscale` | Tailnet | The plain edge listener | `tailscale status --json` |
+| Provider | Exposure | URL source |
+|---|---|---|
+| `cloudflared` | Public internet | Provider output |
+| `ngrok` | Public internet | Provider output |
+| `tailscale` | Tailnet | `tailscale status --json` |
 
 `cloudflared` uses a quick tunnel and needs no account. `ngrok` needs `ngrok config add-authtoken` once.
 
-Secure cloudflared and ngrok shares route through the local edge, which retains the leaf TLS identity and serves the provider URL as a claim-bound alias. Providers do not receive host signing keys, and requests keep the provider's original Host header.
+Every provider targets the daemon's plain HTTP routing listener, which runs with or without built-in TLS. The provider hostname is a claim-bound alias. The edge preserves the incoming `Host` and uses the existing forwarded-header trust setting for the scheme. For secure claims, the edge authenticates the leaf over TLS; providers do not receive host signing keys.
 
-`tailscale serve --bg` cannot proxy a container or LAN address directly. `testd` points it at the host's plain edge listener and registers the tailnet name as an alias there, so the edge proxies to the real target. This needs the plain HTTP routing listener, which runs with or without the built-in TLS edge. If `tailscale serve` already has configuration on port 443, `testd` refuses to overwrite it.
-
-A `serve --bg` entry survives a daemon restart while the alias does not. On startup, `testd` warns about matching edge routes but leaves them untouched; a matching target does not prove ownership. Existing `:443` configuration blocks a new share, even when it points at the same edge. Inspect provider state after a crash; an empty share list is not proof of cleanup.
+Share aliases are not restored on restart. A provider process can survive a daemon crash, and `tailscale serve --bg` persists its configuration. On startup, `testd` warns about matching Tailscale edge routes but leaves them untouched; a matching target does not prove ownership. Existing `:443` configuration blocks a new Tailscale share, even when it points at the same edge. Inspect provider state after a crash; an empty share list is not proof of cleanup.
 
 Overrides:
 
@@ -170,7 +168,7 @@ Overrides:
 | `TESTD_TUNNEL_PROVIDER` | Default provider when `--provider` is omitted |
 | `TESTD_TUNNEL` | Path to a provider binary outside `PATH` |
 
-One share per registered name. A share ends when its owner or target changes, including a reconnect to the same target. Repeating the same owner's unchanged registration keeps it. A failed change keeps the share only when the original claim is restored without an intervening successful change. Stopping a share leaves the name registered; removing the name closes the share. Tailscale serve permits one share at a time. If provider cleanup cannot be verified, testd reports the error and refuses a replacement for the rest of that daemon run; an unverified Tailscale cleanup blocks other Tailscale shares too. Inspect provider state before restarting; a restart does not prove cleanup.
+One share per registered name. A share ends when its owner or target changes, including a reconnect to the same target. Repeating the same owner's unchanged registration keeps it. A failed change keeps the share only when the original claim is restored without an intervening successful change. Stopping a share leaves the name registered; removing the name closes the share. Tailscale serve permits one share at a time. If provider cleanup cannot be verified, testd reports the error and refuses a replacement while cleanup remains unverified; an unverified Tailscale cleanup blocks other Tailscale shares too. Inspect provider state before restarting; a restart does not prove cleanup.
 
 A public provider makes the app reachable by anyone with the URL. The provider terminates TLS, so the browser trusts the provider's certificate, not the testd root. Share only what you intend to expose.
 

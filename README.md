@@ -167,17 +167,17 @@ testd share --list                            # name, URL, exposure, provider
 testd share --stop app.example
 ```
 
-The daemon owns the tunnel, not the CLI process, so closing the terminal does not close the share. The lifetime is the registration's: when the name goes, the tunnel goes, and `testd share` says so instead of leaving a stale URL behind.
+The daemon owns the tunnel, not the CLI process, so closing the terminal does not close the share. When the registration goes away or its owner or target changes, `testd` withdraws its share alias and attempts to stop the owned provider.
 
 | Provider | Exposure | Target | Notes |
 |---|---|---|---|
 | `cloudflared` | public internet | anything the host reaches | quick tunnel; no account needed |
 | `ngrok` | public internet | anything the host reaches | needs `ngrok config add-authtoken` once |
-| `tailscale` | your tailnet | anything the host reaches | `tailscale serve` points at the plain edge listener, which answers the tailnet name |
+| `tailscale` | your tailnet | anything the host reaches | requires Tailscale Serve |
 
-`tailscale serve` cannot proxy a container or LAN address directly, so `testd` points it at the host's plain edge listener instead and registers the tailnet name as an alias there. The edge then proxies to the real target, and the app sees the name it was registered under, exactly as a browser request would. This needs the plain HTTP routing listener; it works with the built-in TLS edge on or off.
+All three providers use the daemon's plain HTTP routing listener, even when built-in TLS is disabled for an external front such as Caddy. The edge routes the provider hostname through a claim-bound alias and preserves the incoming `Host` header, so the app sees the provider hostname rather than the registered name.
 
-`serve --bg` keeps its config across restarts while the alias does not. On startup, `testd` warns about matching routes but does not delete or adopt them: an edge target alone is not proof of ownership. An existing `:443` route blocks a new Tailscale share. Inspect the provider's state after a crash; an empty testd share list does not prove that a provider or route has stopped.
+A fresh daemon does not restore share aliases. A public provider process can outlive a daemon crash, and `tailscale serve --bg` keeps its config across restarts. On startup, `testd` warns about matching Tailscale routes but does not delete or adopt them: an edge target alone is not proof of ownership. An existing `:443` route blocks a new Tailscale share. Inspect provider state after a crash; an empty share list does not prove that a provider or route has stopped.
 
 Providers are spawned, never linked: no SDK, no account integration, no vendor API in the product. Set `TESTD_TUNNEL_PROVIDER` for a default other than `cloudflared`, and `TESTD_TUNNEL` to point at a provider binary outside `PATH`.
 

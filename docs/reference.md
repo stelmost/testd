@@ -364,11 +364,11 @@ The dashboard keeps one `/api/local/events` request open and replaces its cards 
 
 | Provider | Exposure | Start command behavior | URL shape |
 |---|---|---|---|
-| `cloudflared` | Public | `cloudflared tunnel --no-autoupdate --url http://<target>` | `https://*.trycloudflare.com` |
-| `ngrok` | Public | `ngrok http <target>` | `https://*.ngrok-free.app`, `*.ngrok-free.dev`, `*.ngrok.io`, `*.ngrok.app` |
+| `cloudflared` | Public | `cloudflared tunnel --no-autoupdate --url http://<edge plain address>` | `https://*.trycloudflare.com` |
+| `ngrok` | Public | `ngrok http <edge plain address>` | `https://*.ngrok-free.app`, `*.ngrok-free.dev`, `*.ngrok.io`, `*.ngrok.app` |
 | `tailscale` | Tailnet | `tailscale serve --bg http://<edge plain address>` | `https://*.ts.net` |
 
-A provider has 30 seconds to report its URL. `tailscale` requires the plain HTTP routing listener and refuses to overwrite existing `serve` configuration on port 443. One share per registered name.
+All providers require the plain HTTP routing listener. The provider hostname is routed as an alias for the current claim. A provider has 30 seconds to report its URL. `tailscale` refuses to overwrite existing `serve` configuration on port 443. One share per registered name.
 
 ## Platform notes
 
