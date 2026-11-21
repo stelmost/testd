@@ -329,7 +329,7 @@ fn linux_resolver_preflight(tld: &str, addr: SocketAddr) -> io::Result<LinuxReso
 
 #[cfg(target_os = "windows")]
 fn is_os_resolver_configured_windows(tld: &str, addr: SocketAddr) -> bool {
-	if validate_windows_resolver_addr(addr).is_err() {
+	if validate_windows_resolver_tld(tld).is_err() || validate_windows_resolver_addr(addr).is_err() {
 		return false;
 	}
 	let Ok(powershell) = windows_helper::powershell() else {
@@ -363,6 +363,14 @@ fn nrpt_has_name_server(output: &str, addr: SocketAddr) -> bool {
 	validate_windows_resolver_addr(addr).is_ok()
 		&& servers.next() == Some("127.0.0.1")
 		&& servers.all(|server| server == "127.0.0.1")
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn validate_windows_resolver_tld(tld: &str) -> io::Result<()> {
+	if !tld.eq_ignore_ascii_case("test") && !tld.eq_ignore_ascii_case("testdcheck") {
+		return Err(io::Error::new(io::ErrorKind::InvalidInput, "Windows NRPT only supports .test and .testdcheck"));
+	}
+	Ok(())
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -440,6 +448,7 @@ pub fn setup_os_resolver_gui(tld: &str, addr: SocketAddr) -> io::Result<()> {
 /// helper prompts for UAC only when this process is not already elevated.
 #[cfg(target_os = "windows")]
 fn setup_gui_windows(tld: &str, addr: SocketAddr) -> io::Result<()> {
+	validate_windows_resolver_tld(tld)?;
 	validate_windows_resolver_addr(addr)?;
 	let name_server = addr.ip().to_string();
 	run_windows_helper("InstallNrpt", &[("Tld", tld), ("NameServer", name_server.as_str())])
@@ -473,6 +482,7 @@ pub fn teardown_os_resolver(tld: &str) -> io::Result<()> {
 
 #[cfg(target_os = "windows")]
 fn teardown_windows(tld: &str) -> io::Result<()> {
+	validate_windows_resolver_tld(tld)?;
 	run_windows_helper("RemoveNrpt", &[("Tld", tld)])
 }
 
@@ -793,6 +803,16 @@ mod tests {
 	fn resolved_global_values_ignore_comments_and_other_sections() {
 		let files = vec!["# DNS=9.9.9.9\n[Resolve]\n; DNS=8.8.8.8\n[Internet]\nDNS=7.7.7.7\n".to_owned()];
 		assert_eq!(resolved_global_values(&files), (None, None));
+	}
+
+	#[test]
+	fn windows_resolver_rejects_unsupported_tlds_before_authorization() {
+		for tld in ["test", "TEST", "testdcheck", "TESTDCHECK"] {
+			validate_windows_resolver_tld(tld).unwrap();
+		}
+		for tld in ["", "com", ".test", "app.test", "test ", "test\nNameServers=192.0.2.1"] {
+			assert_eq!(validate_windows_resolver_tld(tld).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+		}
 	}
 
 	#[test]
