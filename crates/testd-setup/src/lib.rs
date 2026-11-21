@@ -1044,7 +1044,7 @@ fn owned_trust_input(owner: &ownership::InstallationId, cert_pem: &str) -> Vec<u
 	format!("{}\n{cert_pem}", owner.as_str()).into_bytes()
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos", test))]
 fn single_anchor_der(pem: &str) -> io::Result<Vec<u8>> {
 	if pem.matches("-----BEGIN CERTIFICATE-----").count() != 1 {
 		return Err(io::Error::new(io::ErrorKind::InvalidData, "expected one root certificate"));
@@ -1192,7 +1192,7 @@ fn is_root_trusted_linux(cert_pem: &str) -> bool {
 
 #[cfg(target_os = "windows")]
 fn is_root_trusted_windows(cert_pem: &str) -> bool {
-	let Ok(der) = pem_to_der(cert_pem) else { return false };
+	let Ok(der) = single_anchor_der(cert_pem) else { return false };
 	let thumbprint = sha1_hex(&der);
 	let Ok(output) = silent_command("certutil").args(["-store", "Root"]).output() else {
 		return false;
@@ -1273,7 +1273,7 @@ fn trust_root_windows(cert_pem: &str) -> io::Result<()> {
 	// .NET version, so convert once before handing the file to the helper. The
 	// expected thumbprint comes from the PEM, not from the mutable temp file.
 	use std::io::Write;
-	let der = pem_to_der(cert_pem)?;
+	let der = single_anchor_der(cert_pem)?;
 	let thumbprint = sha1_hex(&der);
 	let fingerprint = sha256_hex(&der);
 	let mut temporary = testd_core::private_file::temporary_in(&std::env::temp_dir())?;
@@ -1363,7 +1363,7 @@ fn untrust_root_linux(cert_pem: &str, elevation: Elevation) -> io::Result<()> {
 
 #[cfg(target_os = "windows")]
 fn untrust_root_windows(cert_pem: &str) -> io::Result<()> {
-	let der = pem_to_der(cert_pem)?;
+	let der = single_anchor_der(cert_pem)?;
 	run_windows_helper("RemoveRoot", &[("Thumbprint", &sha1_hex(&der)), ("Fingerprint", &sha256_hex(&der))])
 }
 
@@ -1866,6 +1866,17 @@ mod trust_tests {
 	#[test]
 	fn compact_hex_keeps_the_thumbprint_across_separators() {
 		assert!(compact_hex("Cert Hash: 01 23:ab CD").to_ascii_lowercase().ends_with("0123abcd"));
+	}
+
+	#[test]
+	fn trust_input_requires_exactly_one_root_certificate() {
+		const CERTIFICATE: &str = "-----BEGIN CERTIFICATE-----\nAAEC\n-----END CERTIFICATE-----\n";
+		assert_eq!(single_anchor_der(CERTIFICATE).unwrap(), vec![0, 1, 2]);
+		for pem in ["", &format!("{CERTIFICATE}{CERTIFICATE}")] {
+			let error = single_anchor_der(pem).unwrap_err();
+			assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+			assert_eq!(error.to_string(), "expected one root certificate");
+		}
 	}
 
 	#[test]
