@@ -1,5 +1,6 @@
 import base64
 import contextlib
+import errno
 import importlib.util
 import hashlib
 import http.client
@@ -38,6 +39,8 @@ def load(name, path):
 release = load('release', ROOT / 'scripts/release.py')
 runner = load('release_checks', ROOT / 'tests/run.py')
 state = load('system_state', ROOT / 'tests/release/system_state.py')
+SS_CONTROL_ADDRESSES = (('127.0.0.1', 47000), ('::1', 47001, 0, 0))
+SS_CONTROL_ROWS = b'UNCONN 127.0.0.1:47000 0.0.0.0:*\nUNCONN [::1]:47001 [::]:*\n'
 
 
 def workspace_version():
@@ -1774,15 +1777,23 @@ class HostSystemTests(unittest.TestCase):
 		runner.check_ports([port])
 
 	def test_shutdown_port_check_retries_without_stopping_an_existing_listener(self):
-		with patch.object(runner, 'check_ports', side_effect=[RuntimeError('busy'), None]) as ports, \
+		busy = runner.FixturePortUnavailable('still busy')
+		with patch.object(runner, 'check_ports', side_effect=[busy, None]) as ports, \
 				patch.object(runner.time, 'sleep') as sleep:
 			runner.wait_for_fixture_ports([7737], [7753])
 		self.assertEqual(ports.call_count, 2)
 		sleep.assert_called_once()
-		with patch.object(runner, 'check_ports', side_effect=RuntimeError('still busy')) as ports, \
+		with patch.object(runner, 'check_ports', side_effect=busy) as ports, \
 				self.assertRaisesRegex(RuntimeError, 'still busy'):
 			runner.wait_for_fixture_ports([7737], [7753], timeout=0)
 		ports.assert_called_once()
+
+	def test_shutdown_does_not_retry_an_unverified_443_inspection(self):
+		with patch.object(runner, 'check_ports', side_effect=RuntimeError('cannot verify occupancy')) as ports, \
+				patch.object(runner.time, 'sleep') as sleep, self.assertRaisesRegex(RuntimeError, 'cannot verify'):
+			runner.wait_for_fixture_ports([443], [7753], scope='desktop')
+		ports.assert_called_once_with([443], [7753], scope='desktop')
+		sleep.assert_not_called()
 
 	def test_host_summary_failure_is_not_accepted_as_success(self):
 		with tempfile.TemporaryDirectory() as temporary:
@@ -2320,6 +2331,108 @@ class DesktopRunnerTests(unittest.TestCase):
 			restore.assert_called_once()
 			self.assertTrue(any(item['name'] == 'fixture-shutdown' and item['status'] == 'fail' for item in run.results))
 
+	def test_linux_desktop_inspects_443_on_bind_denial_before_launch_and_after_shutdown(self):
+		def bind(address):
+			if address[1] == 443:
+				raise PermissionError('the runner cannot bind port 443')
+
+		with tempfile.TemporaryDirectory() as directory:
+			run = self.create_run(directory)
+			run.args.bin = run.args.app
+			reply = subprocess.CompletedProcess([], 0, SS_CONTROL_ROWS, b'')
+			with patch.object(runner, 'SYSTEM', 'Linux'), patch.dict(os.environ, {'HOME': directory}), \
+					patch.object(runner.os, 'access', return_value=True), patch.object(runner.sys, 'stdin') as terminal, \
+					patch.object(runner.socket, 'socket') as sockets, patch.object(runner.time, 'sleep'), \
+					patch.object(runner, 'require', return_value='/usr/bin/ss'), \
+					patch.object(runner.subprocess, 'run', return_value=reply) as inspect, \
+					patch.object(runner.threading, 'Thread'), patch.object(runner.subprocess, 'Popen') as launch, \
+					patch.object(runner, 'checklist_items', return_value=['fixture']), \
+					patch.object(runner, 'ask', side_effect=['y', 'q', 'y']), \
+					patch.object(runner, 'system_snapshot') as snapshot, patch.object(runner, 'system_restore') as restore, \
+					patch.object(runner, 'cleanup_owned_product_integration') as cleanup, \
+					redirect_stdout(io.StringIO()) as output:
+				terminal.isatty.return_value = True
+				launch.return_value.poll.return_value = None
+				probe = sockets.return_value.__enter__.return_value
+				probe.bind.side_effect = bind
+				probe.getsockname.side_effect = SS_CONTROL_ADDRESSES * 2
+				runner.desktop(run)
+			self.assertEqual(inspect.call_count, 2)
+			inspect.assert_called_with(['/usr/bin/ss', '-H', '-n', '-t', '-Q', 'state', 'listening',
+				'state', 'bound-inactive', '( sport = :443 or sport = :47000 or sport = :47001 )'],
+				capture_output=True, stdin=subprocess.DEVNULL, env={'LC_ALL': 'C'}, timeout=3)
+			self.assertEqual(probe.listen.call_count, 4)
+			self.assertEqual(output.getvalue().count('candidate bind not verified'), 2)
+			snapshot.assert_called_once()
+			launch.assert_called_once()
+			cleanup.assert_called_once()
+			restore.assert_called_once()
+
+	def test_linux_desktop_443_inspection_refuses_occupied_or_unverified_output(self):
+		ipv4, ipv6 = SS_CONTROL_ROWS.splitlines(keepends=True)
+		unverified = 'ss did not report both bound-inactive controls'
+		cases = (
+			(SS_CONTROL_ROWS + b'LISTEN 0.0.0.0:443 0.0.0.0:*\n', 0, b'', 'listener or bound-inactive'),
+			(SS_CONTROL_ROWS + b'UNCONN [::]:443 [::]:*\n', 0, b'', 'listener or bound-inactive'),
+			(b'', 0, b'', unverified),
+			(ipv4, 0, b'', unverified),
+			(ipv6, 0, b'', unverified),
+			(ipv4 * 2, 0, b'', unverified),
+			(ipv4 + ipv6.replace(b'UNCONN', b'LISTEN'), 0, b'', unverified),
+			(ipv4 + b'UNCONN [::1]:47001\n', 0, b'', unverified),
+			(ipv4 + ipv6.replace(b'[::1]:', b'[::]:'), 0, b'', unverified),
+			(SS_CONTROL_ROWS, 1, b'', 'ss exit 1'),
+			(SS_CONTROL_ROWS, 0, b'netlink error', 'netlink error'),
+		)
+		with patch.object(runner.socket, 'socket') as sockets, patch.object(runner, 'require', return_value='/usr/bin/ss'), \
+				patch.object(runner.subprocess, 'run') as ss:
+			probe = sockets.return_value.__enter__.return_value
+			for data, status, stderr, message in cases:
+				with self.subTest(data=data, status=status, stderr=stderr):
+					probe.getsockname.side_effect = SS_CONTROL_ADDRESSES
+					ss.return_value = subprocess.CompletedProcess([], status, data, stderr)
+					with self.assertRaisesRegex(RuntimeError, message):
+						runner.inspect_linux_desktop_443()
+			probe.listen.assert_not_called()
+
+	def test_linux_desktop_443_inspection_refuses_missing_tools_controls_or_timeout(self):
+		with patch.object(runner.shutil, 'which', return_value=None), self.assertRaisesRegex(RuntimeError, 'install ss'):
+			runner.inspect_linux_desktop_443()
+		with patch.object(runner.socket, 'socket') as sockets, patch.object(runner, 'require', return_value='/usr/bin/ss'), \
+				patch.object(runner.subprocess, 'run') as ss:
+			probe = sockets.return_value.__enter__.return_value
+			probe.bind.side_effect = [None, OSError('IPv6 loopback unavailable')]
+			with self.assertRaisesRegex(RuntimeError, 'IPv6 loopback unavailable'):
+				runner.inspect_linux_desktop_443()
+			ss.assert_not_called()
+			probe.bind.side_effect = None
+			probe.getsockname.side_effect = SS_CONTROL_ADDRESSES
+			ss.side_effect = subprocess.TimeoutExpired('ss', 3)
+			with self.assertRaisesRegex(RuntimeError, 'timed out'):
+				runner.inspect_linux_desktop_443()
+
+	def test_read_only_fallback_is_only_for_linux_desktop_tcp_443_bind_denial(self):
+		denied = PermissionError(errno.EACCES, 'permission denied')
+		busy = OSError(errno.EADDRINUSE, 'address in use')
+		cases = (
+			('Linux', 'fixture', [443], [], denied, None),
+			('Linux', 'desktop', [8443], [], denied, None),
+			('Linux', 'desktop', [], [443], denied, None),
+			('Darwin', 'desktop', [443], [], denied, None),
+			('Linux', 'desktop', [443], [], busy, None),
+			('Linux', 'desktop', [443], [], None, denied),
+		)
+		for system, scope, tcp, udp, bind_error, listen_error in cases:
+			with self.subTest(system=system, scope=scope, tcp=tcp, udp=udp), patch.object(runner, 'SYSTEM', system), \
+					patch.object(runner.socket, 'socket') as sockets, \
+					patch.object(runner, 'inspect_linux_desktop_443') as inspect:
+				probe = sockets.return_value.__enter__.return_value
+				probe.bind.side_effect = bind_error
+				probe.listen.side_effect = listen_error
+				with self.assertRaisesRegex(RuntimeError, 'fixture port .* is unavailable'):
+					runner.check_ports(tcp, udp, scope=scope)
+				inspect.assert_not_called()
+
 	def test_desktop_user_data_paths_follow_the_product(self):
 		with patch.object(runner, 'SYSTEM', 'Windows'), patch.dict(os.environ, {'APPDATA': '/roaming'}, clear=True):
 			self.assertEqual(runner.desktop_config_dir(), pathlib.Path('/roaming/testd'))
@@ -2404,8 +2517,8 @@ class DesktopRunnerTests(unittest.TestCase):
 					patch.object(runner, 'ask', side_effect=['y', 'q', 'y']), redirect_stdout(io.StringIO()):
 				launch.return_value.poll.return_value = None
 				runner.desktop(run)
-			ports.assert_called_once_with([7737, 7740], [7753])
-			stopped.assert_called_once_with([7737, 7740], [7753])
+			ports.assert_called_once_with([7737, 7740], [7753], scope='desktop')
+			stopped.assert_called_once_with([7737, 7740], [7753], scope='desktop')
 			launch.assert_called_once()
 
 	def test_desktop_refuses_existing_user_data_before_system_snapshot(self):

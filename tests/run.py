@@ -622,7 +622,39 @@ def host(run, *, scope='host'):
 				system_restore(run, snapshot, HOST_TLD, interactive=True)
 
 
-def check_ports(tcp, udp=()):
+class FixturePortUnavailable(RuntimeError):
+	"""The port probe found a conflict or could not bind."""
+
+
+def inspect_linux_desktop_443():
+	failure = 'cannot verify Linux desktop TCP 443 occupancy'
+	try:
+		ss = require('ss')
+		# Detect silent /proc fallback or incomplete family coverage using owned, non-listening sockets.
+		with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as ipv4, \
+				socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as ipv6:
+			ipv4.bind(('127.0.0.1', 0))
+			ipv6.bind(('::1', 0))
+			port4, port6 = ipv4.getsockname()[1], ipv6.getsockname()[1]
+			command = [ss, '-H', '-n', '-t', '-Q', 'state', 'listening', 'state', 'bound-inactive',
+				f'( sport = :443 or sport = :{port4} or sport = :{port6} )']
+			result = subprocess.run(command, capture_output=True, stdin=subprocess.DEVNULL, env={'LC_ALL': 'C'}, timeout=3)
+	except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+		raise RuntimeError(f'{failure}: {error}') from error
+	if result.returncode or result.stderr:
+		detail = result.stderr.decode(ENCODING, errors='replace').strip()
+		raise RuntimeError(f'{failure}: ss exit {result.returncode}' + (f'; {detail}' if detail else ''))
+	rows = [line.split() for line in result.stdout.splitlines()]
+	if any(len(row) >= 2 and row[1].endswith(b':443') for row in rows):
+		raise FixturePortUnavailable('fixture port 443 is unavailable: ss found a TCP listener or bound-inactive socket')
+	controls = {f'127.0.0.1:{port4}'.encode(), f'[::1]:{port6}'.encode()}
+	if len(rows) != 2 or any(len(row) != 3 or row[0] != b'UNCONN' or not row[2].endswith(b':*') for row in rows) \
+			or {row[1] for row in rows} != controls:
+		raise RuntimeError(f'{failure}: ss did not report both bound-inactive controls as expected')
+	print('TCP 443: no listener or bound-inactive socket observed (read-only; candidate bind not verified)', flush=True)
+
+
+def check_ports(tcp, udp=(), *, scope='fixture'):
 	for kind, ports in [(socket.SOCK_STREAM, tcp), (socket.SOCK_DGRAM, udp)]:
 		for port in ports:
 			with socket.socket(socket.AF_INET, kind) as probe:
@@ -630,20 +662,26 @@ def check_ports(tcp, udp=()):
 					# Closed connections in TIME_WAIT do not mean a live fixture remains.
 					probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 				try:
-					probe.bind(('127.0.0.1', port))
+					try:
+						probe.bind(('127.0.0.1', port))
+					except PermissionError:
+						if (scope, SYSTEM, kind, port) != ('desktop', 'Linux', socket.SOCK_STREAM, 443):
+							raise
+						inspect_linux_desktop_443()
+						continue
 					if kind == socket.SOCK_STREAM:
 						probe.listen(1)
 				except OSError as error:
-					raise RuntimeError(f'fixture port {port} is unavailable: {error}') from error
+					raise FixturePortUnavailable(f'fixture port {port} is unavailable: {error}') from error
 
 
-def wait_for_fixture_ports(tcp, udp, timeout=10):
+def wait_for_fixture_ports(tcp, udp, timeout=10, *, scope='fixture'):
 	deadline = time.monotonic() + timeout
 	while True:
 		try:
-			check_ports(tcp, udp)
+			check_ports(tcp, udp, scope=scope)
 			return
-		except RuntimeError:
+		except FixturePortUnavailable:
 			if time.monotonic() >= deadline:
 				raise
 			time.sleep(0.25)
@@ -1366,7 +1404,7 @@ def desktop(run):
 	# macOS restricts loopback port 443; the actual setup must report its bind outcome.
 	tcp_ports = [7737, 7740] if SYSTEM == 'Darwin' else [7737, 7740, 443]
 	if SYSTEM in ('Linux', 'Darwin'):
-		check_ports(tcp_ports, [7753])
+		check_ports(tcp_ports, [7753], scope='desktop')
 	if ask('Confirm this is a disposable host with a persisted full-system backup [y/N]: ') != 'y':
 		raise RuntimeError('desktop validation requires a disposable host and persisted full-system backup')
 	snapshot = system_snapshot(run, DESKTOP_TLD, interactive=True)
@@ -1424,11 +1462,11 @@ def desktop(run):
 			try:
 				try:
 					if SYSTEM in ('Linux', 'Darwin'):
-						wait_for_fixture_ports(tcp_ports, [7753])
+						wait_for_fixture_ports(tcp_ports, [7753], scope='desktop')
 				except Exception as error:
 					run.record('fixture-shutdown', 'fail', str(error))
 					raise
-				run.record('fixture-shutdown', 'pass', 'operator confirmed shutdown and fixture ports are available')
+				run.record('fixture-shutdown', 'pass', 'operator confirmed shutdown; fixture port checks passed')
 				try:
 					if SYSTEM in ('Linux', 'Darwin'):
 						if file_digest(cli) != cli_digest:
