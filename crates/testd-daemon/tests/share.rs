@@ -584,6 +584,24 @@ async fn a_replaced_tailscale_alias_is_not_removed_or_used_to_stop_a_provider() 
 }
 
 #[tokio::test]
+async fn a_changed_tailscale_route_identity_is_not_stopped() {
+	let dir = tempfile::tempdir().unwrap();
+	let (provider, _, stopped) = tailscale(dir.path());
+	let shares = Shares::new(Provider::Tailscale, Some(provider.clone()), Some(front()));
+	shares.start("app", "127.0.0.1:3000", None).await.unwrap();
+	let replacement = std::fs::read_to_string(&provider)
+		.unwrap()
+		.replace("node-a.tailnet.ts.net:443", "other.tailnet.ts.net:443");
+	std::fs::write(provider, replacement).unwrap();
+	let error = shares.try_stop("app").await.unwrap_err();
+	assert!(error.to_string().contains("could not stop share app"), "{error}");
+	assert!(!stopped.exists(), "a matching upstream does not authorize stopping a different provider route");
+	assert!(dir.path().join("serve-on").exists(), "changed provider state must remain untouched");
+	assert!(shares.list().await.is_empty());
+	assert!(shares.start("other", "127.0.0.1:3002", None).await.is_err());
+}
+
+#[tokio::test]
 async fn failed_tailscale_cleanup_blocks_replacement_and_reports_the_error() {
 	let dir = tempfile::tempdir().unwrap();
 	let started = dir.path().join("started");

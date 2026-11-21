@@ -1215,12 +1215,12 @@ impl Shares {
 
 	/// Kill a child, or run the provider's cleanup command.
 	async fn release(&self, share: StoppingShare) -> Result<()> {
-		match share.resource {
+		let alias = match share.resource {
 			ProviderResource::Process { mut child, .. } => {
 				return stop_child(&mut child).await.context("stop provider process");
 			},
-			ProviderResource::Tailscale { .. } => {},
-		}
+			ProviderResource::Tailscale { alias } => alias,
+		};
 		let _guard = self.tailscale_actions.lock().await;
 		let binary = self.binary_for(share.provider);
 		let front = self.front.as_ref().context("the tailscale front is missing during cleanup")?;
@@ -1230,10 +1230,23 @@ impl Shares {
 			Ok(Some(output)) if output.status.success() => String::from_utf8_lossy(&output.stdout).into_owned(),
 			_ => bail!("could not inspect tailscale serve; leaving :443 alone"),
 		};
-		if serde_json::from_str::<serde_json::Value>(&status).is_err() {
-			bail!("tailscale serve returned malformed status; leaving :443 alone");
-		}
-		if !serve_ports_pointing_at(&status, &upstream).contains(&443) {
+		let config: serde_json::Value =
+			serde_json::from_str(&status).context("tailscale serve returned malformed status; leaving :443 alone")?;
+		let route = format!("{alias}:443");
+		let handlers = config
+			.get("Web")
+			.and_then(|web| web.get(&route))
+			.and_then(|entry| entry.get("Handlers"))
+			.and_then(serde_json::Value::as_object);
+		let owns_route = handlers.is_some_and(|handlers| {
+			handlers.len() == 1
+				&& handlers
+					.get("/")
+					.and_then(|handler| handler.get("Proxy"))
+					.and_then(serde_json::Value::as_str)
+					== Some(upstream.as_str())
+		});
+		if !owns_route {
 			bail!("tailscale serve :443 changed; leaving it in place");
 		}
 		/* Scope cleanup to this serve port, leaving unrelated entries alone. */
