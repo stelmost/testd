@@ -40,9 +40,14 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
+            required: false
           - os: macos-15
+            required: true
           - os: macos-15-intel
+            required: false
           - os: windows-2025
+            required: false
+    continue-on-error: ${{ !matrix.required }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -84,12 +89,24 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-  fedora:
-    name: test (fedora-44 userspace)
+  # Containers cover userspace, not native kernel, system, or desktop integration.
+  linux-userspace:
+    name: test (${{ matrix.distro }}-${{ matrix.version }} userspace)
     needs: changes
     if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: debian
+            version: '13'
+            required: true
+          - distro: fedora
+            version: '44'
+            required: false
+    continue-on-error: ${{ !matrix.required }}
     runs-on: ubuntu-24.04
-    container: fedora:44
+    container: ${{ matrix.distro }}:${{ matrix.version }}
     timeout-minutes: 90
     defaults:
       run:
@@ -102,9 +119,23 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
     steps:
-      - name: Bootstrap Fedora container
+      - name: Bootstrap Linux userspace container
         run: |
-          dnf install -y git tar gzip ca-certificates libstdc++ shadow-utils util-linux python3 curl
+          source /etc/os-release
+          case "$ID" in
+            debian)
+              apt-get update
+              apt-get install -y --no-install-recommends build-essential git tar gzip ca-certificates \
+                libstdc++6 passwd util-linux python3 curl unzip xz-utils zstd openssl
+              ;;
+            fedora)
+              dnf install -y git tar gzip ca-certificates libstdc++ shadow-utils util-linux python3 curl
+              ;;
+            *)
+              printf 'Unsupported CI distribution: %s\n' "$ID" >&2
+              exit 1
+              ;;
+          esac
           useradd --create-home testd-ci
       - uses: actions/checkout@v4
         with:
@@ -120,10 +151,10 @@ jobs:
           tool: cargo-deny
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-fedora-44
+          shared-key: ci-${{ matrix.distro }}-${{ matrix.version }}
           save-if: ${{ github.ref == 'refs/heads/master' }}
       - run: bun install --frozen-lockfile
-      - name: Run Fedora userspace checks as a normal user
+      - name: Run Linux userspace checks as a normal user
         run: |
           chown -R testd-ci:testd-ci "$HOME" "$GITHUB_WORKSPACE"
           runuser -u testd-ci --preserve-environment -- \
@@ -133,7 +164,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-summary-fedora-44
+          name: ci-summary-${{ matrix.distro }}-${{ matrix.version }}
           path: ci-reports/ci-summary.json
           retention-days: 7
           if-no-files-found: warn
@@ -157,7 +188,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-15, windows-latest]
+        include:
+          - os: ubuntu-latest
+            required: false
+          - os: macos-15
+            required: true
+          - os: windows-latest
+            required: false
+    continue-on-error: ${{ !matrix.required }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -171,7 +209,7 @@ jobs:
   bundle:
     name: bundle (${{ matrix.target }})
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: [test, fedora, system-state-fixtures, site]
+    needs: [test, linux-userspace, system-state-fixtures, site]
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -179,16 +217,21 @@ jobs:
         include:
           - os: macos-15
             target: aarch64-apple-darwin
+            required: true
             formats: app,dmg
           - os: macos-15-intel
             target: x86_64-apple-darwin
+            required: false
             formats: app,dmg
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            required: true
             formats: appimage,deb
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            required: true
             formats: nsis
+    continue-on-error: ${{ !matrix.required }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -244,7 +287,7 @@ jobs:
 
   sbom:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: [test, fedora, system-state-fixtures, site]
+    needs: [test, linux-userspace, system-state-fixtures, site]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

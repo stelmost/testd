@@ -126,7 +126,7 @@ class ReleaseTests(unittest.TestCase):
 
 	def test_ci_uses_the_runner_with_the_absolute_browser_fixture_path(self):
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
-		test_job = workflow.split('\n  test:\n', 1)[1].split('\n  fedora:\n', 1)[0]
+		test_job = workflow.split('\n  test:\n', 1)[1].split('\n  linux-userspace:\n', 1)[0]
 		self.assertIn('tests/run.py ci --report ci-reports --verbose', test_job)
 		self.assertNotIn('bun test tests/release/browser.test.ts', test_job)
 		checks = runner.helper('all_checks')
@@ -142,19 +142,30 @@ class ReleaseTests(unittest.TestCase):
 
 	def test_ci_provisions_supported_platforms_and_uploads_only_status_summaries(self):
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
-		test_job = workflow.split('\n  test:\n', 1)[1].split('\n  site:\n', 1)[0]
-		for platform in ('ubuntu-24.04', 'macos-15', 'macos-15-intel', 'windows-2025'):
-			self.assertIn(f'os: {platform}', test_job)
-		for prerequisite in ("python-version: '3.14'", 'tool: cargo-deny',
-				'bun install --frozen-lockfile', 'persist-credentials: false', 'timeout-minutes: 90'):
-			self.assertIn(prerequisite, test_job)
-		self.assertIn('container: fedora:44', test_job)
-		self.assertIn('runuser -u testd-ci --preserve-environment', test_job)
-		self.assertIn('path: ci-reports/ci-summary.json', test_job)
-		self.assertNotRegex(test_job, r'(?m)^\s+path: ci-reports/?\s*$')
-		self.assertNotIn('continue-on-error:', test_job)
+		test_job = workflow.split('\n  test:\n', 1)[1].split('\n  linux-userspace:\n', 1)[0]
+		userspace = workflow.split('\n  linux-userspace:\n', 1)[1].split('\n  site:\n', 1)[0]
+		matrix = dict(re.findall(r'(?m)^          - os: (.+)\n            required: (true|false)$', test_job))
+		self.assertEqual(matrix, {'ubuntu-24.04': 'false', 'macos-15': 'true',
+			'macos-15-intel': 'false', 'windows-2025': 'false'})
+		self.assertIn("python-version: '3.14'", test_job)
+		for job in (test_job, userspace):
+			for prerequisite in ('tool: cargo-deny', 'bun install --frozen-lockfile',
+					'persist-credentials: false', 'timeout-minutes: 90'):
+				self.assertIn(prerequisite, job)
+			self.assertIn('\n    continue-on-error: ${{ !matrix.required }}\n', job)
+			self.assertNotRegex(job, r'(?m)^ {6,}continue-on-error:')
+			self.assertIn('path: ci-reports/ci-summary.json', job)
+			self.assertNotRegex(job, r'(?m)^\s+path: ci-reports/?\s*$')
+		self.assertIn('container: ${{ matrix.distro }}:${{ matrix.version }}', userspace)
+		self.assertIn("- distro: debian\n            version: '13'\n            required: true", userspace)
+		self.assertIn("- distro: fedora\n            version: '44'\n            required: false", userspace)
+		self.assertIn('runuser -u testd-ci --preserve-environment', userspace)
+		self.assertIn('python3 tests/run.py ci', userspace)
+		for prerequisite in ('build-essential', 'passwd', 'util-linux', 'python3', 'curl', 'unzip', 'openssl'):
+			self.assertIn(prerequisite, userspace)
 		self.assertIn('/ci-reports/', (ROOT / '.gitignore').read_text(encoding='utf-8'))
 		dependencies = (ROOT / '.github/actions/linux-dependencies/action.yml').read_text(encoding='utf-8')
+		self.assertIn('ubuntu|debian)', dependencies)
 		self.assertIn('fedora)', dependencies)
 		self.assertIn('dnf install -y gcc gcc-c++', dependencies)
 		for package in ('gtk3-devel', 'libappindicator-gtk3-devel', 'dbus-devel', 'unzip', 'systemd'):
@@ -224,7 +235,7 @@ class ReleaseTests(unittest.TestCase):
 		self.assertIn('--include-ignored', child.command.call_args.args[1])
 		for job, following in (('bundle', 'sbom'), ('sbom', 'release')):
 			section = workflow.split(f'\n  {job}:\n', 1)[1].split(f'\n  {following}:\n', 1)[0]
-			self.assertIn('needs: [test, fedora, system-state-fixtures, site]', section)
+			self.assertIn('needs: [test, linux-userspace, system-state-fixtures, site]', section)
 
 	def test_manual_ci_builds_packages_without_publishing_a_release(self):
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
@@ -241,6 +252,26 @@ class ReleaseTests(unittest.TestCase):
 		release_job = workflow.split('\n  release:\n', 1)[1]
 		condition = next(line.strip() for line in release_job.splitlines() if line.strip().startswith('if:'))
 		self.assertEqual(condition, "if: startsWith(github.ref, 'refs/tags/v')")
+
+	def test_ci_required_artifacts_are_selected_by_target_not_builder_os(self):
+		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+		bundle = workflow.split('\n  bundle:\n', 1)[1].split('\n  sbom:\n', 1)[0]
+		matrix = dict(re.findall(r'(?m)^            target: (.+)\n            required: (true|false)$', bundle))
+		self.assertEqual(matrix, {'aarch64-apple-darwin': 'true', 'x86_64-apple-darwin': 'false',
+			'x86_64-unknown-linux-gnu': 'true', 'x86_64-pc-windows-msvc': 'true'})
+		self.assertIn('\n    continue-on-error: ${{ !matrix.required }}\n', bundle)
+		self.assertNotRegex(bundle, r'(?m)^ {6,}continue-on-error:')
+		self.assertIn('if-no-files-found: error', bundle)
+		self.assertIn('- os: macos-15\n            target: aarch64-apple-darwin', bundle)
+
+	def test_ci_minimum_runtime_fixtures_only_require_the_supported_native_mac(self):
+		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+		fixtures = workflow.split('\n  system-state-fixtures:\n', 1)[1].split('\n  bundle:\n', 1)[0]
+		matrix = dict(re.findall(r'(?m)^          - os: (.+)\n            required: (true|false)$', fixtures))
+		self.assertEqual(matrix, {'ubuntu-latest': 'false', 'macos-15': 'true', 'windows-latest': 'false'})
+		self.assertIn('\n    continue-on-error: ${{ !matrix.required }}\n', fixtures)
+		self.assertIn("python-version: '3.12'", fixtures)
+		self.assertIn('-k SystemStateTests', fixtures)
 
 	def test_windows_host_script_captures_expected_failures_through_the_helper(self):
 		"""PowerShell 5.1 turns redirected native stderr into a terminating error."""
@@ -437,6 +468,35 @@ class ReleaseTests(unittest.TestCase):
 					self.assertEqual((output / f'Testd_{version}_x64{suffix}{extension}').read_bytes(), extension.encode())
 				with self.assertRaises(FileExistsError):
 					release.copy_bundles(args, platform, 'x64')
+
+	def test_package_stages_archives_and_bundles_for_each_declared_target(self):
+		version = workspace_version()
+		for target, (platform, arch) in release.TARGETS.items():
+			with self.subTest(target=target), tempfile.TemporaryDirectory() as temporary:
+				root = pathlib.Path(temporary)
+				build = root / 'build'
+				(build / 'bundle').mkdir(parents=True)
+				binary_name = 'testd.exe' if platform == 'windows' else 'testd'
+				(build / binary_name).write_bytes(b'cli-fixture')
+				extensions = {'macos': ['.dmg'], 'linux': ['.AppImage', '.deb'], 'windows': ['.exe']}[platform]
+				for extension in extensions:
+					(build / f'bundle/native{extension}').write_bytes(extension.encode())
+				args = SimpleNamespace(version=version, target=target, build_dir=build,
+					output=root / 'staged', cli_only=False)
+				with redirect_stdout(io.StringIO()):
+					release.package(args)
+				base = f'testd-{version}-{target}'
+				if platform == 'windows':
+					with release.zipfile.ZipFile(args.output / f'{base}.zip') as archive:
+						self.assertEqual(archive.read(f'{base}/{binary_name}'), b'cli-fixture')
+				else:
+					with tarfile.open(args.output / f'{base}.tar.gz') as archive:
+						with archive.extractfile(f'{base}/{binary_name}') as binary:
+							self.assertEqual(binary.read(), b'cli-fixture')
+				for extension in extensions:
+					suffix = '-setup' if platform == 'windows' else ''
+					self.assertEqual((args.output / f'Testd_{version}_{arch}{suffix}{extension}').read_bytes(),
+						extension.encode())
 
 	def test_packager_inherits_version_and_preserves_product_and_per_user_identity(self):
 		manifest = tomllib.loads((ROOT / 'crates/testd-gui/Cargo.toml').read_text())
