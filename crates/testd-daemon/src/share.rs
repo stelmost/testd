@@ -258,10 +258,7 @@ struct StopBatch {
 
 impl StopBatch {
 	fn is_empty(&self) -> bool {
-		self.stopping.is_empty()
-			&& self.waiting.is_empty()
-			&& self.absence_checks.is_empty()
-			&& self.errors.is_empty()
+		self.stopping.is_empty() && self.waiting.is_empty() && self.absence_checks.is_empty() && self.errors.is_empty()
 	}
 }
 
@@ -1078,7 +1075,10 @@ impl Shares {
 				return Err(error);
 			},
 		};
-		let alias = url.strip_prefix("https://").context("provider returned a non-HTTPS URL")?.to_owned();
+		let alias = url
+			.strip_prefix("https://")
+			.context("provider returned a non-HTTPS URL")?
+			.to_owned();
 		Ok(Active {
 			identity: Arc::clone(&start.identity),
 			binding: start.owner.clone(),
@@ -1254,9 +1254,9 @@ impl Shares {
 		}
 		/* A successful command does not establish that persistent exposure was removed. */
 		let removal = run_briefly(&binary, &status_args, SWEEP_TIMEOUT).await?;
-		if !removal.is_some_and(|output| {
-			output.status.success() && is_443_available(&String::from_utf8_lossy(&output.stdout))
-		}) {
+		if !removal
+			.is_some_and(|output| output.status.success() && is_443_available(&String::from_utf8_lossy(&output.stdout)))
+		{
 			bail!("tailscale serve :443 removal is unverified; inspect the provider state");
 		}
 		Ok(())

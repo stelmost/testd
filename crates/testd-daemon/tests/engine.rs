@@ -248,7 +248,11 @@ mod share_lifetime {
 	const TRACKED_PROVIDER: &str = "#!/bin/sh\necho \"https://fixture-$$.trycloudflare.com\" >&2\nexec sleep 30\n";
 
 	fn provider_pid(url: &str) -> u32 {
-		let pid = url.strip_prefix("https://fixture-").unwrap().strip_suffix(".trycloudflare.com").unwrap();
+		let pid = url
+			.strip_prefix("https://fixture-")
+			.unwrap()
+			.strip_suffix(".trycloudflare.com")
+			.unwrap();
 		let pid = pid.parse::<u32>().unwrap();
 		assert!(pid > 1, "invalid fake provider pid: {pid}");
 		pid

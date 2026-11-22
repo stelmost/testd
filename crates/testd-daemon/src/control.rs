@@ -879,12 +879,8 @@ mod tests {
 		let path = dir.path().join(CONTROL_FILE);
 		let (health, _) = monitor();
 		let registrations: Registrations = Arc::new(AsyncMutex::new(Registry::default()));
-		let shares = Arc::new(Shares::new(
-			Provider::Cloudflared,
-			Some(provider),
-			Some(share_front()),
-			registrations.clone(),
-		));
+		let shares =
+			Arc::new(Shares::new(Provider::Cloudflared, Some(provider), Some(share_front()), registrations.clone()));
 		{
 			let mut registry = registrations.lock().await;
 			let connection = registry.connection_id();

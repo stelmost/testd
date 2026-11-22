@@ -521,12 +521,8 @@ mod tests {
 		.unwrap();
 		std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).unwrap();
 		let registry = Arc::new(tokio::sync::Mutex::new(crate::registry::Registry::default()));
-		let shares = Arc::new(Shares::new(
-			Provider::Cloudflared,
-			Some(provider),
-			Some(share_front()),
-			Arc::clone(&registry),
-		));
+		let shares =
+			Arc::new(Shares::new(Provider::Cloudflared, Some(provider), Some(share_front()), Arc::clone(&registry)));
 		let owner = {
 			let mut registry = registry.lock().await;
 			let owner = registry.connection_id();
@@ -612,12 +608,8 @@ mod tests {
 			.unwrap();
 		std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).unwrap();
 		let registry = Arc::new(tokio::sync::Mutex::new(crate::registry::Registry::default()));
-		let shares = Arc::new(Shares::new(
-			Provider::Cloudflared,
-			Some(provider),
-			Some(share_front()),
-			Arc::clone(&registry),
-		));
+		let shares =
+			Arc::new(Shares::new(Provider::Cloudflared, Some(provider), Some(share_front()), Arc::clone(&registry)));
 		let owner = {
 			let mut registry = registry.lock().await;
 			let connection = registry.connection_id();
@@ -662,12 +654,8 @@ mod tests {
 		std::fs::write(&provider, "#!/bin/sh\necho 'https://fixture.trycloudflare.com' >&2\nexec sleep 30\n").unwrap();
 		std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).unwrap();
 		let registry = Arc::new(tokio::sync::Mutex::new(crate::registry::Registry::default()));
-		let shares = Arc::new(Shares::new(
-			Provider::Cloudflared,
-			Some(provider),
-			Some(share_front()),
-			Arc::clone(&registry),
-		));
+		let shares =
+			Arc::new(Shares::new(Provider::Cloudflared, Some(provider), Some(share_front()), Arc::clone(&registry)));
 		let owner = {
 			let mut registry = registry.lock().await;
 			let owner = registry.connection_id();

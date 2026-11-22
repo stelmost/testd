@@ -144,12 +144,8 @@ async fn check_public_alias(provider: Provider, trust_forwarded_for: bool) {
 		Provider::Ngrok => ("fixture.ngrok-free.app", vec!["http", &addr]),
 		Provider::Tailscale => unreachable!(),
 	};
-	let shares = ManagedShares::new(
-		provider,
-		Some(binary),
-		Some(Front { plain_addr: edge.http_addr }),
-		Arc::clone(&registry),
-	);
+	let shares =
+		ManagedShares::new(provider, Some(binary), Some(Front { plain_addr: edge.http_addr }), Arc::clone(&registry));
 	assert!(edge_response(edge.http_addr, host).await.starts_with("HTTP/1.1 404 "));
 	assert_eq!(shares.start("app", "app.test", None).await.unwrap(), format!("https://{host}"));
 	let actual_args = std::fs::read_to_string(dir.path().join("tunnel.arguments")).unwrap();
@@ -330,7 +326,10 @@ async fn a_provider_exit_removes_only_its_share_and_notifies_observers() {
 	let shares = Shares::new(Provider::Cloudflared, Some(provider), Some(front()));
 	let first = shares.start("first.example", "127.0.0.1:3000", None).await.unwrap();
 	let second = shares.start("second.example", "127.0.0.1:3001", None).await.unwrap();
-	let third = shares.start("third.example", "127.0.0.1:3002", Some(Provider::Ngrok)).await.unwrap();
+	let third = shares
+		.start("third.example", "127.0.0.1:3002", Some(Provider::Ngrok))
+		.await
+		.unwrap();
 	let mut changes = shares.state_changes();
 
 	signal_provider_exit(dir.path(), &first);
@@ -392,10 +391,7 @@ async fn secure_provider_exit_removes_owned_aliases_and_preserves_replacements()
 				.expect("provider exit must notify observers")
 				.unwrap();
 			assert!(shares.list().await.is_empty());
-			assert_eq!(
-				registry.lock().await.route("unrelated.fixture").unwrap().registration.target,
-				"127.0.0.1:9000"
-			);
+			assert_eq!(registry.lock().await.route("unrelated.fixture").unwrap().registration.target, "127.0.0.1:9000");
 			let claim = registry.lock().await.claim("app.test").unwrap().clone();
 			assert_eq!(claim.transport.unwrap().root, root);
 			match replacement {
@@ -762,8 +758,17 @@ async fn tailscale_cleanup_preserves_changed_exposure_transport_and_handler_stat
 	const ROUTE: &str = "node-a.tailnet.ts.net:443";
 
 	for change in [
-		"funnel", "tcp-forward", "tcp-http", "tcp-extra", "handler-path", "handler-text", "extra-handler",
-		"foreign-web", "foreign-funnel", "foreground", "service",
+		"funnel",
+		"tcp-forward",
+		"tcp-http",
+		"tcp-extra",
+		"handler-path",
+		"handler-text",
+		"extra-handler",
+		"foreign-web",
+		"foreign-funnel",
+		"foreground",
+		"service",
 	] {
 		let dir = tempfile::tempdir().unwrap();
 		let (provider, args, stopped) = tailscale(dir.path());
@@ -835,11 +840,7 @@ async fn an_already_removed_tailscale_route_stops_idempotently_without_off() {
 async fn verified_absence_clears_a_previous_tailscale_cleanup_quarantine() {
 	use serde_json::json;
 
-	for absent in [
-		serde_json::Value::Null,
-		json!({}),
-		json!({"TCP": {"8443": {"HTTPS": true}}}),
-	] {
+	for absent in [serde_json::Value::Null, json!({}), json!({"TCP": {"8443": {"HTTPS": true}}})] {
 		let dir = tempfile::tempdir().unwrap();
 		let (provider, args, stopped) = tailscale(dir.path());
 		let shares = Shares::new(Provider::Tailscale, Some(provider), Some(front()));
@@ -894,8 +895,7 @@ async fn failed_tailscale_cleanup_blocks_replacement_and_reports_the_error() {
 
 #[tokio::test]
 async fn a_successful_tailscale_stop_requires_confirmed_route_removal() {
-	const OWNED_STATUS: &str =
-		r#"{"TCP":{"443":{"HTTPS":true}},"Web":{"node.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:7740"}}}}}"#;
+	const OWNED_STATUS: &str = r#"{"TCP":{"443":{"HTTPS":true}},"Web":{"node.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:7740"}}}}}"#;
 
 	for after_stop in [Some(OWNED_STATUS), Some("not json"), None] {
 		let dir = tempfile::tempdir().unwrap();
