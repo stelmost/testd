@@ -199,6 +199,11 @@ def main():
 		print('An optional macOS ad-hoc resource seal is bundle-integrity evidence only, '
 			'not trusted signing or Gatekeeper approval.')
 		print('Verify `SHA256SUMS` before installing. Workspace SBOMs accompany the release.')
+		print('\nTo install this exact CLI release on Linux or macOS:')
+		print('```sh')
+		print('curl -fsSLo testd-install.sh https://testd.dev/install.sh')
+		print(f"TESTD_VERSION='{args.version}' sh ./testd-install.sh")
+		print('```\n')
 		print('On Linux and macOS, run `testd uninstall` before removing the app. Windows CLI uninstall remains blocked.')
 	elif args.command == 'package':
 		package(args)

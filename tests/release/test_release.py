@@ -286,8 +286,55 @@ class ReleaseTests(unittest.TestCase):
 		self.assertIn('not trusted signing or Gatekeeper approval', text)
 		self.assertIn('SHA256SUMS', text)
 		self.assertIn('SBOM', text)
+		self.assertIn('curl -fsSLo testd-install.sh https://testd.dev/install.sh', text)
+		self.assertIn(f"TESTD_VERSION='{version}' sh ./testd-install.sh", text)
 		self.assertIn('On Linux and macOS, run `testd uninstall` before removing the app.', text)
 		self.assertIn('Windows CLI uninstall remains blocked.', text)
+
+	@unittest.skipIf(os.name == 'nt', 'not applicable: the website installer is POSIX-only')
+	def test_website_installer_uses_the_pinned_release_and_refuses_a_bad_checksum(self):
+		with tempfile.TemporaryDirectory() as temporary:
+			root = pathlib.Path(temporary)
+			build = root / 'build'
+			build.mkdir()
+			binary = build / 'testd'
+			binary.write_bytes(b'fixture CLI')
+			assets = root / 'assets'
+			version = workspace_version()
+			with redirect_stdout(io.StringIO()):
+				release.package(SimpleNamespace(version=version, target='x86_64-unknown-linux-gnu',
+					build_dir=build, output=assets, cli_only=True))
+				release.checksums(assets)
+			tools = root / 'tools'
+			tools.mkdir()
+			for name, script in (
+				('uname', 'case "$1" in -s) echo Linux;; -m) echo x86_64;; *) exit 1;; esac'),
+				('curl', '[ "$#" = 4 ] && [ "$1" = -fsSL ] && [ "$2" = -o ] || exit 22\n'
+					'file=${4##*/}\n'
+					'[ "$4" = "https://github.com/fixture/testd/releases/download/v$TESTD_VERSION/$file" ] || exit 22\n'
+					'cp "$FIXTURE_ASSETS/$file" "$3"'),
+			):
+				path = tools / name
+				path.write_text(f'#!/bin/sh\n{script}\n', encoding='utf-8')
+				path.chmod(0o700)
+			installed = root / 'installed' / 'testd'
+			env = {**os.environ, 'PATH': str(tools) + os.pathsep + os.environ.get('PATH', ''),
+				'GITHUB_TOKEN': '', 'TESTD_REPO': 'fixture/testd', 'TESTD_VERSION': version,
+				'FIXTURE_ASSETS': str(assets), 'TESTD_INSTALL_DIR': str(installed.parent), 'TMPDIR': temporary}
+			command = ['sh', str(ROOT / 'sites/product/public/install.sh')]
+			result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=15)
+			self.assertEqual(result.returncode, 0, result.stderr)
+			self.assertEqual(installed.read_bytes(), binary.read_bytes())
+			with (assets / f'testd-{version}-x86_64-unknown-linux-gnu.tar.gz').open('ab') as archive:
+				archive.write(b'changed download')
+			result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=15)
+			self.assertNotEqual(result.returncode, 0)
+			self.assertIn('checksum mismatch', result.stderr)
+			self.assertEqual(installed.read_bytes(), binary.read_bytes())
+			result = subprocess.run(command, env={**env, 'TESTD_VERSION': ''},
+				capture_output=True, text=True, timeout=15)
+			self.assertNotEqual(result.returncode, 0)
+			self.assertIn('for a prerelease, use TESTD_VERSION', result.stderr)
 
 	def test_ci_required_artifacts_are_selected_by_target_not_builder_os(self):
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')

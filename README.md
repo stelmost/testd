@@ -52,6 +52,8 @@ cargo install --path .
 
 Public releases provide CLI archives, tray bundles, `SHA256SUMS`, and generated Homebrew definitions. Verify the checksums before installing. Homebrew templates live in `packaging/homebrew/`; a release generates installable definitions with real digests. The native tray app is a separate, public Rust build and opens its local pages in your default browser. [DEVELOPING.md](DEVELOPING.md) covers building and release validation. There is no in-app updater or commercial-service requirement.
 
+For a prerelease CLI install on Linux or macOS, use the version-pinned command in its [release notes](https://github.com/LapilliWorks/testd/releases).
+
 This first release is an unsigned alpha: Windows artifacts have no Authenticode signature, and macOS artifacts are not Developer ID signed or notarized. Optional free macOS ad-hoc resource sealing checks bundle integrity only; it is not trusted signing or Gatekeeper approval. Linux provides checksums and SBOMs without additional signing infrastructure. Actual installation approval remains separate.
 
 ## First name

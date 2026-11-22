@@ -31,7 +31,9 @@ From the repository:
 cargo install --path .
 ```
 
-Release archives and generated Homebrew formulas are also published. Verify `SHA256SUMS` before installing. The native tray app is a separate Rust build; setup and the dashboard open in the default browser. See [DEVELOPING.md](https://github.com/LapilliWorks/testd/blob/master/DEVELOPING.md#release) for building and packaging.
+Download CLI archives, tray bundles, and Homebrew definitions from [GitHub Releases](https://github.com/LapilliWorks/testd/releases). Verify `SHA256SUMS` before installing. The native tray app is a separate Rust build; setup and the dashboard open in the default browser. See [DEVELOPING.md](https://github.com/LapilliWorks/testd/blob/master/DEVELOPING.md#release) for building and packaging.
+
+On Linux and macOS, use the version-pinned CLI installer command in the chosen release's notes. `TESTD_VERSION` is the tag without its leading `v`. Without it, the installer looks for a stable release and does not install prereleases.
 
 ## 2. Prepare the host
 

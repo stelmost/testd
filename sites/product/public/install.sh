@@ -33,7 +33,7 @@ if [ -z "$version" ]; then
 		release=$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" "$api")
 	else
 		release=$(curl -fsSL "$api")
-	fi || fail "no release found for $repo"
+	fi || fail "could not find a stable release for $repo; for a prerelease, use TESTD_VERSION as shown in its release notes"
 	version=$(printf '%s' "$release" | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p')
 	[ -n "$version" ] || fail "could not read the release tag for $repo"
 fi
