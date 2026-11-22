@@ -7,7 +7,9 @@ description: 'Remote development, profiles, grants, quick launches, tunnels, ext
 
 ## SSH forwarding
 
-Complete the local [quickstart](quickstart.md) on the machine with your browser. This example forwards an app listening on `127.0.0.1:3000` on `devbox`. Use your usual SSH host in place of `devbox`. Its SSH server must allow local TCP forwarding. The command uses non-interactive SSH authentication.
+Complete the local setup on the machine with your browser. In the dashboard’s **Quick launches**, choose **SSH tunnel**, enter the host alias you use with `ssh` (for example `devbox`), the remote app port, and a local name. Save the launch and select **Open**. testd uses your OpenSSH configuration and shows any SSH prompt in the dashboard. It opens the local HTTPS URL once the HTTP app on the remote machine’s loopback responds. Select **Stop** to close the tunnel and release the name. [Quickstart](quickstart.md)
+
+You can also use the command line. This example forwards an app listening on `127.0.0.1:3000` on `devbox`. Its SSH server must allow local TCP forwarding. The command uses non-interactive SSH authentication.
 
 ```sh
 testd run --host 127.0.0.1 app.example:18080 -- \
@@ -131,7 +133,7 @@ Quick launches and the operator secret are not issued grants. Names published th
 
 ## Quick launches
 
-A quick launch is a saved command started from the local dashboard or the tray. It is local-only: the dashboard serves it on loopback and the authenticated intake never exposes process control. The tray lists saved launches with start and stop actions.
+A quick launch is a saved local command or SSH forward started from the local dashboard or the tray. It is local-only: the dashboard serves it on loopback and the authenticated intake never exposes process control. The tray lists saved launches with start and stop actions.
 
 A launch definition has a label, a command, an optional working directory, an optional environment, and one or more name entries. The dashboard asks for the full project directory so commands run there rather than in the tray's or daemon's starting directory. For each entry:
 

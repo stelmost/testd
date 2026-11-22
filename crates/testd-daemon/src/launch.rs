@@ -5,6 +5,8 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
+use std::net::{Ipv4Addr, TcpListener};
+use std::num::NonZeroU16;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,8 +17,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use testd_client::Entry;
-use testd_client::supervisor::{self, EntryState, LaunchEvent, LaunchSpec, OutputStream};
-use testd_core::config::{config_dir, write_private};
+use testd_client::supervisor::{self, EntryState, LaunchEvent, LaunchSpec, OutputStream, Readiness};
+use testd_core::config::{config_dir, host_tld, write_private};
+use testd_core::validate::{normalize_bare_domain, validate_domain};
+
+use crate::ssh_prompt::{Askpass, Prompt, Prompts};
 
 const FILE: &str = "launches.json";
 const MAX_LOG_LINES: usize = 500;
@@ -36,6 +41,9 @@ pub struct LaunchDefinition {
 	#[serde(default)]
 	pub id: String,
 	pub label: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub ssh: Option<SshForward>,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub program: String,
 	#[serde(default)]
 	pub args: Vec<String>,
@@ -48,6 +56,63 @@ pub struct LaunchDefinition {
 	pub share: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SshForward {
+	pub host: String,
+	pub port: NonZeroU16,
+}
+
+impl SshForward {
+	fn validate(&self) -> Result<(), String> {
+		let host = self.host.as_str();
+		if host.is_empty()
+			|| host.len() > 255
+			|| host.starts_with('-')
+			|| host.ends_with('@')
+			|| host.starts_with('@')
+			|| host.matches('@').count() > 1
+			|| !host
+				.bytes()
+				.all(|byte| byte.is_ascii_alphanumeric() || b"-_.:@[]%".contains(&byte))
+		{
+			return Err("enter an SSH host alias, address, or user@host".into());
+		}
+		Ok(())
+	}
+
+	fn spec(&self, domain: &str, askpass: &Askpass) -> Result<LaunchSpec, String> {
+		self.validate()?;
+		let reservation = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|error| error.to_string())?;
+		let address = reservation.local_addr().map_err(|error| error.to_string())?;
+		let mut spec = LaunchSpec::new("ssh", vec![Entry::new(domain.to_owned(), address.to_string())]);
+		let forward = format!("{address}:127.0.0.1:{}", self.port);
+		spec.args = [
+			"-NT",
+			"-Snone",
+			"-oForkAfterAuthentication=no",
+			"-oBatchMode=no",
+			"-oExitOnForwardFailure=yes",
+			"-oRemoteCommand=none",
+			"-oPermitLocalCommand=no",
+			"-oForwardAgent=no",
+			"-oForwardX11=no",
+			"-oServerAliveInterval=15",
+			"-L",
+			&forward,
+			"--",
+			&self.host,
+		]
+		.into_iter()
+		.map(str::to_owned)
+		.collect();
+		spec.env = askpass.env.clone();
+		spec.readiness = Readiness::SshHttp;
+		spec.probe_timeout = Duration::from_secs(120);
+		Ok(spec)
+	}
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LaunchView {
 	#[serde(flatten)]
@@ -56,6 +121,10 @@ pub struct LaunchView {
 	pub states: Vec<EntryStateView>,
 	pub logs: Vec<LogLine>,
 	pub error: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub ssh_prompt: Option<Prompt>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +174,7 @@ struct Running {
 	stop: mpsc::Sender<()>,
 	rebind: mpsc::Sender<RebindRequest>,
 	state: Arc<Mutex<RunState>>,
+	prompts: Option<Arc<Prompts>>,
 	done: watch::Receiver<bool>,
 }
 
@@ -160,7 +230,10 @@ impl LaunchBook {
 		if definition.label.trim().is_empty() {
 			return Err("a launch needs a label".into());
 		}
-		if definition.program.trim().is_empty() {
+		if let Some(ssh) = &definition.ssh {
+			ssh.validate()?;
+			validate_ssh_launch(&mut definition)?;
+		} else if definition.program.trim().is_empty() {
 			return Err("a launch needs a program".into());
 		}
 		if definition.entries.is_empty() {
@@ -228,7 +301,8 @@ impl LaunchBook {
 					)
 				});
 				let (is_running, states, logs, error) = live.unwrap_or_default();
-				LaunchView { definition, running: is_running, states, logs, error }
+				let ssh_prompt = running.get(&definition.id).and_then(|run| run.prompts.as_ref()?.view());
+				LaunchView { definition, running: is_running, states, logs, error, ssh_prompt, url: None }
 			})
 			.collect()
 	}
@@ -255,33 +329,54 @@ impl LaunchBook {
 			.ok_or_else(|| format!("no launch with id {id}"))?;
 
 		let config = crate::control::client_config()?;
-		let mut spec = LaunchSpec::new(
-			PathBuf::from(&definition.program),
-			definition
-				.entries
-				.iter()
-				.map(|entry| Entry::new(entry.domain.clone(), entry.target.clone()))
-				.collect(),
-		);
-		spec.args = definition.args.clone();
-		spec.cwd = definition.cwd.clone().filter(|cwd| !cwd.is_empty()).map(PathBuf::from);
-		spec.env = definition.env.clone();
-		spec.share = definition.share;
+		let (spec, askpass) = self.launch_spec(definition)?;
+		let prompts = askpass.as_ref().map(|askpass| Arc::clone(&askpass.prompts));
 
 		let (stop, stop_rx) = mpsc::channel(1);
 		let (rebind, rebind_rx) = mpsc::channel(4);
 		let state = Arc::new(Mutex::new(RunState { phase: RunPhase::Starting, ..RunState::default() }));
 		let (done_tx, done) = watch::channel(false);
-		running.insert(id.to_owned(), Running { stop, rebind, state: Arc::clone(&state), done });
+		running.insert(id.to_owned(), Running { stop, rebind, state: Arc::clone(&state), prompts, done });
 		drop(running);
 		self.bump();
 
 		let book = Arc::clone(self);
 		tokio::spawn(async move {
 			run_launch(book, spec, config, stop_rx, rebind_rx, state).await;
+			drop(askpass);
 			let _ = done_tx.send(true);
 		});
 		Ok(())
+	}
+
+	fn launch_spec(&self, mut definition: LaunchDefinition) -> Result<(LaunchSpec, Option<Askpass>), String> {
+		if definition.ssh.is_some() {
+			validate_ssh_launch(&mut definition)?;
+			let ssh = definition.ssh.expect("validated SSH launch");
+			let askpass = Askpass::start(self.revision.clone()).map_err(|error| error.to_string())?;
+			let spec = ssh.spec(&definition.entries[0].domain, &askpass)?;
+			return Ok((spec, Some(askpass)));
+		}
+		let entries = definition
+			.entries
+			.into_iter()
+			.map(|entry| Entry::new(entry.domain, entry.target))
+			.collect();
+		let mut spec = LaunchSpec::new(definition.program, entries);
+		spec.args = definition.args;
+		spec.cwd = definition.cwd.filter(|cwd| !cwd.is_empty()).map(PathBuf::from);
+		spec.env = definition.env;
+		spec.share = definition.share;
+		Ok((spec, None))
+	}
+
+	pub fn answer_ssh(&self, id: &str, prompt: &str, answer: Option<String>) -> Result<(), String> {
+		let running = self.running.lock().expect("launch state poisoned");
+		let prompts = running
+			.get(id)
+			.and_then(|run| run.prompts.as_ref())
+			.ok_or_else(|| "this SSH launch is no longer waiting".to_owned())?;
+		prompts.answer(prompt, answer)
 	}
 
 	pub fn stop(&self, id: &str) -> Result<(), String> {
@@ -305,6 +400,7 @@ impl LaunchBook {
 		let sender = {
 			let running = self.running.lock().expect("launch state poisoned");
 			match running.get(id) {
+				Some(run) if run.prompts.is_some() => return Err("SSH forwards use their own loopback port".into()),
 				Some(run) => match run.state.lock().expect("launch state poisoned").phase {
 					RunPhase::Starting => return Err("launch is still starting".into()),
 					RunPhase::Running => Some(run.rebind.clone()),
@@ -343,6 +439,28 @@ impl LaunchBook {
 			let _ = tokio::time::timeout(Duration::from_secs(5), done.changed()).await;
 		}
 	}
+}
+
+fn validate_ssh_launch(definition: &mut LaunchDefinition) -> Result<(), String> {
+	let [entry] = definition.entries.as_mut_slice() else {
+		return Err("an SSH launch needs one name".into());
+	};
+	if !definition.program.is_empty()
+		|| !definition.args.is_empty()
+		|| definition.cwd.is_some()
+		|| !definition.env.is_empty()
+		|| definition.share
+		|| !entry.target.is_empty()
+	{
+		return Err("an SSH launch takes an SSH host, remote port, and local name".into());
+	}
+	let tld = host_tld();
+	entry.domain = normalize_bare_domain(&entry.domain, tld);
+	validate_domain(&entry.domain, tld)?;
+	if entry.domain == "testd" {
+		return Err(format!("testd.{tld} is reserved for the dashboard"));
+	}
+	Ok(())
 }
 
 fn path() -> PathBuf {
@@ -489,6 +607,7 @@ mod tests {
 		LaunchDefinition {
 			id: id.into(),
 			label: "app".into(),
+			ssh: None,
 			program: "/bin/true".into(),
 			args: Vec::new(),
 			cwd: None,
@@ -565,7 +684,7 @@ mod tests {
 		book.running
 			.lock()
 			.unwrap()
-			.insert("one".into(), Running { stop, rebind, state: Arc::clone(&state), done });
+			.insert("one".into(), Running { stop, rebind, state: Arc::clone(&state), prompts: None, done });
 		(state, receiver)
 	}
 

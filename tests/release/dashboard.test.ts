@@ -31,6 +31,46 @@ test('quick launches save the selected project directory', async () => {
 	expect(dashboard).toContain('id="launch-cwd"');
 });
 
+test('an SSH quick launch saves the alias and remote port without a local command', async () => {
+	const values: Record<string, string> = {
+		'launch-type': 'ssh',
+		'launch-label': 'Web',
+		'launch-domain': 'app.example',
+		'launch-ssh-host': 'devbox',
+		'launch-ssh-port': '3000',
+	};
+	let saved;
+	const saveLaunch = new Function('document', 'post', 'notice', 'refreshState', 'setLaunchFields',
+		'return (' + inlineFunction(dashboard, 'saveLaunch', 'ago') + ');')(
+		{ getElementById: (id: string) => ({ value: values[id] }) },
+		async (_path: string, body: unknown) => { saved = body; }, () => {}, () => {}, () => {},
+	);
+	saveLaunch({ preventDefault() {}, target: { reset() {} } });
+	await Promise.resolve();
+	expect(saved).toEqual({ label: 'Web', entries: [{ domain: 'app.example' }], ssh: { host: 'devbox', port: 3000 } });
+});
+
+test('one click opens an SSH app when its registered HTTPS URL is ready', async () => {
+	const started: string[] = [];
+	const visited: string[] = [];
+	const blank = {
+		opener: true, document: { title: '', body: { textContent: '' } },
+		closed: false, location: { replace: (url: string) => visited.push(url) },
+	};
+	const start = dashboard.indexOf('const sshTabs =');
+	const end = dashboard.indexOf('\n\tfunction sshPromptForm(');
+	const openSshLaunch = new Function('window', 'document', 'post', 'getJson',
+		dashboard.slice(start, end) + '\nreturn openSshLaunch;')(
+		{ open: () => blank }, { getElementById: () => ({ children: [] }) },
+		async (_path: string, body: { id: string }) => { started.push(body.id); },
+		async () => ({ launches: [{ id: 'one', running: true, url: 'https://app.example.test:8443' }] }),
+	);
+	await openSshLaunch('one', { disabled: false });
+	expect(started).toEqual(['one']);
+	expect(blank.opener).toBeNull();
+	expect(visited).toEqual(['https://app.example.test:8443']);
+});
+
 test('quick launches display captured output as text', () => {
 	const elements: any[] = [];
 	const document = {

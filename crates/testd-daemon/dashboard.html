@@ -105,13 +105,20 @@
 							<h2>Quick launches</h2>
 							<span class="count" id="launch-count">0</span>
 						</div>
-						<p class="card-desc">Start a project command and register its name in one step. Runs on this
-							machine only.</p>
+						<p class="card-desc">Open a local command or an app on an SSH host at a local HTTPS name.</p>
 					</div>
 				</div>
 				<div class="card-body">
 					<div id="launch-list"></div>
+					<div id="ssh-prompts"></div>
 					<form class="form-grid" onsubmit="saveLaunch(event)" autocomplete="off">
+						<div class="field field-wide">
+							<label for="launch-type">Connection</label>
+							<select class="input" id="launch-type" onchange="setLaunchFields()">
+								<option value="local">Local command</option>
+								<option value="ssh">SSH tunnel</option>
+							</select>
+						</div>
 						<div class="field">
 							<label for="launch-label">Launch name</label>
 							<input class="input" id="launch-label" placeholder="Web app" required>
@@ -121,17 +128,27 @@
 							<input class="input" id="launch-domain" placeholder="app.example" required
 								spellcheck="false">
 						</div>
-						<div class="field">
+						<div class="field" id="launch-ssh-host-field" hidden>
+							<label for="launch-ssh-host">SSH host</label>
+							<input class="input" id="launch-ssh-host" placeholder="devbox or user@devbox"
+								spellcheck="false" disabled>
+						</div>
+						<div class="field" id="launch-ssh-port-field" hidden>
+							<label for="launch-ssh-port">Remote app port</label>
+							<input class="input" id="launch-ssh-port" type="number" min="1" max="65535"
+								placeholder="3000" disabled>
+						</div>
+						<div class="field" id="launch-target-field">
 							<label for="launch-target">Target (optional)</label>
 							<input class="input" id="launch-target" placeholder="Auto-detect; or port or host:port"
 								spellcheck="false">
 						</div>
-						<div class="field field-wide">
+						<div class="field field-wide" id="launch-cwd-field">
 							<label for="launch-cwd">Project directory</label>
 							<input class="input" id="launch-cwd" placeholder="Full path to your project" required
 								spellcheck="false">
 						</div>
-						<div class="field field-wide">
+						<div class="field field-wide" id="launch-command-field">
 							<label for="launch-command">Command</label>
 							<input class="input" id="launch-command" placeholder="npm run dev" required
 								spellcheck="false">
@@ -583,7 +600,8 @@
 
 		const command = document.createElement('div');
 		command.className = 'row-meta truncate';
-		command.title = [launch.program, ...(launch.args || [])].join(' ');
+		command.title = launch.ssh ? 'SSH ' + launch.ssh.host + ' · port ' + launch.ssh.port
+			: [launch.program, ...(launch.args || [])].join(' ');
 		command.textContent = command.title;
 		main.append(command);
 
@@ -627,8 +645,21 @@
 		const toggle = document.createElement('button');
 		toggle.type = 'button';
 		toggle.className = 'btn btn-sm' + (launch.running ? '' : ' btn-primary');
-		toggle.textContent = launch.running ? 'Stop' : 'Start';
-		toggle.addEventListener('click', () => launchAction(launch.running ? 'stop' : 'start', launch.id));
+		toggle.textContent = launch.running ? 'Stop' : launch.ssh ? 'Open' : 'Start';
+		if (launch.ssh && !launch.running) {
+			toggle.addEventListener('click', () => openSshLaunch(launch.id, toggle));
+		} else {
+			toggle.addEventListener('click', () => launchAction(launch.running ? 'stop' : 'start', launch.id));
+		}
+		if (launch.ssh && launch.running && launch.url) {
+			const open = document.createElement('a');
+			open.className = 'btn btn-sm btn-primary';
+			open.href = launch.url;
+			open.target = '_blank';
+			open.rel = 'noreferrer';
+			open.textContent = 'Open';
+			actions.append(open);
+		}
 		const remove = document.createElement('button');
 		remove.type = 'button';
 		remove.className = 'btn btn-sm btn-danger';
@@ -647,7 +678,7 @@
 		updateCount('launch-count', launches.length);
 		if (!launches.length) {
 			container.append(emptyState('No quick launches',
-				'Save a command below to register its name while it runs.'));
+				'Save a local command or SSH tunnel to open it here.'));
 			return;
 		}
 		const rows = document.createElement('ul');
@@ -657,9 +688,120 @@
 	}
 
 	function launchAction(action, id) {
-		post('/api/local/launches/' + action, { id })
-			.then(refreshState)
-			.catch((e) => notice(e.message));
+		return post('/api/local/launches/' + action, { id }).then(refreshState).catch((e) => notice(e.message));
+	}
+
+	const sshTabs = new Map();
+
+	async function openSshLaunch(id, button) {
+		if (sshTabs.has(id)) return;
+		const tab = window.open('about:blank', '_blank');
+		if (tab) {
+			tab.opener = null;
+			tab.document.title = 'Connecting over SSH';
+			tab.document.body.textContent = 'Connecting over SSH. Check the testd dashboard if SSH needs your input.';
+		}
+		button.disabled = true;
+		sshTabs.set(id, { tab, started: false });
+		try {
+			await post('/api/local/launches/start', { id });
+			const pending = sshTabs.get(id);
+			if (pending) pending.started = true;
+			updateSshLaunches((await getJson('/api/local/state')).launches || []);
+		} catch (error) {
+			sshTabs.delete(id);
+			if (tab) tab.close();
+			notice(error.message);
+		} finally {
+			button.disabled = false;
+		}
+	}
+
+	function updateSshLaunches(launches) {
+		for (const [id, pending] of sshTabs) {
+			if (!pending.started) continue;
+			const launch = launches.find((item) => item.id === id);
+			if (launch?.url && launch.running) {
+				if (pending.tab && !pending.tab.closed) pending.tab.location.replace(launch.url);
+				else notice('Tunnel ready. Select Open again to open the app.', false);
+				sshTabs.delete(id);
+			} else if (!launch?.running) {
+				pending.tab?.close();
+				sshTabs.delete(id);
+				if (launch?.error) notice(launch.error);
+			}
+		}
+
+		const container = document.getElementById('ssh-prompts');
+		const prompts = launches.filter((launch) => launch.ssh_prompt);
+		const active = new Set(prompts.map((launch) => launch.ssh_prompt.id));
+		for (const form of Array.from(container.children)) {
+			if (!active.has(form.dataset.prompt)) form.remove();
+		}
+		for (const launch of prompts) {
+			const prompt = launch.ssh_prompt;
+			if (Array.from(container.children).some((form) => form.dataset.prompt === prompt.id)) continue;
+			container.append(sshPromptForm(launch, prompt));
+		}
+	}
+
+	function sshPromptForm(launch, prompt) {
+		const form = document.createElement('form');
+		form.className = 'ssh-prompt';
+		form.dataset.prompt = prompt.id;
+		const message = document.createElement('label');
+		message.textContent = prompt.message;
+		const input = document.createElement('input');
+		input.className = 'input';
+		input.type = 'password';
+		input.autocomplete = 'off';
+		input.maxLength = 4096;
+		input.id = 'ssh-answer-' + prompt.id;
+		message.htmlFor = input.id;
+		form.append(message);
+		if (prompt.kind !== 'notice') form.append(input);
+		const actions = document.createElement('div');
+		actions.className = 'row-actions';
+		const send = document.createElement('button');
+		send.className = 'btn btn-sm btn-primary';
+		send.type = 'submit';
+		send.textContent = 'Continue';
+		const cancel = document.createElement('button');
+		cancel.className = 'btn btn-sm';
+		cancel.type = 'button';
+		cancel.textContent = 'Cancel';
+		const answer = async (value) => {
+			send.disabled = true;
+			cancel.disabled = true;
+			input.value = '';
+			try {
+				await post('/api/local/launches/ssh/answer', { id: launch.id, prompt: prompt.id, answer: value });
+				if (value === null) await launchAction('stop', launch.id);
+				await refreshState();
+			} catch (error) {
+				send.disabled = false;
+				cancel.disabled = false;
+				notice(error.message);
+			}
+		};
+		form.addEventListener('submit', (event) => {
+			event.preventDefault();
+			answer(prompt.kind === 'notice' ? '' : input.value);
+		});
+		cancel.addEventListener('click', () => answer(null));
+		actions.append(send, cancel);
+		form.append(actions);
+		return form;
+	}
+
+	function setLaunchFields() {
+		const isSsh = document.getElementById('launch-type').value === 'ssh';
+		for (const [field, ssh] of [['target', false], ['cwd', false], ['command', false], ['ssh-host', true], ['ssh-port', true]]) {
+			const input = document.getElementById('launch-' + field);
+			input.disabled = isSsh !== ssh;
+			input.required = !input.disabled && field !== 'target';
+			document.getElementById('launch-' + field + '-field').hidden = input.disabled;
+		}
 	}
 
 	// Split a command line into argv, honoring single and double quotes.
@@ -714,31 +856,33 @@
 
 	function saveLaunch(event) {
 		event.preventDefault();
-		let argv;
-		try {
-			argv = parseCommand(document.getElementById('launch-command').value.trim());
-		} catch (e) {
-			notice(e.message);
-			return;
-		}
-		if (!argv.length) {
-			notice('Enter a command to run.');
-			return;
-		}
+		const value = (field) => (document.getElementById('launch-' + field).value || '').trim();
+		const domain = value('domain');
 		const form = event.target;
-		const body = {
-			label: document.getElementById('launch-label').value.trim(),
-			program: argv[0],
-			args: argv.slice(1),
-			cwd: document.getElementById('launch-cwd').value.trim(),
-			entries: [{
-				domain: document.getElementById('launch-domain').value.trim(),
-				target: document.getElementById('launch-target').value.trim(),
-			}],
-		};
+		const body = { label: value('label'), entries: [{ domain }] };
+		if (value('type') === 'ssh') {
+			body.ssh = { host: value('ssh-host'), port: Number(value('ssh-port')) };
+		} else {
+			let argv;
+			try {
+				argv = parseCommand(value('command'));
+			} catch (error) {
+				notice(error.message);
+				return;
+			}
+			if (!argv.length) {
+				notice('Enter a command to run.');
+				return;
+			}
+			body.program = argv[0];
+			body.args = argv.slice(1);
+			body.cwd = value('cwd');
+			body.entries[0].target = value('target');
+		}
 		post('/api/local/launches/save', body)
 			.then(() => {
 				form.reset();
+				if (body.ssh) setLaunchFields();
 				notice('Launch saved.', false);
 				return refreshState();
 			})
@@ -876,6 +1020,7 @@
 		renderDomains(state);
 		renderShares(state);
 		renderLaunches(state.launches || []);
+		updateSshLaunches(state.launches || []);
 		renderAccess(state);
 	}
 

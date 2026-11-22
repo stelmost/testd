@@ -427,7 +427,10 @@
 		border-top: 1px solid var(--border);
 	}
 	.field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+	.field[hidden] { display: none; }
 	.field-wide { grid-column: 1 / -1; }
+	.ssh-prompt { display: grid; gap: 8px; margin-top: 16px; }
+	.ssh-prompt label { white-space: pre-wrap; overflow-wrap: anywhere; }
 	.field label { color: var(--text-secondary); font-size: 12px; font-weight: 550; }
 	.input {
 		width: 100%;

@@ -5,12 +5,13 @@
 //! the child stops. Rebinding changes the target without restarting the child.
 
 use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::process::{Child, Command as ProcessCommand};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -58,6 +59,13 @@ pub enum LaunchEvent {
 	Failed { message: String },
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub enum Readiness {
+	#[default]
+	Tcp,
+	SshHttp,
+}
+
 /// What to run and what to name it.
 #[derive(Debug, Clone)]
 pub struct LaunchSpec {
@@ -68,6 +76,7 @@ pub struct LaunchSpec {
 	pub entries: Vec<Entry>,
 	pub force: bool,
 	pub probe_timeout: Duration,
+	pub readiness: Readiness,
 	/// Detect the child's listening port when the entry target is empty, `auto`,
 	/// or a bare port. An explicit `host:port` always wins.
 	pub detect: bool,
@@ -85,6 +94,7 @@ impl LaunchSpec {
 			entries,
 			force: false,
 			probe_timeout: Duration::from_secs(30),
+			readiness: Readiness::Tcp,
 			detect: true,
 			share: false,
 		}
@@ -420,7 +430,11 @@ async fn confirm_all(
 			entry.target.clone()
 		};
 
-		if let Err(e) = wait_for_target(&target, spec.probe_timeout).await {
+		let ready = match spec.readiness {
+			Readiness::Tcp => wait_for_target(&target, spec.probe_timeout).await,
+			Readiness::SshHttp => wait_for_ssh_http(pid, &target, &entry.domain, spec.probe_timeout).await,
+		};
+		if let Err(e) = ready {
 			send_state(events, &entry.domain, &target, EntryState::Configured, Some(e)).await;
 			continue;
 		}
@@ -515,6 +529,48 @@ async fn wait_for_target(target: &str, timeout: Duration) -> Result<(), String> 
 			_ => tokio::time::sleep(PROBE_INTERVAL).await,
 		}
 	}
+}
+
+async fn wait_for_ssh_http(pid: u32, target: &str, domain: &str, timeout: Duration) -> Result<(), String> {
+	let address = target.parse::<SocketAddr>().map_err(|error| error.to_string())?;
+	let mut owns_listener = false;
+	let probe = async {
+		loop {
+			if !owns_listener {
+				owns_listener = tokio::task::spawn_blocking(move || {
+					listeners::discover(pid).map(|sockets| {
+						sockets.iter().any(|socket| {
+							socket.pid == pid && socket.address == address.ip() && socket.port == address.port()
+						})
+					})
+				})
+				.await
+				.map_err(|error| format!("SSH listener discovery failed: {error}"))??;
+			}
+			if owns_listener && ssh_http_responds(address, domain).await {
+				return Ok(());
+			}
+			tokio::time::sleep(PROBE_INTERVAL).await;
+		}
+	};
+	match tokio::time::timeout(timeout, probe).await {
+		Ok(result) => result,
+		Err(_) if owns_listener => Err("SSH could not get an HTTP response from the remote app".into()),
+		Err(_) => Err("SSH did not open the local forwarding port".into()),
+	}
+}
+
+async fn ssh_http_responds(address: SocketAddr, domain: &str) -> bool {
+	let request = async {
+		let mut stream = TcpStream::connect(address).await?;
+		let host = format!("{domain}.{}", testd_core::config::host_tld());
+		let request = format!("HEAD / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+		stream.write_all(request.as_bytes()).await?;
+		let mut version = [0; 7];
+		stream.read_exact(&mut version).await?;
+		Ok::<_, std::io::Error>(&version == b"HTTP/1.")
+	};
+	matches!(tokio::time::timeout(Duration::from_secs(2), request).await, Ok(Ok(true)))
 }
 
 async fn send_state(
@@ -970,8 +1026,7 @@ mod tests {
 										&Response::PendingGrant { id: "pending".into(), domain: domain.to_owned() },
 									)
 									.await
-									.is_ok()
-										&& protocol::send(&mut writer, &Response::Ok).await.is_ok()
+									.is_ok() && protocol::send(&mut writer, &Response::Ok).await.is_ok()
 								},
 							}
 						} else {

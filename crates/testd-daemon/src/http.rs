@@ -145,6 +145,7 @@ where
 		("POST", "/api/local/launches/save") => handle_launch_save(&mut writer, ctx, &body).await,
 		("POST", "/api/local/launches/delete") => handle_launch_delete(&mut writer, ctx, &body).await,
 		("POST", "/api/local/launches/start") => handle_launch_start(&mut writer, ctx, &body).await,
+		("POST", "/api/local/launches/ssh/answer") => handle_ssh_answer(&mut writer, ctx, &body).await,
 		("POST", "/api/local/launches/stop") => handle_launch_stop(&mut writer, ctx, &body).await,
 		("POST", "/api/local/launches/rebind") => handle_launch_rebind(&mut writer, ctx, &body).await,
 		("GET", "/api/local/requests") => respond_json(&mut writer, "200 OK", &ctx.access.pending()).await,
@@ -249,7 +250,7 @@ struct DomainView {
 async fn dashboard_state(ctx: &HttpContext) -> DashboardState {
 	let dashboard = dashboard_claims(ctx).await;
 	let regs: Vec<Registration> = dashboard.claims.iter().map(|claim| claim.registration.clone()).collect();
-	let domains = dashboard
+	let domains: Vec<_> = dashboard
 		.claims
 		.iter()
 		.map(|claim| DomainView {
@@ -260,6 +261,20 @@ async fn dashboard_state(ctx: &HttpContext) -> DashboardState {
 			granted: dashboard.granted.contains(&claim.registration.domain),
 		})
 		.collect();
+	let mut launches = ctx.launches.as_ref().map(|book| book.list()).unwrap_or_default();
+	for launch in &mut launches {
+		if launch.running
+			&& launch.definition.ssh.is_some()
+			&& let [state] = launch.states.as_slice()
+			&& state.state == testd_client::supervisor::EntryState::Confirmed
+		{
+			let domain = format!("{}.{}", state.domain, ctx.tld);
+			launch.url = domains
+				.iter()
+				.find(|view| view.domain == domain && view.target == state.target)
+				.map(|view| view.url.clone());
+		}
+	}
 	DashboardState {
 		tld: ctx.tld.clone(),
 		advisory: advisory(&regs),
@@ -268,7 +283,7 @@ async fn dashboard_state(ctx: &HttpContext) -> DashboardState {
 			Some(shares) => shares.list().await,
 			None => Vec::new(),
 		},
-		launches: ctx.launches.as_ref().map(|book| book.list()).unwrap_or_default(),
+		launches,
 		requests: ctx.access.pending(),
 		tokens: ctx.access.tokens(),
 	}
@@ -628,6 +643,13 @@ struct IdRequest {
 }
 
 #[derive(serde::Deserialize)]
+struct SshAnswer {
+	id: String,
+	prompt: String,
+	answer: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
 struct RebindRequest {
 	id: String,
 	domain: String,
@@ -693,6 +715,21 @@ where
 	match result {
 		Ok(()) => respond_json(writer, "200 OK", &serde_json::json!({ "ok": true })).await,
 		Err(e) => respond_json(writer, "400 Bad Request", &serde_json::json!({ "error": e })).await,
+	}
+}
+
+async fn handle_ssh_answer<W>(writer: &mut W, ctx: &HttpContext, body: &[u8]) -> io::Result<()>
+where
+	W: AsyncWriteExt + Unpin,
+{
+	let result = (|| {
+		let book = launch_book(ctx)?;
+		let request: SshAnswer = serde_json::from_slice(body).map_err(|_| "invalid SSH response".to_owned())?;
+		book.answer_ssh(&request.id, &request.prompt, request.answer)
+	})();
+	match result {
+		Ok(()) => respond_json(writer, "200 OK", &serde_json::json!({ "ok": true })).await,
+		Err(error) => respond_json(writer, "400 Bad Request", &serde_json::json!({ "error": error })).await,
 	}
 }
 

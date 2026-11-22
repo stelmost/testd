@@ -27,6 +27,9 @@ pub enum UiEvent {
 }
 
 fn main() {
+	if testd_daemon::ssh_prompt::run_askpass() {
+		return;
+	}
 	#[cfg(target_os = "macos")]
 	if let Some(result) = testd_daemon::macos_socket::run_helper() {
 		if let Err(error) = result {
