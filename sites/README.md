@@ -73,7 +73,7 @@ CI builds and link-checks `dist/` on every run and does not deploy it; publicati
 
 ## Brand assets
 
-`assets/brand/testd-slim.svg` is the slim brand icon used on the product page and in larger placements; `testd-mark.svg` is its bare `t.` glyph. The product site imports the brand files through Vite, and the docs serve `assets/brand/` as their public directory, using `testd-app.png` for both the header logo and the favicon.
+`assets/brand/testd-slim.svg` is the slim brand icon used on the product page, in the dashboard and setup headers, and in larger placements. The product site imports the brand files through Vite, and the docs serve `assets/brand/` as their public directory, using `testd-app.png` for both the header logo and the favicon.
 
 `assets/brand/testd-app.png` is the 1024px fat app icon used below 128px, including the favicon and the docs header. `testd-app-large.png` is the 1024px thin render of `testd-slim.svg` used at 128px and above, so the dock and task switch keep the lighter mark. `testd-tray-mask.png` and `testd-tray-plate-mask.png` are the alpha masks for the tray variants. `scripts/build-icons.py` regenerates `crates/testd-gui/icons/` from those sources; the native tray and packager use that directory. `assets/social/og.png` is the social card, emitted at `/og.png` by the product Vite config.
 

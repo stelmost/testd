@@ -258,7 +258,7 @@ async fn handle(stream: TcpStream, state: Arc<State>) -> io::Result<()> {
 
 	match (method.as_str(), path.as_str()) {
 		("GET", "/") => {
-			let page = assets::load(assets::SETUP_HTML);
+			let page = assets::load_page(assets::SETUP_HTML);
 			respond(&mut writer, "200 OK", "text/html; charset=utf-8", page.as_bytes()).await
 		},
 		("GET", "/dashboard.css") => {

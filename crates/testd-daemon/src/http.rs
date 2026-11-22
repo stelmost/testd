@@ -406,7 +406,7 @@ fn render_dashboard(
 		html
 	};
 
-	crate::assets::load(crate::assets::DASHBOARD_HTML)
+	crate::assets::load_page(crate::assets::DASHBOARD_HTML)
 		.replace("{tld}", &escape(&ctx.tld))
 		.replace("{domains}", &render_domains(claims, granted, ctx.https_port))
 		.replace("{domain_count}", &regs.len().to_string())
