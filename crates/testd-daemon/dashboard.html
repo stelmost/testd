@@ -121,101 +121,113 @@
 				</div>
 				<div class="card-body">
 					<div id="launch-list"></div>
-					<form class="form-grid" id="launch-form" onsubmit="saveLaunch(event)"
-						onreset="resetLaunchForm(event)" autocomplete="off">
-						<div class="field">
-							<label for="launch-label">Launch name</label>
-							<input class="input" id="launch-label" placeholder="Web app" required>
-						</div>
-						<div class="field">
-							<label for="launch-domain">Domain</label>
-							<input class="input" id="launch-domain" placeholder="app.example" required
-								spellcheck="false">
-						</div>
-						<div class="field" id="launch-target-field">
-							<label for="launch-target">Target (optional)</label>
-							<input class="input" id="launch-target" placeholder="Auto-detect; or port or host:port"
-								spellcheck="false">
-						</div>
-						<div class="field field-wide" id="launch-cwd-field">
-							<label for="launch-cwd">Project directory</label>
-							<input class="input" id="launch-cwd" placeholder="Full path to your project" required
-								spellcheck="false">
-						</div>
-						<div class="field field-wide" id="launch-command-field">
-							<label for="launch-command">Command</label>
-							<input class="input" id="launch-command" placeholder="npm run dev" required
-								spellcheck="false">
-						</div>
-						<div class="form-actions">
-							<button class="btn btn-sm" type="reset" hidden>Cancel</button>
-							<button class="btn btn-primary btn-sm" type="submit">
-								<span data-create-label>Save launch</span>
-								<span data-edit-label hidden>Save changes</span>
-							</button>
-						</div>
-					</form>
+					<details class="create">
+						<summary class="btn btn-sm">New quick launch</summary>
+						<form class="form-grid" id="launch-form" onsubmit="saveLaunch(event)"
+							onreset="resetLaunchForm(event)" autocomplete="off">
+							<div class="field">
+								<label for="launch-label">Launch name</label>
+								<input class="input" id="launch-label" placeholder="Web app" required>
+							</div>
+							<div class="field">
+								<label for="launch-domain">Domain</label>
+								<input class="input" id="launch-domain" placeholder="app.example" required
+									spellcheck="false">
+							</div>
+							<div class="field" id="launch-target-field">
+								<label for="launch-target">Target (optional)</label>
+								<input class="input" id="launch-target" placeholder="Auto-detect; or port or host:port"
+									spellcheck="false">
+							</div>
+							<div class="field field-wide" id="launch-cwd-field">
+								<label for="launch-cwd">Project directory</label>
+								<input class="input" id="launch-cwd" placeholder="Full path to your project" required
+									spellcheck="false">
+							</div>
+							<div class="field field-wide" id="launch-command-field">
+								<label for="launch-command">Command</label>
+								<input class="input" id="launch-command" placeholder="npm run dev" required
+									spellcheck="false">
+							</div>
+							<div class="form-actions">
+								<button class="btn btn-sm" type="reset">Cancel</button>
+								<button class="btn btn-primary btn-sm" type="submit">
+									<span data-create-label>Save launch</span>
+									<span data-edit-label hidden>Save changes</span>
+								</button>
+							</div>
+						</form>
+					</details>
 				</div>
 			</section>
 
 			<section class="card" id="ssh-apps">
 				<div class="card-head">
-					<div class="card-title-row">
-						<h2>SSH apps</h2>
-						<span class="count" id="ssh-app-count">0</span>
+					<div>
+						<div class="card-title-row">
+							<h2>SSH apps</h2>
+							<span class="count" id="ssh-app-count">0</span>
+						</div>
+						<p class="card-desc">Open an app on an SSH host at a local HTTPS name.</p>
 					</div>
 				</div>
 				<div class="card-body">
 					<div id="ssh-app-list"></div>
 					<div id="ssh-prompts"></div>
-					<form class="form-grid" id="ssh-form" onsubmit="saveSshApp(event)"
-						onreset="resetLaunchForm(event)" autocomplete="off">
-						<fieldset class="field field-wide radio-group" onchange="setSshFields()">
-							<legend>On open</legend>
-							<div class="radio-options">
-								<label>
-									<input type="radio" name="ssh-mode" value="forward" checked>
-									Connect to a running app
-								</label>
-								<label>
-									<input type="radio" name="ssh-mode" id="ssh-mode-command" value="command">
-									Start a remote command
-								</label>
+					<details class="create">
+						<summary class="btn btn-sm">New SSH app</summary>
+						<form class="form-grid" id="ssh-form" onsubmit="saveSshApp(event)"
+							onreset="resetLaunchForm(event)" autocomplete="off">
+							<fieldset class="field field-wide radio-group" onchange="setSshFields()">
+								<legend>On open</legend>
+								<div class="radio-options">
+									<label>
+										<input type="radio" name="ssh-mode" value="forward" checked>
+										Connect to a running app
+									</label>
+									<label>
+										<input type="radio" name="ssh-mode" id="ssh-mode-command" value="command">
+										Start a remote command
+									</label>
+								</div>
+							</fieldset>
+							<div class="field">
+								<label for="ssh-label">App name</label>
+								<input class="input" id="ssh-label" placeholder="Web app" required>
 							</div>
-						</fieldset>
-						<div class="field">
-							<label for="ssh-label">App name</label>
-							<input class="input" id="ssh-label" placeholder="Web app" required>
-						</div>
-						<div class="field">
-							<label for="ssh-domain">Local domain</label>
-							<input class="input" id="ssh-domain" placeholder="app.example" spellcheck="false" required>
-						</div>
-						<div class="field">
-							<label for="ssh-host">SSH host</label>
-							<input class="input" id="ssh-host" placeholder="devbox or user@devbox" spellcheck="false" required>
-						</div>
-						<div class="field">
-							<label for="ssh-port">Remote app port</label>
-							<input class="input" id="ssh-port" type="number" min="1" max="65535" placeholder="3000" required>
-						</div>
-						<div class="field field-wide" id="ssh-cwd-field" hidden>
-							<label for="ssh-cwd">Remote project directory (optional)</label>
-							<input class="input" id="ssh-cwd" placeholder="Path on the SSH host" spellcheck="false" disabled>
-						</div>
-						<div class="field field-wide" id="ssh-command-field" hidden>
-							<label for="ssh-command">Remote command</label>
-							<input class="input" id="ssh-command" placeholder="npm run dev" spellcheck="false" disabled>
-							<small>Requires testd on the SSH host’s PATH.</small>
-						</div>
-						<div class="form-actions">
-							<button class="btn btn-sm" type="reset" hidden>Cancel</button>
-							<button class="btn btn-primary btn-sm" type="submit">
-								<span data-create-label>Save SSH app</span>
-								<span data-edit-label hidden>Save changes</span>
-							</button>
-						</div>
-					</form>
+							<div class="field">
+								<label for="ssh-domain">Local domain</label>
+								<input class="input" id="ssh-domain" placeholder="app.example" spellcheck="false" required>
+							</div>
+							<div class="field">
+								<label for="ssh-host">SSH host</label>
+								<input class="input" id="ssh-host" placeholder="devbox or user@devbox" spellcheck="false"
+									required>
+							</div>
+							<div class="field">
+								<label for="ssh-port">Remote app port</label>
+								<input class="input" id="ssh-port" type="number" min="1" max="65535" placeholder="3000"
+									required>
+							</div>
+							<div class="field field-wide" id="ssh-cwd-field" hidden>
+								<label for="ssh-cwd">Remote project directory (optional)</label>
+								<input class="input" id="ssh-cwd" placeholder="Path on the SSH host" spellcheck="false"
+									disabled>
+							</div>
+							<div class="field field-wide" id="ssh-command-field" hidden>
+								<label for="ssh-command">Remote command</label>
+								<input class="input" id="ssh-command" placeholder="npm run dev" spellcheck="false" disabled>
+								<small>Requires testd on the SSH host’s PATH.</small>
+							</div>
+							<div class="form-actions">
+								<button class="btn btn-sm" type="reset">Cancel</button>
+								<button class="btn btn-primary btn-sm" type="submit">
+									<span data-create-label>Save SSH app</span>
+									<span data-edit-label hidden>Save changes</span>
+								</button>
+							</div>
+						</form>
+					</details>
 				</div>
 			</section>
 		</div>

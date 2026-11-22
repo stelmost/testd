@@ -418,6 +418,11 @@
 
 	/* Forms */
 
+	.create { margin-top: 14px; }
+	.create > summary { list-style: none; }
+	.create > summary::-webkit-details-marker { display: none; }
+	.create > summary::before { content: "+"; font-size: 15px; line-height: 1; }
+	.create[open] > summary { background: var(--surface-muted); }
 	.form-grid {
 		display: grid;
 		grid-template-columns: 1fr 1fr;
@@ -429,7 +434,16 @@
 	.field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 	.field[hidden] { display: none; }
 	.field-wide { grid-column: 1 / -1; }
-	.ssh-prompt { display: grid; gap: 8px; margin-top: 16px; }
+	/* SSH is waiting on the operator, so the prompt stands out from the list. */
+	.ssh-prompt {
+		display: grid;
+		gap: 8px;
+		margin-top: 14px;
+		padding: 12px 14px;
+		border: 1px solid var(--warning);
+		border-radius: 10px;
+		background: var(--warning-soft);
+	}
 	.ssh-prompt label, .ssh-prompt p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 	.field label, .field legend { color: var(--text-secondary); font-size: 12px; font-weight: 550; }
 	.radio-group { margin: 0; padding: 0; border: 0; }
