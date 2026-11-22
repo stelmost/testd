@@ -99,7 +99,7 @@
 							<span class="count" id="domain-count">{domain_count}</span>
 						</div>
 						<p class="card-desc">Live registrations from connected dev environments. Stop ends a leaf
-							but keeps its grants; delete removes the grant for that name only, so the leaf must
+							but keeps its grants; Delete removes the grant for that name only, so the leaf must
 							request it again.</p>
 					</div>
 				</div>
@@ -466,12 +466,6 @@
 		document.getElementById(id).textContent = value;
 	}
 
-	const STOP_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true">' +
-		'<rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor"/></svg>';
-	const TRASH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
-		'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-		'<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>';
-
 	function groupDomains(domains) {
 		const groups = [];
 		for (const domain of domains) {
@@ -513,20 +507,20 @@
 		actions.className = 'row-actions';
 		const stop = document.createElement('button');
 		stop.type = 'button';
-		stop.className = 'icon-btn icon-btn-stop';
+		stop.className = 'btn btn-sm';
 		stop.setAttribute('aria-label', 'Stop the leaf that publishes ' + domain.domain);
 		stop.title = 'Stop this leaf (keeps its grant)';
-		stop.innerHTML = STOP_ICON;
+		stop.textContent = 'Stop';
 		stop.addEventListener('click', () => stopName(domain.domain, stop));
 		actions.append(stop);
 
 		if (domain.granted) {
 			const remove = document.createElement('button');
 			remove.type = 'button';
-			remove.className = 'icon-btn';
+			remove.className = 'btn btn-sm btn-danger';
 			remove.setAttribute('aria-label', 'Delete the grant for ' + domain.domain);
 			remove.title = 'Delete this leaf\'s grant (it must request access again)';
-			remove.innerHTML = TRASH_ICON;
+			remove.textContent = 'Delete';
 			remove.addEventListener('click', () => deleteGrant(domain.domain, remove));
 			actions.append(remove);
 		}

@@ -515,10 +515,6 @@ fn advisory(regs: &[Registration]) -> Vec<String> {
 	advice
 }
 
-const TRASH_ICON: &str = r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>"#;
-/// A block: stop the leaf, keep its grant.
-const STOP_ICON: &str = r#"<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor"/></svg>"#;
-
 fn render_shares(shares: &[crate::share::ShareView]) -> String {
 	if shares.is_empty() {
 		return r#"<p class="empty"><strong>No shares</strong><span>Start one with <code>testd share &lt;name&gt;</code>.</span></p>"#
@@ -563,15 +559,14 @@ fn render_domains(claims: &[Claim], granted: &HashSet<String>, https_port: u16) 
 			// Only leaves with an issued token have a grant to delete.
 			let delete = if granted.contains(&reg.domain) {
 				format!(
-					r#"<button class="icon-btn" type="button" aria-label="Delete the grant for {domain}" title="Delete this leaf's grant (it must request access again)" onclick="deleteGrant('{domain}', this)">{TRASH_ICON}</button>"#
+					r#"<button class="btn btn-sm btn-danger" type="button" aria-label="Delete the grant for {domain}" title="Delete this leaf's grant (it must request access again)" onclick="deleteGrant('{domain}', this)">Delete</button>"#
 				)
 			} else {
 				String::new()
 			};
 			html.push_str(&format!(
-				r#"<li class="row"><div class="row-main"><a class="row-title" href="{url}" target="_blank" rel="noreferrer">{domain}</a><span class="row-meta">{target}</span></div><div class="row-actions"><button class="icon-btn icon-btn-stop" type="button" aria-label="Stop the leaf that publishes {domain}" title="Stop this leaf (keeps its grant)" onclick="stopName('{domain}', this)">{stop}</button>{delete}</div></li>"#,
+				r#"<li class="row"><div class="row-main"><a class="row-title" href="{url}" target="_blank" rel="noreferrer">{domain}</a><span class="row-meta">{target}</span></div><div class="row-actions"><button class="btn btn-sm" type="button" aria-label="Stop the leaf that publishes {domain}" title="Stop this leaf (keeps its grant)" onclick="stopName('{domain}', this)">Stop</button>{delete}</div></li>"#,
 				target = escape(&reg.target),
-				stop = STOP_ICON,
 			));
 		}
 		html.push_str("</ul>");
