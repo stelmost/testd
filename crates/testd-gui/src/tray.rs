@@ -194,7 +194,6 @@ fn append_domains(menu: &Menu, state: &State) -> anyhow::Result<()> {
 	for registration in &state.regs {
 		let domain = &registration.domain;
 		menu.append(&MenuItem::with_id(format!("domain-open:{domain}"), domain, true, None))?;
-		menu.append(&MenuItem::with_id(format!("domain-stop:{domain}"), format!("    Stop {domain}"), true, None))?;
 	}
 	menu.append(&MenuItem::with_id("dashboard-open", format!("testd.{} → dashboard", state.tld), true, None))?;
 	menu.append(&PredefinedMenuItem::separator())?;

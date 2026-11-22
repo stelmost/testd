@@ -25,7 +25,6 @@ pub enum Command {
 	DisableAutostart,
 	Repair(Action),
 	OpenDomain(String),
-	StopDomain(String),
 	StartLaunch(String),
 	StopLaunch(String),
 	OpenShare(String),
@@ -48,7 +47,6 @@ impl Command {
 				}
 				Some(match action {
 					"domain-open" => Self::OpenDomain(value.into()),
-					"domain-stop" => Self::StopDomain(value.into()),
 					"launch-start" => Self::StartLaunch(value.into()),
 					"launch-stop" => Self::StopLaunch(value.into()),
 					"share-open" => Self::OpenShare(value.into()),
@@ -444,7 +442,6 @@ async fn dispatch(
 		Command::DisableAutostart => {
 			*autostart = Some(tokio::task::spawn_blocking(crate::platform::disable_autostart).await??);
 		},
-		Command::StopDomain(domain) => daemon.stop_domain(&domain).await.map_err(anyhow::Error::msg)?,
 		Command::StartLaunch(id) => daemon.launches().start(&id).map_err(anyhow::Error::msg)?,
 		Command::StopLaunch(id) => daemon.launches().stop(&id).map_err(anyhow::Error::msg)?,
 		Command::StopShare(name) => {
@@ -498,10 +495,17 @@ mod tests {
 
 	#[test]
 	fn menu_dispatch_rejects_headers_empty_values_and_unknown_actions() {
-		for id in ["domain:app.example.test", "launch:one", "quick-launches", "domain-stop:", "execute:sh"] {
+		for id in [
+			"domain:app.example.test",
+			"launch:one",
+			"quick-launches",
+			"domain-open:",
+			"domain-stop:app.example.test",
+			"execute:sh",
+		] {
 			assert!(Command::from_menu(id, None).is_none());
 		}
-		assert!(matches!(Command::from_menu("domain-stop:app.example.test", None), Some(Command::StopDomain(_))));
+		assert!(matches!(Command::from_menu("domain-open:app.example.test", None), Some(Command::OpenDomain(_))));
 		assert!(matches!(Command::from_menu("quit", None), Some(Command::Quit)));
 	}
 }
