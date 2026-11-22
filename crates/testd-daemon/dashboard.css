@@ -477,19 +477,34 @@
 	.detail-row dd { margin: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
 	.card-actions { padding-top: 14px; border-top: 1px solid var(--border); flex-wrap: wrap; }
 
-	/* Notices */
+	/* Notices: a fixed toast, so feedback shows wherever the action was taken. */
 
 	.notice {
+		position: fixed;
+		right: 20px;
+		bottom: 20px;
+		z-index: 20;
 		display: none;
 		align-items: flex-start;
 		gap: 10px;
-		margin-bottom: 18px;
+		width: min(100% - 40px, 440px);
 		padding: 11px 14px;
+		border: 1px solid var(--border);
 		border-radius: 10px;
+		box-shadow: 0 8px 24px rgba(0, 0, 0, .14);
 		font-size: 13px;
 	}
-	.notice-error { display: flex; background: var(--danger-soft); color: var(--danger); }
-	.notice-ok { display: flex; background: var(--success-soft); color: var(--success); }
+	/* Tint over an opaque surface; the soft colors alone are translucent. */
+	.notice-error {
+		display: flex;
+		background: linear-gradient(var(--danger-soft), var(--danger-soft)) var(--surface);
+		color: var(--danger);
+	}
+	.notice-ok {
+		display: flex;
+		background: linear-gradient(var(--success-soft), var(--success-soft)) var(--surface);
+		color: var(--success);
+	}
 	.notice-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 	.notice-close {
 		flex: none;
