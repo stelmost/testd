@@ -1002,9 +1002,11 @@
 	}
 
 	function setLaunchEditActions(form, editing) {
+		const disclosure = form.closest('details');
 		form.querySelector('[data-create-label]').hidden = editing;
 		form.querySelector('[data-edit-label]').hidden = !editing;
-		form.querySelector('[type="reset"]').hidden = !editing;
+		form.querySelector('[type="reset"]').hidden = !editing && !disclosure;
+		if (disclosure) disclosure.open = editing;
 	}
 
 	function resetLaunchForm(event) {

@@ -38,6 +38,7 @@ function launchForm(prefix: 'launch' | 'ssh', values: Record<string, string | bo
 	};
 	const form = {
 		id: prefix + '-form',
+		closest: (): { open: boolean } | null => null,
 		querySelector: (selector: string) => controls[selector],
 		elements: {
 			namedItem: () => ({
@@ -176,11 +177,14 @@ test('editing a quick launch preserves its ID, arguments, extra domains and opti
 
 test('editing an SSH app fills its mode and updates the same ID when switching to forwarding', async () => {
 	const ui = launchForm('ssh');
+	const disclosure = { open: false };
+	ui.form.closest = () => disclosure;
 	const launch = {
 		id: 'remote-web', label: 'Remote web', entries: [{ domain: 'app.example', target: '' }], env: [], share: false,
 		ssh: { host: 'devbox', port: 3000, command: { program: 'npm', args: ['run', 'dev'], cwd: '/srv/web' } },
 	};
 	ui.edit(launch);
+	expect(disclosure.open).toBe(true);
 	expect(ui.field('ssh-mode-command').checked).toBe(true);
 	expect(ui.field('ssh-command').value).toBe('npm run dev');
 	expect(ui.field('ssh-command').disabled).toBe(false);
@@ -194,6 +198,7 @@ test('editing an SSH app fills its mode and updates the same ID when switching t
 		ssh: { host: 'devbox', port: 4000 },
 	}]);
 	expect(ui.field('ssh-command').disabled).toBe(true);
+	expect(disclosure.open).toBe(false);
 });
 
 test('canceling an edit clears the saved ID before creating another quick launch', async () => {
