@@ -431,7 +431,21 @@
 	.field-wide { grid-column: 1 / -1; }
 	.ssh-prompt { display: grid; gap: 8px; margin-top: 16px; }
 	.ssh-prompt label { white-space: pre-wrap; overflow-wrap: anywhere; }
-	.field label { color: var(--text-secondary); font-size: 12px; font-weight: 550; }
+	.field label, .field legend { color: var(--text-secondary); font-size: 12px; font-weight: 550; }
+	.radio-group { margin: 0; padding: 0; border: 0; }
+	.radio-group legend { padding: 0; margin-bottom: 5px; }
+	.radio-options { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+	.radio-options label {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		min-height: 28px;
+		color: var(--text);
+		font-size: 13.5px;
+		font-weight: 400;
+		cursor: pointer;
+	}
+	.radio-options input { margin: 0; accent-color: var(--accent); }
 	.input {
 		width: 100%;
 		height: 36px;

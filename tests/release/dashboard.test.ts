@@ -9,11 +9,11 @@ const commandSource = dashboard.slice(dashboard.indexOf('function parseCommand('
 // Exercise the shipped inline parser, not a copy of its implementation.
 const parseCommand = new Function(`return (${commandSource});`)() as (text: string) => string[];
 
-function submitForm(name: string, values: Record<string, string>) {
+function submitForm(name: string, values: Record<string, string | boolean>) {
 	let saved: any;
 	const save = new Function('document', 'parseCommand', 'post', 'notice', 'refreshState',
 		inlineFunction(dashboard, 'saveLaunch', 'ago') + '\nreturn ' + name + ';')(
-		{ getElementById: (id: string) => ({ value: values[id] }) }, parseCommand,
+		{ getElementById: (id: string) => ({ value: values[id], checked: values[id] === true }) }, parseCommand,
 		async (_path: string, body: unknown) => { saved = body; }, () => {}, () => {},
 	);
 	save({ preventDefault() {}, target: { reset() {} } });
@@ -35,9 +35,36 @@ test('quick launches save the selected project directory', () => {
 	expect(dashboard).toContain('id="launch-cwd"');
 });
 
+test('SSH app mode radios control the remote command fields', () => {
+	const radios = dashboard.match(/<input type="radio" name="ssh-mode"[^>]*>/g) || [];
+	expect(radios).toHaveLength(2);
+	expect(radios[0]).toContain('value="forward" checked');
+	expect(radios[1]).toContain('value="command"');
+	const mode = { checked: false };
+	const command = { disabled: true, required: false };
+	const cwd = { disabled: true, required: false };
+	const commandField = { hidden: true };
+	const cwdField = { hidden: true };
+	const elements: Record<string, object> = {
+		'ssh-mode-command': mode, 'ssh-command': command, 'ssh-cwd': cwd,
+		'ssh-command-field': commandField, 'ssh-cwd-field': cwdField,
+	};
+	const update = new Function('document', `return (${inlineFunction(dashboard, 'setSshFields', 'saveSshApp')});`)(
+		{ getElementById: (id: string) => elements[id] },
+	);
+	for (const checked of [true, false]) {
+		mode.checked = checked;
+		update();
+		expect(command).toEqual({ disabled: !checked, required: checked });
+		expect(cwd).toEqual({ disabled: !checked, required: false });
+		expect(commandField.hidden).toBe(!checked);
+		expect(cwdField.hidden).toBe(!checked);
+	}
+});
+
 test('SSH apps save the alias and remote port', () => {
 	const saved = submitForm('saveSshApp', {
-		'ssh-mode': 'forward',
+		'ssh-mode-command': false,
 		'ssh-label': 'Web',
 		'ssh-domain': 'app.example',
 		'ssh-host': 'devbox',
@@ -48,7 +75,7 @@ test('SSH apps save the alias and remote port', () => {
 
 test('SSH apps save the remote command as argv and its working directory', () => {
 	const saved = submitForm('saveSshApp', {
-		'ssh-mode': 'command',
+		'ssh-mode-command': true,
 		'ssh-label': 'Web',
 		'ssh-domain': 'app.example',
 		'ssh-host': 'devbox',

@@ -153,13 +153,19 @@
 					<div id="ssh-app-list"></div>
 					<div id="ssh-prompts"></div>
 					<form class="form-grid" onsubmit="saveSshApp(event)" onreset="queueMicrotask(setSshFields)" autocomplete="off">
-						<div class="field field-wide">
-							<label for="ssh-mode">On open</label>
-							<select class="input" id="ssh-mode" onchange="setSshFields()">
-								<option value="forward">Connect to a running app</option>
-								<option value="command">Start a remote command</option>
-							</select>
-						</div>
+						<fieldset class="field field-wide radio-group" onchange="setSshFields()">
+							<legend>On open</legend>
+							<div class="radio-options">
+								<label>
+									<input type="radio" name="ssh-mode" value="forward" checked>
+									Connect to a running app
+								</label>
+								<label>
+									<input type="radio" name="ssh-mode" id="ssh-mode-command" value="command">
+									Start a remote command
+								</label>
+							</div>
+						</fieldset>
 						<div class="field">
 							<label for="ssh-label">App name</label>
 							<input class="input" id="ssh-label" placeholder="Web app" required>
@@ -898,7 +904,7 @@
 	}
 
 	function setSshFields() {
-		const runsCommand = document.getElementById('ssh-mode').value === 'command';
+		const runsCommand = document.getElementById('ssh-mode-command').checked;
 		for (const field of ['cwd', 'command']) {
 			document.getElementById('ssh-' + field + '-field').hidden = !runsCommand;
 			const input = document.getElementById('ssh-' + field);
@@ -911,7 +917,7 @@
 		event.preventDefault();
 		const value = (field) => document.getElementById('ssh-' + field).value.trim();
 		const ssh = { host: value('host'), port: Number(value('port')) };
-		if (value('mode') === 'command') {
+		if (document.getElementById('ssh-mode-command').checked) {
 			try {
 				const [program, ...args] = parseCommand(value('command'));
 				if (!program) throw new Error('Enter a remote command to run.');
