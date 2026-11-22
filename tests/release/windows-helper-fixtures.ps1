@@ -12,7 +12,7 @@ if ($errors.Count) { throw ($errors.Message -join '; ') }
 $backends = @('Assert-Administrator', 'Assert-SystemAccess', 'New-SystemDirectory', 'Get-OwnershipDirectory',
 	'New-SystemFile', 'Enter-OwnershipLock', 'Read-OwnershipRecord', 'Get-RecordBackupPath', 'Write-OwnershipRecord',
 	'Archive-OwnershipRecord', 'Get-OwnershipKeys', 'Get-MachineRoots', 'Add-MachineRoot', 'Remove-MachineRoot',
-	'Get-RootSnapshot')
+	'Get-RootSnapshot', 'Test-RootSnapshot')
 foreach ($definition in $ast.FindAll({ $args[0] -is [Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
 	if ($definition.Name -notin $backends) { . ([scriptblock]::Create($definition.Extent.Text)) }
 }
@@ -32,6 +32,27 @@ function Assert-Fails([scriptblock]$action, [string]$pattern) {
 		$failed = $true
 	}
 	Assert $failed ('expected failure: ' + $pattern)
+}
+
+function Test-NativeRootCache {
+	if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { return }
+	foreach ($definition in $ast.FindAll({ $args[0] -is [Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+		if ($definition.Name -in @('Get-RootSnapshot', 'Test-RootSnapshot')) {
+			. ([scriptblock]::Create($definition.Extent.Text))
+		}
+	}
+	$snapshots = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'windows-root-snapshots.base64')).Trim()
+	$uncached, $cached = ($snapshots -split '\r?\n\r?\n') | ForEach-Object { $_ -replace '\s', '' }
+	$cert = [Security.Cryptography.X509Certificates.X509Certificate2]::new([Convert]::FromBase64String($cached))
+	try {
+		$before = Get-RootSnapshot $cert
+		Assert ($before -cne $uncached) 'Windows cache fixture does not differ from the initial snapshot'
+		Assert (Test-RootSnapshot $cert $uncached) 'Windows cache fields invalidate the original ownership snapshot'
+		Assert ((Get-RootSnapshot $cert) -ceq $before) 'checking ownership modified the certificate context'
+		$cert.FriendlyName = 'synthetic administrator metadata change'
+		Assert (-not (Test-RootSnapshot $cert $uncached)) 'a genuine metadata change was ignored'
+	} finally { $cert.Dispose() }
+	Write-Output 'PASS: native Windows certificate cache comparison'
 }
 
 function Reset-Fixture {
@@ -97,6 +118,7 @@ function Remove-DnsClientNrptRule {
 
 function Get-MachineRoots([string]$thumbprint) { @($script:roots | Where-Object { $_.Thumbprint -eq $thumbprint }) }
 function Get-RootSnapshot($cert) { [Convert]::ToBase64String($cert.RawData) + ':' + $script:rootTag }
+function Test-RootSnapshot($cert, [string]$snapshot) { (Get-RootSnapshot $cert) -ceq $snapshot }
 function Add-MachineRoot($cert) {
 	$key = 'root-' + (Get-CertificateFingerprint $cert)
 	Assert ($script:records[$key].State -eq 'prepared') 'missing durable root intent'
@@ -119,6 +141,8 @@ function Remove-MachineRoot($cert) {
 foreach ($name in @('Get-DnsClientNrptRule', 'Add-DnsClientNrptRule', 'Remove-DnsClientNrptRule')) {
 	Assert ((Get-Command $name).CommandType -eq 'Function') ('missing cmdlet mock: ' + $name)
 }
+
+Test-NativeRootCache
 
 Reset-Fixture
 Install-TestdNrpt testdcheck 127.0.0.1 $owner

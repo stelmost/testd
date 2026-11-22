@@ -298,19 +298,79 @@ function Get-RootSnapshot($cert) {
 	[Convert]::ToBase64String($cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::SerializedCert))
 }
 
-function Add-MachineRoot($cert) {
-	# X509Store.Add replaces existing properties. CERT_STORE_ADD_NEW refuses a raced-in certificate instead.
+function ConvertTo-ComparableRootSnapshot([string]$snapshot) {
+	$bytes = [Convert]::FromBase64String($snapshot)
+	$type = [Security.Cryptography.X509Certificates.X509Certificate2]
+	if ($type::GetCertContentType($bytes) -ne 'SerializedCert') {
+		Stop-OwnershipConflict 'invalid serialized root snapshot; left untouched'
+	}
+	$copy = $type::new($bytes)
+	try {
+		$derOnly = $type::new($copy.RawData)
+		try {
+			# Work on detached copies and preserve all values not derived from this exact certificate.
+			[TestdRootStore]::DropDerivedProperties($copy.Handle, $derOnly.Handle)
+			Get-RootSnapshot $copy
+		} finally { $derOnly.Dispose() }
+	} finally { $copy.Dispose() }
+}
+
+function Test-RootSnapshot($cert, [string]$snapshot) {
+	$live = Get-RootSnapshot $cert
+	if ($live -ceq $snapshot) { return $true }
+	if ([string]::IsNullOrEmpty($snapshot)) { return $false }
+	Initialize-RootStore
+	(ConvertTo-ComparableRootSnapshot $live) -ceq (ConvertTo-ComparableRootSnapshot $snapshot)
+}
+
+function Initialize-RootStore {
 	if (-not ('TestdRootStore' -as [type])) {
 		Add-Type -TypeDefinition @'
 using System;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 public static class TestdRootStore {
+	private const uint SignatureHash = 15;
+	private const uint KeyIdentifier = 20;
+	private const uint SubjectPublicKeyMd5Hash = 25;
+	private const uint InhibitPersist = 0x40000000;
+
 	[DllImport("crypt32.dll", SetLastError = true, EntryPoint = "CertAddCertificateContextToStore")]
 	[return: MarshalAs(UnmanagedType.Bool)]
 	public static extern bool AddNew(IntPtr store, IntPtr certificate, uint disposition, IntPtr added);
+
+	[DllImport("crypt32.dll", SetLastError = true, EntryPoint = "CertGetCertificateContextProperty")]
+	[return: MarshalAs(UnmanagedType.Bool)]
+	private static extern bool GetProperty(IntPtr certificate, uint property, byte[] data, ref uint size);
+
+	[DllImport("crypt32.dll", SetLastError = true, EntryPoint = "CertSetCertificateContextProperty")]
+	[return: MarshalAs(UnmanagedType.Bool)]
+	private static extern bool SetProperty(IntPtr certificate, uint property, uint flags, IntPtr data);
+
+	private static string ReadProperty(IntPtr certificate, uint property) {
+		uint size = 0;
+		if (!GetProperty(certificate, property, null, ref size)) throw new Win32Exception(Marshal.GetLastWin32Error());
+		byte[] value = new byte[size];
+		if (!GetProperty(certificate, property, value, ref size)) throw new Win32Exception(Marshal.GetLastWin32Error());
+		return Convert.ToBase64String(value);
+	}
+
+	public static void DropDerivedProperties(IntPtr certificate, IntPtr derOnly) {
+		// Windows can persist these derived values after the certificate is installed.
+		foreach (uint property in new uint[] { SignatureHash, KeyIdentifier, SubjectPublicKeyMd5Hash }) {
+			if (ReadProperty(certificate, property) == ReadProperty(derOnly, property) &&
+				!SetProperty(certificate, property, InhibitPersist, IntPtr.Zero))
+				throw new Win32Exception(Marshal.GetLastWin32Error());
+		}
+	}
 }
 '@
 	}
+}
+
+function Add-MachineRoot($cert) {
+	# X509Store.Add replaces existing properties. CERT_STORE_ADD_NEW refuses a raced-in certificate instead.
+	Initialize-RootStore
 	$store = [Security.Cryptography.X509Certificates.X509Store]::new('Root', 'LocalMachine')
 	try {
 		$store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
@@ -362,7 +422,7 @@ function Install-TestdRoot([string]$path, [string]$thumbprint, [string]$fingerpr
 			}
 			if ($null -ne $record -and $record.Owner -ceq $owner) {
 				Assert-OwnedRecord $record $owner 'root' $fingerprint
-				if ($record.State -cne 'active' -or (Get-RootSnapshot $roots[0]) -cne $record.Snapshot) {
+				if ($record.State -cne 'active' -or -not (Test-RootSnapshot $roots[0] $record.Snapshot)) {
 					Stop-OwnershipConflict 'root trust changed or setup was interrupted; left untouched'
 				}
 			}
@@ -399,7 +459,7 @@ function Get-RootRemoval([string]$thumbprint, [string]$fingerprint, [string]$own
 	Assert-OwnedRecord $record $owner 'root' $fingerprint
 	if ($roots.Count -and ($record.State -eq 'prepared' -or $roots.Count -ne 1 -or
 		(Get-CertificateFingerprint $roots[0]) -ne $fingerprint -or
-		(Get-RootSnapshot $roots[0]) -cne $record.Snapshot)) {
+		-not (Test-RootSnapshot $roots[0] $record.Snapshot))) {
 		Stop-OwnershipConflict 'root ownership is incomplete or trust changed; left untouched'
 	}
 	[pscustomobject]@{ Key = $key; Record = $record; HasRoot = ($roots.Count -ne 0) }
@@ -415,7 +475,7 @@ function Remove-TestdRoot([string]$thumbprint, [string]$fingerprint, [string]$ow
 	# Keep recovery records if another administrator changed trust while intent was being recorded.
 	$roots = @(Get-MachineRoots $thumbprint)
 	if ($roots.Count -ne 1 -or (Get-CertificateFingerprint $roots[0]) -ne $fingerprint -or
-		(Get-RootSnapshot $roots[0]) -cne $record.Snapshot) {
+		-not (Test-RootSnapshot $roots[0] $record.Snapshot)) {
 		Stop-OwnershipConflict 'root trust changed while recording removal; left untouched'
 	}
 	Remove-MachineRoot $roots[0]
