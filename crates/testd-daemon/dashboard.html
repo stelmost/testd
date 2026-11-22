@@ -65,13 +65,29 @@
 
 <main class="page">
 	<header class="page-head">
-		<h1>Dashboard</h1>
-		<p class="page-subtitle">Stable HTTPS names for <code>.{tld}</code> on this machine.</p>
+		<div>
+			<h1>Dashboard</h1>
+			<p class="page-subtitle">Stable HTTPS names for <code>.{tld}</code> on this machine.</p>
+		</div>
 	</header>
 
 	<div id="notice" class="notice" role="status" aria-live="polite"></div>
 
 	<div id="advisory-slot">{advisory}</div>
+
+	<section class="card card-attention" id="requests" hidden>
+		<div class="card-head">
+			<div>
+				<div class="card-title-row">
+					<h2>Access requests</h2>
+					<span class="count" id="request-count">0</span>
+				</div>
+				<p class="card-desc">Leaves waiting for a grant. Approving issues a token for the names listed;
+					denying closes the request.</p>
+			</div>
+		</div>
+		<div class="card-body" id="request-list"></div>
+	</section>
 
 	<div class="layout">
 		<div class="column">
@@ -208,24 +224,15 @@
 			<section class="card" id="access">
 				<div class="card-head">
 					<div>
-						<div class="card-title-row"><h2>Access</h2></div>
-						<p class="card-desc">A leaf without a credential asks for a grant on first run, naming the
-							domains it wants. Approving issues a token for those names; denying closes the request.
-							Revoking a token stops the leaf using it and removes all of its grants.</p>
+						<div class="card-title-row">
+							<h2>Access tokens</h2>
+							<span class="count" id="token-count">0</span>
+						</div>
+						<p class="card-desc">Issued when a request is approved. Revoking a token stops its leaf and
+							removes all of its grants.</p>
 					</div>
 				</div>
-				<div class="card-body">
-					<div class="subhead">
-						<h3>Pending requests</h3>
-						<span class="count" id="request-count">0</span>
-					</div>
-					<div id="request-list"></div>
-					<div class="subhead">
-						<h3>Issued tokens</h3>
-						<span class="count" id="token-count">0</span>
-					</div>
-					<div id="token-list"></div>
-				</div>
+				<div class="card-body" id="token-list"></div>
 			</section>
 
 			<section class="card" id="shares">
@@ -1054,21 +1061,22 @@
 		return button;
 	}
 
-	function accessRow(title, meta, buttons) {
+	// Each line is text or a node, shown under the title.
+	function accessRow(title, lines, buttons) {
 		const row = document.createElement('li');
 		row.className = 'row';
 		const main = document.createElement('div');
 		main.className = 'row-main';
-		const titleLine = document.createElement('div');
-		titleLine.className = 'row-title-line';
 		const heading = document.createElement('span');
 		heading.className = 'row-title';
 		heading.textContent = title;
-		titleLine.append(heading);
-		const description = document.createElement('div');
-		description.className = 'row-meta';
-		description.textContent = meta;
-		main.append(titleLine, description);
+		main.append(heading);
+		for (const line of lines) {
+			const description = document.createElement('div');
+			description.className = 'row-meta';
+			description.append(line);
+			main.append(description);
+		}
 		const actions = document.createElement('div');
 		actions.className = 'row-actions';
 		actions.append(...buttons);
@@ -1089,14 +1097,26 @@
 		container.append(list);
 	}
 
+	function pairingLine(code) {
+		const line = document.createElement('span');
+		line.className = 'pairing';
+		const value = document.createElement('code');
+		value.textContent = code;
+		line.append('Pairing code ', value, ' Compare it with the code on the leaf before approving.');
+		return line;
+	}
+
 	function renderAccess(state) {
+		document.getElementById('requests').hidden = !state.requests.length;
 		updateCount('request-count', state.requests.length);
 		updateCount('token-count', state.tokens.length);
 		renderAccessList('request-list', state.requests, (request) => accessRow(
 			request.label,
-			(request.names.length ? request.names.join(', ') + ' · ' : '') +
-				request.address + ' · requested ' + ago(request.requested_at) + ' · ' + request.id +
-				(request.verification ? ' · Pairing code: ' + request.verification + ' · Compare with the leaf before approving' : ''),
+			[
+				...(request.names.length ? [request.names.join(', ')] : []),
+				request.address + ' · requested ' + ago(request.requested_at) + ' · ' + request.id,
+				...(request.verification ? [pairingLine(request.verification)] : []),
+			],
 			[
 				actionButton(request.verification ? 'Approve pairing' : 'Approve', 'primary',
 					() => requestAction('approve', request.id)),
@@ -1104,11 +1124,10 @@
 			],
 		), 'No pending requests', 'A leaf asking for a token or a name appears here.');
 		renderAccessList('token-list', state.tokens, (token) => {
-			let meta = token.names ? (token.names.join(', ') || 'no names') : 'all names';
-			meta += ' · issued ' + ago(token.created_at);
+			let meta = 'issued ' + ago(token.created_at);
 			if (token.last_seen_at) meta += ' · last seen ' + ago(token.last_seen_at);
 			meta += ' · ' + token.id;
-			return accessRow(token.label, meta, [
+			return accessRow(token.label, [token.names ? (token.names.join(', ') || 'no names') : 'all names', meta], [
 				actionButton('Revoke', 'danger', () => revokeToken(token.id)),
 			]);
 		}, 'No issued tokens', 'Approved requests become tokens.');
