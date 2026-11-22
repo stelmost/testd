@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::io::Cursor;
 
-use tray_icon::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use testd_core::Registration;
@@ -192,14 +192,9 @@ fn append_domains(menu: &Menu, state: &State) -> anyhow::Result<()> {
 		menu.append(&MenuItem::with_id("no-domains", "No active domains", false, None))?;
 	}
 	for registration in &state.regs {
-		let submenu = Submenu::with_id(
-			format!("domain:{}", registration.domain),
-			format!("{} → {}", registration.domain, registration.target),
-			true,
-		);
-		submenu.append(&MenuItem::with_id(format!("domain-open:{}", registration.domain), "open", true, None))?;
-		submenu.append(&MenuItem::with_id(format!("domain-stop:{}", registration.domain), "stop", true, None))?;
-		menu.append(&submenu)?;
+		let domain = &registration.domain;
+		menu.append(&MenuItem::with_id(format!("domain-open:{domain}"), domain, true, None))?;
+		menu.append(&MenuItem::with_id(format!("domain-stop:{domain}"), format!("    Stop {domain}"), true, None))?;
 	}
 	menu.append(&MenuItem::with_id("dashboard-open", format!("testd.{} → dashboard", state.tld), true, None))?;
 	menu.append(&PredefinedMenuItem::separator())?;
@@ -214,10 +209,9 @@ fn append_launches(menu: &Menu, launches: &[LaunchRow]) -> anyhow::Result<()> {
 		}
 		menu.append(&MenuItem::with_id(id, title, false, None))?;
 		for launch in entries {
-			let submenu = Submenu::with_id(format!("launch:{}", launch.id), &launch.label, true);
-			let action = if launch.running { "stop" } else { "start" };
-			submenu.append(&MenuItem::with_id(format!("launch-{action}:{}", launch.id), action, true, None))?;
-			menu.append(&submenu)?;
+			menu.append(&MenuItem::with_id(format!("launch:{}", launch.id), &launch.label, false, None))?;
+			let (action, label) = if launch.running { ("stop", "    Stop") } else { ("start", "    Start") };
+			menu.append(&MenuItem::with_id(format!("launch-{action}:{}", launch.id), label, true, None))?;
 		}
 		menu.append(&PredefinedMenuItem::separator())?;
 	}
