@@ -671,6 +671,8 @@ A free release is a version tag, CLI archives, public tray bundles, workspace SB
 - [ ] `python3 tests/run.py ci`
 - [ ] `python3 tests/run.py site`
 - [ ] `python3 scripts/release.py verify-version`
+- [ ] Dispatch the full workflow on a non-tag branch at the frozen candidate SHA and retain the required job results and candidate artifact hashes
+- [ ] Confirm the version tag is unused locally and on the release remote; `v0.1.0-alpha` is an older test tag and must not be moved
 - [ ] Enable GitHub private vulnerability reporting for the public repository
 - [ ] Retain required Debian 13 amd64, macOS 15 arm64, macOS 26 arm64, and Windows 10 22H2 amd64 VM signoffs and browser reports; both Macs must validate the same Mac 15-built ARM artifact; physical-hardware-specific checks are deferred
 - [ ] `scripts/release-sbom.sh` and attach the SBOMs to the release

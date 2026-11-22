@@ -4,7 +4,7 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 
 ## [Unreleased]
 
-## [0.1.0-alpha] - 2026-11-03
+## [0.1.0-alpha.1]
 
 First public alpha. The CLI, daemon, and tray ship as one version; desktop bundles are unsigned for distribution and installed by hand.
 
