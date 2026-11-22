@@ -83,7 +83,9 @@ testd run 10.0.0.5:myapp:3000 -- npm run dev   # custom target host
 
 ## Remote dev environments
 
-Network registration and token issuance use TLS 1.3. Pair each host before sending credentials; application requests then use mutual TLS between the host and a connection-scoped leaf forwarder. The dev server can remain HTTP on the leaf. Do not expose port 7737 to the public internet.
+If you reach your dev machine over SSH, forward the app and open its `.test` URL on the machine running testd. [SSH forwarding](docs/advanced.md#ssh-forwarding)
+
+Paired leaves use TLS 1.3 for registration and token issuance. Pair each host before sending credentials; application requests then use mutual TLS between the host and a connection-scoped leaf forwarder. The dev server can remain HTTP on the leaf. Do not expose port 7737 to the public internet.
 
 The host intake defaults to loopback. For a remote leaf, configure a reachable `[host] listen_addr` and restrict access; see [Advanced usage](docs/advanced.md#remote-development).
 

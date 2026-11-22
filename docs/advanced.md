@@ -5,6 +5,21 @@ description: 'Remote development, profiles, grants, quick launches, tunnels, ext
 
 # Advanced usage
 
+## SSH forwarding
+
+Complete the local [quickstart](quickstart.md) on the machine with your browser. This example forwards an app listening on `127.0.0.1:3000` on `devbox`. Use your usual SSH host in place of `devbox`. Its SSH server must allow local TCP forwarding. The command uses non-interactive SSH authentication.
+
+```sh
+testd run --host 127.0.0.1 app.example:18080 -- \
+  ssh -NT -S none -o ForkAfterAuthentication=no \
+    -o BatchMode=yes -o ExitOnForwardFailure=yes \
+    -L 127.0.0.1:18080:127.0.0.1:3000 devbox
+```
+
+Open `https://app.example.test` once SSH connects. testd serves HTTPS locally and sends app traffic through the SSH forward. If `18080` is in use, choose a free local port and use it in both places.
+
+testd removes the name when the foreground SSH process exits. For an interactive login, run the `ssh` part in a separate terminal without `-o BatchMode=yes`. Once it connects, run `testd run --host 127.0.0.1 app.example:18080` in another terminal. Stop both when you finish.
+
 ## Remote development
 
 The host intake defaults to loopback. To accept remote leaves, set `[host] listen_addr` to a reachable address. A specific non-loopback intake bind also starts a loopback listener on the same port for the dashboard and local launches. A `0.0.0.0:7737` bind includes loopback but exposes the intake on every IPv4 interface; if used, restrict port 7737 with a firewall.
