@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
 	[Parameter(Mandatory = $true)]
-	[ValidateSet('InstallRoot', 'RemoveRoot', 'InstallNrpt', 'RemoveNrpt')]
+	[ValidateSet('InstallRoot', 'RemoveRoot', 'InstallNrpt', 'RemoveNrpt', 'RemoveInstallation')]
 	[string]$Action,
 	[string]$CertPath,
 	[string]$Thumbprint,
@@ -123,6 +123,11 @@ function Read-OwnershipRecord([string]$key) {
 	$record
 }
 
+function Get-OwnershipKeys {
+	Get-ChildItem -LiteralPath (Get-OwnershipDirectory) -Filter '*.json' -Force |
+		ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.Name) }
+}
+
 function Get-RecordBackupPath([string]$key) {
 	$history = Join-Path (Get-OwnershipDirectory) 'history'
 	New-SystemDirectory $history
@@ -229,40 +234,50 @@ function Install-TestdNrpt([string]$tld, [string]$server, [string]$owner) {
 	Write-OwnershipRecord $key $record
 }
 
-function Remove-TestdNrpt([string]$tld, [string]$owner) {
+function Get-NrptRemoval([string]$tld, [string]$owner) {
 	Assert-Tld $tld
 	$tld = $tld.ToLowerInvariant()
 	$namespace = '.' + $tld
 	$key = 'resolver-' + $tld
-	$rules = @(Get-NamespaceRules $namespace)
+	$all = @(Get-DnsClientNrptRule -ErrorAction Stop)
+	$rules = @($all | Where-Object { $_.Namespace -contains $namespace })
 	$record = Read-OwnershipRecord $key
 	if ($null -eq $record) {
 		if ($rules.Count) { Stop-OwnershipConflict 'NRPT rule is unowned; left untouched' }
 		return
 	}
 	Assert-OwnedRecord $record $owner 'nrpt' $namespace
-	$current = @($rules | Where-Object { $_.Name -eq $record.Name })
-	if (-not $current.Count) {
-		if ($rules.Count) { Stop-OwnershipConflict 'a replacement NRPT rule is present; left untouched' }
-		Archive-OwnershipRecord $key
-		return
+	$current = @($all | Where-Object { $_.Name -eq $record.Name })
+	if (-not $current.Count -and $rules.Count) {
+		Stop-OwnershipConflict 'a replacement or incompletely recorded NRPT rule is present; left untouched'
 	}
-	if ($record.State -eq 'prepared' -or $current.Count -ne 1 -or
-		(Get-RuleSnapshot $current[0]) -cne $record.Snapshot) {
+	if ($current.Count -and ($record.State -eq 'prepared' -or $current.Count -ne 1 -or $rules.Count -ne 1 -or
+		(Get-RuleSnapshot $current[0]) -cne $record.Snapshot)) {
 		Stop-OwnershipConflict 'NRPT ownership is incomplete or the rule changed; left untouched'
 	}
+	[pscustomobject]@{ Key = $key; Namespace = $namespace; Record = $record; HasRule = ($current.Count -ne 0) }
+}
+
+function Remove-TestdNrpt([string]$tld, [string]$owner) {
+	$target = Get-NrptRemoval $tld $owner
+	if ($null -eq $target) { return }
+	if (-not $target.HasRule) { Archive-OwnershipRecord $target.Key; return }
+	$record = $target.Record
 	$record.State = 'removing'
-	Write-OwnershipRecord $key $record
+	Write-OwnershipRecord $target.Key $record
 	# Keep recovery records if another administrator changed the rule while intent was being recorded.
-	$current = @(Get-NamespaceRules $namespace | Where-Object { $_.Name -eq $record.Name })
-	if ($current.Count -ne 1 -or (Get-RuleSnapshot $current[0]) -cne $record.Snapshot) {
+	$current = @(Get-NamespaceRules $target.Namespace)
+	if ($current.Count -ne 1 -or $current[0].Name -ne $record.Name -or
+		(Get-RuleSnapshot $current[0]) -cne $record.Snapshot) {
 		Stop-OwnershipConflict 'NRPT rule changed while recording removal; left untouched'
 	}
 	Remove-DnsClientNrptRule -Name $record.Name -Force -Confirm:$false -ErrorAction Stop
-	if (@(Get-NamespaceRules $namespace | Where-Object { $_.Name -eq $record.Name }).Count) {
-		throw 'owned NRPT rule remains; removal is incomplete'
+	if (@(Get-DnsClientNrptRule -ErrorAction Stop | Where-Object {
+		$_.Name -eq $record.Name -or $_.Namespace -contains $target.Namespace
+	}).Count) {
+		throw 'owned or replacement NRPT rule remains; removal is incomplete'
 	}
-	Archive-OwnershipRecord $key
+	Archive-OwnershipRecord $target.Key
 }
 
 function Get-CertificateFingerprint($cert) {
@@ -371,7 +386,7 @@ function Install-TestdRoot([string]$path, [string]$thumbprint, [string]$fingerpr
 	} finally { $cert.Dispose() }
 }
 
-function Remove-TestdRoot([string]$thumbprint, [string]$fingerprint, [string]$owner) {
+function Get-RootRemoval([string]$thumbprint, [string]$fingerprint, [string]$owner) {
 	Assert-RootIdentity $thumbprint $fingerprint
 	$fingerprint = $fingerprint.ToLowerInvariant()
 	$key = 'root-' + $fingerprint.ToLowerInvariant()
@@ -382,14 +397,21 @@ function Remove-TestdRoot([string]$thumbprint, [string]$fingerprint, [string]$ow
 		return
 	}
 	Assert-OwnedRecord $record $owner 'root' $fingerprint
-	if (-not $roots.Count) { Archive-OwnershipRecord $key; return }
-	if ($record.State -eq 'prepared' -or $roots.Count -ne 1 -or
+	if ($roots.Count -and ($record.State -eq 'prepared' -or $roots.Count -ne 1 -or
 		(Get-CertificateFingerprint $roots[0]) -ne $fingerprint -or
-		(Get-RootSnapshot $roots[0]) -cne $record.Snapshot) {
+		(Get-RootSnapshot $roots[0]) -cne $record.Snapshot)) {
 		Stop-OwnershipConflict 'root ownership is incomplete or trust changed; left untouched'
 	}
+	[pscustomobject]@{ Key = $key; Record = $record; HasRoot = ($roots.Count -ne 0) }
+}
+
+function Remove-TestdRoot([string]$thumbprint, [string]$fingerprint, [string]$owner) {
+	$target = Get-RootRemoval $thumbprint $fingerprint $owner
+	if ($null -eq $target) { return }
+	if (-not $target.HasRoot) { Archive-OwnershipRecord $target.Key; return }
+	$record = $target.Record
 	$record.State = 'removing'
-	Write-OwnershipRecord $key $record
+	Write-OwnershipRecord $target.Key $record
 	# Keep recovery records if another administrator changed trust while intent was being recorded.
 	$roots = @(Get-MachineRoots $thumbprint)
 	if ($roots.Count -ne 1 -or (Get-CertificateFingerprint $roots[0]) -ne $fingerprint -or
@@ -398,17 +420,63 @@ function Remove-TestdRoot([string]$thumbprint, [string]$fingerprint, [string]$ow
 	}
 	Remove-MachineRoot $roots[0]
 	if (@(Get-MachineRoots $thumbprint).Count) { throw 'owned root remains; removal is incomplete' }
-	Archive-OwnershipRecord $key
+	Archive-OwnershipRecord $target.Key
 }
 
-if ($Action -like '*Nrpt') {
+function Get-RecordedThumbprint($record, [string]$fingerprint, [string]$owner) {
+	Assert-OwnedRecord $record $owner 'root' $fingerprint
+	$bytes = [Convert]::FromBase64String($record.Certificate)
+	if ([Security.Cryptography.X509Certificates.X509Certificate2]::GetCertContentType($bytes) -ne 'Cert') {
+		Stop-OwnershipConflict 'ownership record does not contain a public certificate; left untouched'
+	}
+	$cert = [Security.Cryptography.X509Certificates.X509Certificate2]::new($bytes)
+	try {
+		if ((Get-CertificateFingerprint $cert) -cne $fingerprint) {
+			Stop-OwnershipConflict 'ownership record certificate identity changed; left untouched'
+		}
+		$cert.Thumbprint
+	} finally { $cert.Dispose() }
+}
+
+function Remove-TestdInstallation([string]$tld, [string]$thumbprint, [string]$fingerprint, [string]$owner) {
+	Assert-Tld $tld
+	Assert-RootIdentity $thumbprint $fingerprint
+	Assert-Owner $owner
+	$tlds = @{ $tld.ToLowerInvariant() = $true }
+	$roots = @{ $fingerprint.ToLowerInvariant() = $thumbprint }
+	foreach ($key in @(Get-OwnershipKeys)) {
+		if ($key -cnotmatch '^(resolver-(test|testdcheck)|root-[a-f0-9]{64})$') {
+			Stop-OwnershipConflict 'unrecognized system ownership record; left untouched'
+		}
+		$record = Read-OwnershipRecord $key
+		Assert-Owner $record.Owner
+		if ($record.Owner -cne $owner) { continue }
+		if ($key.StartsWith('resolver-')) {
+			$tlds[$key.Substring(9)] = $true
+		} else {
+			$recordFingerprint = $key.Substring(5)
+			$recordThumbprint = Get-RecordedThumbprint $record $recordFingerprint $owner
+			if ($roots.ContainsKey($recordFingerprint) -and $roots[$recordFingerprint] -ne $recordThumbprint) {
+				Stop-OwnershipConflict 'local and recorded certificate identities disagree; left untouched'
+			}
+			$roots[$recordFingerprint] = $recordThumbprint
+		}
+	}
+	foreach ($target in $tlds.Keys) { $null = Get-NrptRemoval $target $owner }
+	foreach ($target in $roots.Keys) { $null = Get-RootRemoval $roots[$target] $target $owner }
+	foreach ($target in $tlds.Keys) { Remove-TestdNrpt $target $owner }
+	foreach ($target in $roots.Keys) { Remove-TestdRoot $roots[$target] $target $owner }
+}
+
+if ($Action -like '*Nrpt' -or $Action -eq 'RemoveInstallation') {
 	Assert-Tld $Tld
 	if ($Action -eq 'InstallNrpt') { Assert-NameServer $NameServer }
-} else {
+}
+if ($Action -like '*Root' -or $Action -eq 'RemoveInstallation') {
 	Assert-RootIdentity $Thumbprint $Fingerprint
 	if ($Action -eq 'InstallRoot' -and [string]::IsNullOrWhiteSpace($CertPath)) { throw 'missing certificate path' }
 }
-if ($Action -like 'Install*') { Assert-Owner $Owner }
+if ($Action -like 'Install*' -or $Action -eq 'RemoveInstallation') { Assert-Owner $Owner }
 Assert-Administrator
 $lock = $null
 try {
@@ -418,6 +486,7 @@ try {
 		'RemoveNrpt' { Remove-TestdNrpt $Tld $Owner }
 		'InstallRoot' { Install-TestdRoot $CertPath $Thumbprint $Fingerprint $Owner }
 		'RemoveRoot' { Remove-TestdRoot $Thumbprint $Fingerprint $Owner }
+		'RemoveInstallation' { Remove-TestdInstallation $Tld $Thumbprint $Fingerprint $Owner }
 	}
 } catch {
 	Write-Error -ErrorRecord $_ -ErrorAction Continue

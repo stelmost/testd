@@ -11,7 +11,8 @@ $ast = [Management.Automation.Language.Parser]::ParseFile($Helper, [ref]$tokens,
 if ($errors.Count) { throw ($errors.Message -join '; ') }
 $backends = @('Assert-Administrator', 'Assert-SystemAccess', 'New-SystemDirectory', 'Get-OwnershipDirectory',
 	'New-SystemFile', 'Enter-OwnershipLock', 'Read-OwnershipRecord', 'Get-RecordBackupPath', 'Write-OwnershipRecord',
-	'Archive-OwnershipRecord', 'Get-MachineRoots', 'Add-MachineRoot', 'Remove-MachineRoot', 'Get-RootSnapshot')
+	'Archive-OwnershipRecord', 'Get-OwnershipKeys', 'Get-MachineRoots', 'Add-MachineRoot', 'Remove-MachineRoot',
+	'Get-RootSnapshot')
 foreach ($definition in $ast.FindAll({ $args[0] -is [Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
 	if ($definition.Name -notin $backends) { . ([scriptblock]::Create($definition.Extent.Text)) }
 }
@@ -52,7 +53,10 @@ function Copy-Record($record) {
 	ConvertTo-Json -InputObject $record -Depth 12 -Compress | ConvertFrom-Json
 }
 
-function Read-OwnershipRecord([string]$key) { $script:records[$key] }
+function Read-OwnershipRecord([string]$key) {
+	if ($script:records.ContainsKey($key)) { Copy-Record $script:records[$key] }
+}
+function Get-OwnershipKeys { $script:records.Keys }
 function Write-OwnershipRecord([string]$key, $record) {
 	if ($script:failActivation -and $record.State -eq 'active') { throw 'fixture ownership write failed' }
 	if ($script:records.ContainsKey($key)) { $script:history += Copy-Record $script:records[$key] }
@@ -69,7 +73,8 @@ function Archive-OwnershipRecord([string]$key) {
 function Get-DnsClientNrptRule { [CmdletBinding()]param(); $script:rules }
 function Add-DnsClientNrptRule {
 	[CmdletBinding()]param([string[]]$Namespace, [string[]]$NameServers, [switch]$PassThru)
-	Assert ($script:records['resolver-testdcheck'].State -eq 'prepared') 'missing durable NRPT intent'
+	$key = 'resolver-' + $Namespace[0].Substring(1)
+	Assert ($script:records[$key].State -eq 'prepared') 'missing durable NRPT intent'
 	$script:added++
 	$rule = [pscustomobject]@{
 		Name = [guid]::NewGuid().ToString(); Namespace = $Namespace; NameServers = $NameServers -join ','
@@ -83,7 +88,8 @@ function Remove-DnsClientNrptRule {
 	[CmdletBinding(SupportsShouldProcess = $true)]param([string]$Name, [switch]$Force)
 	Assert ($Force -and $PSBoundParameters.ContainsKey('Confirm') -and -not $PSBoundParameters['Confirm']) `
 		'removal can prompt for confirmation'
-	Assert ($script:records['resolver-testdcheck'].State -eq 'removing') 'missing durable NRPT removal intent'
+	$records = @($script:records.Values | Where-Object { $_.Kind -eq 'nrpt' -and $_.Name -eq $Name })
+	Assert ($records.Count -eq 1 -and $records[0].State -eq 'removing') 'missing durable NRPT removal intent'
 	if ($script:failRemoval) { throw 'fixture removal failed' }
 	$script:rules = @($script:rules | Where-Object { $_.Name -ne $Name })
 	$script:removed++
@@ -98,7 +104,7 @@ function Add-MachineRoot($cert) {
 		$script:roots += [Security.Cryptography.X509Certificates.X509Certificate2]::new($cert.RawData)
 		throw 'fixture new-root collision'
 	}
-	Assert (-not $script:roots.Count) 'must not replace an existing root'
+	Assert (@(Get-MachineRoots $cert.Thumbprint).Count -eq 0) 'must not replace an existing root'
 	$script:roots += [Security.Cryptography.X509Certificates.X509Certificate2]::new($cert.RawData)
 	$script:added++
 }
@@ -165,6 +171,12 @@ Install-TestdNrpt testdcheck 127.0.0.1 $owner
 $script:rules[0].Name = 'replacement'
 Assert-Fails { Remove-TestdNrpt testdcheck $owner } 'replacement'
 Assert ($script:removed -eq 0) 'replacement was deleted'
+
+Reset-Fixture
+Install-TestdNrpt testdcheck 127.0.0.1 $owner
+$script:rules[0].Namespace = @('.example')
+Assert-Fails { Remove-TestdNrpt testdcheck $owner } 'changed'
+Assert ($script:removed -eq 0 -and $script:records.Count -eq 1) 'renamed rule was removed or its record lost'
 
 Reset-Fixture
 Install-TestdNrpt testdcheck 127.0.0.1 $owner
@@ -271,6 +283,33 @@ try {
 	Assert-Fails { Install-TestdRoot $path ('0' * 40) $fingerprint $owner } 'identity mismatch'
 	Assert-Fails { Install-TestdRoot $path $thumbprint ('0' * 64) $owner } 'identity mismatch'
 	Assert ($script:records.Count -eq 0 -and $script:added -eq 0) 'wrong certificate changed state'
+
+	Reset-Fixture
+	Install-TestdNrpt testdcheck 127.0.0.1 $owner
+	Install-TestdNrpt test 127.0.0.1 $otherOwner
+	Install-TestdRoot $path $thumbprint $fingerprint $owner
+	Remove-TestdInstallation testdcheck ('0' * 40) ('0' * 64) $owner
+	Assert ($script:removed -eq 2 -and -not $script:roots.Count) 'uninstall missed an earlier recorded root'
+	Assert ($script:rules.Count -eq 1 -and $script:rules[0].Namespace[0] -eq '.test') 'foreign rule was removed'
+	Assert ($script:records.Count -eq 1 -and $script:records['resolver-test'].Owner -ceq $otherOwner) `
+		'foreign record was modified or an owned record was left live'
+
+	Reset-Fixture
+	Install-TestdNrpt test 127.0.0.1 $owner
+	Install-TestdRoot $path $thumbprint $fingerprint $owner
+	$script:rootTag = 'changed earlier root'
+	Assert-Fails { Remove-TestdInstallation testdcheck ('0' * 40) ('0' * 64) $owner } 'changed'
+	Assert ($script:removed -eq 0 -and $script:records.Count -eq 2) 'uninstall partially removed conflicting state'
+	$script:rootTag = 'original properties'
+	Remove-TestdInstallation testdcheck ('0' * 40) ('0' * 64) $owner
+	Assert ($script:removed -eq 2 -and -not $script:records.Count) 'uninstall missed an earlier recorded route'
+
+	Reset-Fixture
+	Install-TestdNrpt testdcheck 127.0.0.1 $owner
+	$script:roots = @([Security.Cryptography.X509Certificates.X509Certificate2]::new($certificate.RawData))
+	Assert-Fails { Remove-TestdInstallation testdcheck $thumbprint $fingerprint '' } 'ownership ID'
+	Assert-Fails { Remove-TestdInstallation testdcheck $thumbprint $fingerprint $owner } 'unowned'
+	Assert ($script:removed -eq 0 -and $script:records.Count -eq 1) 'unowned trust permitted NRPT removal'
 } finally {
 	$certificate.Dispose()
 	$key.Dispose()
