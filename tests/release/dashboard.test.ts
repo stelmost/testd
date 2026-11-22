@@ -37,12 +37,29 @@ test('quick launches save the selected project directory', () => {
 
 test('SSH apps save the alias and remote port', () => {
 	const saved = submitForm('saveSshApp', {
+		'ssh-mode': 'forward',
 		'ssh-label': 'Web',
 		'ssh-domain': 'app.example',
 		'ssh-host': 'devbox',
 		'ssh-port': '3000',
 	});
 	expect(saved).toEqual({ label: 'Web', entries: [{ domain: 'app.example' }], ssh: { host: 'devbox', port: 3000 } });
+});
+
+test('SSH apps save the remote command as argv and its working directory', () => {
+	const saved = submitForm('saveSshApp', {
+		'ssh-mode': 'command',
+		'ssh-label': 'Web',
+		'ssh-domain': 'app.example',
+		'ssh-host': 'devbox',
+		'ssh-port': '3000',
+		'ssh-command': 'program "two words" "$literal"',
+		'ssh-cwd': '/srv/web app',
+	});
+	expect(saved.ssh).toEqual({
+		host: 'devbox', port: 3000,
+		command: { program: 'program', args: ['two words', '$literal'], cwd: '/srv/web app' },
+	});
 });
 
 test('saved SSH forwards render in SSH apps', () => {

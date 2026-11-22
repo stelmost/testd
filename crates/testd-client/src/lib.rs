@@ -14,6 +14,7 @@ use testd_core::config::ClientConfig;
 use testd_core::protocol::{self, Auth, ErrorDisposition, Request, Response, TokenRequest};
 
 pub mod listeners;
+pub mod ssh;
 pub mod supervisor;
 mod process;
 mod forwarder;

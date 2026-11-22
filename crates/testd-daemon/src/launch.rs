@@ -1,4 +1,4 @@
-//! Quick launches: saved commands with names owned for the command's lifetime.
+//! Saved local commands and SSH apps with names owned for the launch's lifetime.
 //!
 //! This is a local-only feature. The dashboard serves it from the loopback
 //! listener; the authenticated listener never exposes process control.
@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use testd_client::Entry;
+use testd_client::ssh::{self, RemoteCommand};
 use testd_client::supervisor::{self, EntryState, LaunchEvent, LaunchSpec, OutputStream, Readiness};
 use testd_core::config::{config_dir, host_tld, write_private};
 use testd_core::validate::{normalize_bare_domain, validate_domain};
@@ -61,6 +62,8 @@ pub struct LaunchDefinition {
 pub struct SshForward {
 	pub host: String,
 	pub port: NonZeroU16,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub command: Option<RemoteCommand>,
 }
 
 impl SshForward {
@@ -78,7 +81,14 @@ impl SshForward {
 		{
 			return Err("enter an SSH host alias, address, or user@host".into());
 		}
+		if let Some(app) = self.app() {
+			app.validate().map_err(|error| error.to_string())?;
+		}
 		Ok(())
+	}
+
+	fn app(&self) -> Option<ssh::App> {
+		self.command.clone().map(|command| ssh::App { port: self.port, command })
 	}
 
 	fn spec(&self, domain: &str, askpass: &Askpass) -> Result<LaunchSpec, String> {
@@ -87,8 +97,9 @@ impl SshForward {
 		let address = reservation.local_addr().map_err(|error| error.to_string())?;
 		let mut spec = LaunchSpec::new("ssh", vec![Entry::new(domain.to_owned(), address.to_string())]);
 		let forward = format!("{address}:127.0.0.1:{}", self.port);
+		let app = self.app();
 		spec.args = [
-			"-NT",
+			if app.is_some() { "-T" } else { "-NT" },
 			"-Snone",
 			"-oForkAfterAuthentication=no",
 			"-oBatchMode=no",
@@ -98,16 +109,21 @@ impl SshForward {
 			"-oForwardAgent=no",
 			"-oForwardX11=no",
 			"-oServerAliveInterval=15",
-			"-L",
-			&forward,
-			"--",
-			&self.host,
 		]
 		.into_iter()
 		.map(str::to_owned)
 		.collect();
+		if app.is_some() {
+			spec.args.extend(["-oSessionType=default".into(), "-oStdinNull=no".into()]);
+		}
+		spec.args.extend(["-L".into(), forward, "--".into(), self.host.clone()]);
+		if let Some(app) = app {
+			spec.args.extend(["testd".into(), "ssh-session".into()]);
+			spec.readiness = Readiness::ManagedSsh(app);
+		} else {
+			spec.readiness = Readiness::SshHttp;
+		}
 		spec.env = askpass.env.clone();
-		spec.readiness = Readiness::SshHttp;
 		spec.probe_timeout = Duration::from_secs(120);
 		Ok(spec)
 	}
@@ -437,13 +453,14 @@ impl LaunchBook {
 				let _ = stop.send(()).await;
 			}
 		}
-		for (_, done) in running {
-			let mut done = done;
-			if *done.borrow() {
-				continue;
+		let cleanup = async {
+			for (_, mut done) in running {
+				if !*done.borrow() {
+					let _ = done.changed().await;
+				}
 			}
-			let _ = tokio::time::timeout(Duration::from_secs(5), done.changed()).await;
-		}
+		};
+		let _ = tokio::time::timeout(ssh::STOP_TIMEOUT + Duration::from_secs(20), cleanup).await;
 	}
 }
 
@@ -528,7 +545,15 @@ async fn run_launch(
 			Some(()) = stop.recv() => {
 				drop(rebinding.take());
 				state.lock().expect("launch state poisoned").phase = RunPhase::Stopping;
-				let _ = launch.stop().await;
+				let stopping = launch.stop();
+				tokio::pin!(stopping);
+				loop {
+					tokio::select! {
+						biased;
+						_ = &mut stopping => break,
+						Some(event) = events.recv() => record(&state, &event),
+					}
+				}
 				while let Ok(event) = events.try_recv() {
 					record(&state, &event);
 				}

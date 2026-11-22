@@ -5,9 +5,11 @@ description: 'Remote development, profiles, grants, quick launches, tunnels, ext
 
 # Advanced usage
 
-## SSH forwarding
+## SSH apps
 
 Complete the local setup on the machine with your browser. In the dashboard’s **SSH apps**, enter the host alias you use with `ssh` (for example `devbox`), the remote app port, and a local name. Save the app and select **Open**. testd uses your OpenSSH configuration and shows any SSH prompt in the dashboard. It opens the local HTTPS URL once the HTTP app on the remote machine’s loopback responds. Select **Stop** to close the tunnel and release the name. [Quickstart](quickstart.md)
+
+Choose **Start a remote command** to have testd own the app process. Install the current `testd` on the SSH host’s noninteractive PATH and enter the command, its project directory if needed, and the port it listens on at remote `127.0.0.1`. **Open** starts the command and forwards its port on one SSH connection. **Stop** withdraws the local name and waits for the SSH leaf to stop the command and its children. The leaf also stops them if the SSH session closes or stops receiving heartbeats.
 
 You can also use the command line. This example forwards an app listening on `127.0.0.1:3000` on `devbox`. Its SSH server must allow local TCP forwarding. The command uses non-interactive SSH authentication.
 

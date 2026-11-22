@@ -23,6 +23,7 @@ use testd_core::validate;
 
 use crate::listeners;
 use crate::process::ProcessTree;
+use crate::ssh;
 use crate::{Entry, Reader, Writer, connect};
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(3);
@@ -59,11 +60,12 @@ pub enum LaunchEvent {
 	Failed { message: String },
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub enum Readiness {
 	#[default]
 	Tcp,
 	SshHttp,
+	ManagedSsh(ssh::App),
 }
 
 /// What to run and what to name it.
@@ -221,17 +223,29 @@ async fn run_launch(
 		send_state(&events, &entry.domain, &entry.target, EntryState::Configured, None).await;
 	}
 
-	let (mut child, mut process_tree, output_readers) = spawn_child(&spec, &events)?;
+	let deadline = tokio::time::Instant::now() + spec.probe_timeout;
+	let SpawnedChild { mut child, mut process_tree, output_readers, ssh } = spawn_child(&spec, &events, deadline)?;
+	let (mut ssh, readiness) = match ssh {
+		Some((ssh, readiness)) => (Some(ssh), Some(readiness)),
+		None => (None, None),
+	};
+	let is_managed = ssh.is_some();
 	let pid = child.id().unwrap_or_default();
 	let _ = events.send(LaunchEvent::Started { pid }).await;
 
 	// Probe and register in the background so stop remains responsive.
 	let (startup_tx, mut startup_rx) = mpsc::channel(1);
 	let startup = {
-		let spec = spec.clone();
+		let mut spec = spec.clone();
 		let session = session.clone();
 		let events = events.clone();
 		tokio::spawn(async move {
+			if let Some(readiness) = readiness {
+				if readiness.await.is_err() {
+					return;
+				}
+				spec.probe_timeout = deadline.saturating_duration_since(tokio::time::Instant::now());
+			}
 			let confirmed = confirm_all(&spec, pid, &session, &events).await;
 			let _ = startup_tx.send(confirmed).await;
 		})
@@ -245,10 +259,16 @@ async fn run_launch(
 	let mut interrupted_notice = None;
 	let mut stop_responder: Option<oneshot::Sender<()>> = None;
 	let exit_code;
+	let mut remote_end = None;
 
 	'running: loop {
 		tokio::select! {
-			status = child.wait() => {
+			result = async { ssh.as_mut().expect("managed SSH session").finished().await }, if is_managed => {
+				remote_end = Some(result);
+				exit_code = None;
+				break;
+			},
+			status = child.wait(), if !is_managed => {
 				exit_code = status.ok().and_then(|s| s.code());
 				break;
 			},
@@ -261,13 +281,11 @@ async fn run_launch(
 						map.retain(|name, _| !revoked.contains(name));
 						confirmed = map;
 						if confirmed.is_empty() {
-							process_tree.stop(&mut child).await?;
 							exit_code = None;
 							break;
 						}
 					},
 					None => {
-						process_tree.stop(&mut child).await?;
 						exit_code = None;
 						break;
 					},
@@ -285,7 +303,6 @@ async fn run_launch(
 					let line = format!("testd: {domain} was stopped by the host operator (grants kept)");
 					let _ = events.send(LaunchEvent::Output { stream: OutputStream::Stderr, line }).await;
 					startup_abort.abort();
-					process_tree.stop(&mut child).await?;
 					exit_code = None;
 					break;
 				},
@@ -308,7 +325,6 @@ async fn run_launch(
 					if started && confirmed.is_empty() {
 						// Nothing is left to publish for this run.
 						startup_abort.abort();
-						process_tree.stop(&mut child).await?;
 						exit_code = None;
 						break;
 					}
@@ -316,7 +332,6 @@ async fn run_launch(
 				Some(SessionNotice::Closed(reason)) => {
 					let _ = events.send(LaunchEvent::Failed { message: reason }).await;
 					startup_abort.abort();
-					process_tree.stop(&mut child).await?;
 					exit_code = None;
 					break;
 				},
@@ -325,14 +340,12 @@ async fn run_launch(
 			command = commands.recv() => match command {
 				None => {
 					startup_abort.abort();
-					process_tree.stop(&mut child).await?;
 					exit_code = None;
 					break;
 				},
 				Some(Command::Stop { respond }) => {
 					startup_abort.abort();
 					stop_responder = Some(respond);
-					process_tree.stop(&mut child).await?;
 					exit_code = None;
 					break;
 				},
@@ -357,7 +370,6 @@ async fn run_launch(
 								let _ = respond.send(Err("launch stopped during rebind".into()));
 								if let Some(Command::Stop { respond }) = command { stop_responder = Some(respond); }
 								startup_abort.abort();
-								process_tree.stop(&mut child).await?;
 								exit_code = None;
 								break 'running;
 							},
@@ -377,8 +389,24 @@ async fn run_launch(
 	}
 
 	startup_abort.abort();
+	let outcome = if let Some(ssh) = ssh {
+		session.stop().await;
+		let result = match remote_end {
+			Some(result) => result,
+			None => ssh.stop().await,
+		};
+		match result {
+			Ok(ssh::End::Exited(code)) => LaunchEvent::Exited { code },
+			Ok(ssh::End::Stopped) => LaunchEvent::Exited { code: None },
+			Err(error) => LaunchEvent::Failed { message: format!("{error:#}") },
+		}
+	} else {
+		LaunchEvent::Exited { code: exit_code }
+	};
 	process_tree.stop(&mut child).await?;
-	session.stop().await;
+	if !is_managed {
+		session.stop().await;
+	}
 	for mut reader in output_readers {
 		match tokio::time::timeout(Duration::from_secs(2), &mut reader).await {
 			Ok(result) => result.context("launch output reader failed")?,
@@ -396,7 +424,7 @@ async fn run_launch(
 	for entry in &spec.entries {
 		send_state(&events, &entry.domain, &entry.target, EntryState::Configured, None).await;
 	}
-	let _ = events.send(LaunchEvent::Exited { code: exit_code }).await;
+	let _ = events.send(outcome).await;
 	if let Some(respond) = stop_responder {
 		let _ = respond.send(());
 	}
@@ -430,9 +458,11 @@ async fn confirm_all(
 			entry.target.clone()
 		};
 
-		let ready = match spec.readiness {
+		let ready = match &spec.readiness {
 			Readiness::Tcp => wait_for_target(&target, spec.probe_timeout).await,
-			Readiness::SshHttp => wait_for_ssh_http(pid, &target, &entry.domain, spec.probe_timeout).await,
+			Readiness::SshHttp | Readiness::ManagedSsh(_) => {
+				wait_for_ssh_http(pid, &target, &entry.domain, spec.probe_timeout).await
+			},
 		};
 		if let Err(e) = ready {
 			send_state(events, &entry.domain, &target, EntryState::Configured, Some(e)).await;
@@ -585,14 +615,26 @@ async fn send_state(
 		.await;
 }
 
+struct SpawnedChild {
+	child: Child,
+	process_tree: ProcessTree,
+	output_readers: Vec<tokio::task::JoinHandle<()>>,
+	ssh: Option<(ssh::Session, oneshot::Receiver<()>)>,
+}
+
 fn spawn_child(
 	spec: &LaunchSpec,
 	events: &mpsc::Sender<LaunchEvent>,
-) -> Result<(Child, ProcessTree, Vec<tokio::task::JoinHandle<()>>)> {
+	deadline: tokio::time::Instant,
+) -> Result<SpawnedChild> {
 	let mut command = ProcessCommand::new(&spec.program);
+	let stdin = match &spec.readiness {
+		Readiness::ManagedSsh(_) => Stdio::piped(),
+		_ => Stdio::null(),
+	};
 	command
 		.args(&spec.args)
-		.stdin(Stdio::null())
+		.stdin(stdin)
 		.stdout(Stdio::piped())
 		.stderr(Stdio::piped());
 	if let Some(cwd) = &spec.cwd {
@@ -613,6 +655,10 @@ fn spawn_child(
 	}
 	let (mut child, process_tree) =
 		ProcessTree::spawn(&mut command).with_context(|| format!("failed to spawn {}", spec.program.display()))?;
+	let ssh = match &spec.readiness {
+		Readiness::ManagedSsh(app) => Some(ssh::Session::start(&mut child, app.clone(), deadline)),
+		_ => None,
+	};
 	let mut output_readers = Vec::new();
 	if let Some(stdout) = child.stdout.take() {
 		output_readers.push(spawn_output_reader(stdout, OutputStream::Stdout, events.clone()));
@@ -620,7 +666,7 @@ fn spawn_child(
 	if let Some(stderr) = child.stderr.take() {
 		output_readers.push(spawn_output_reader(stderr, OutputStream::Stderr, events.clone()));
 	}
-	Ok((child, process_tree, output_readers))
+	Ok(SpawnedChild { child, process_tree, output_readers, ssh })
 }
 
 fn spawn_output_reader<R>(
@@ -1118,8 +1164,9 @@ mod tests {
 	async fn sleep_fixture_stays_alive_with_redirected_stdin() {
 		let spec = spec_with_args("127.0.0.1:1");
 		let (events, _receiver) = mpsc::channel(16);
-		let (mut child, mut process_tree, _output_readers) =
-			spawn_child(&spec, &events).expect("failed to spawn sleep fixture");
+		let deadline = tokio::time::Instant::now() + spec.probe_timeout;
+		let SpawnedChild { mut child, mut process_tree, .. } =
+			spawn_child(&spec, &events, deadline).expect("failed to spawn sleep fixture");
 
 		// Stay alive through a full connection attempt, including slow refusal on Windows.
 		tokio::time::sleep(Duration::from_secs(2)).await;

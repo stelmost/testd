@@ -61,4 +61,4 @@ testd-core = { workspace = true }
 testd-daemon = { workspace = true }
 testd-setup = { workspace = true }
 testd-pki = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["io-std"] }

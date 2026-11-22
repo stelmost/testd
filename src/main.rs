@@ -70,6 +70,8 @@ enum Command {
 		/// Host address, optionally including its registration port.
 		host: String,
 	},
+	#[command(hide = true)]
+	SshSession,
 	/// Run the host daemon in headless mode.
 	Host,
 	/// Print the authenticated URL for the local dashboard.
@@ -205,6 +207,18 @@ async fn main() -> anyhow::Result<()> {
 			}
 		},
 		Command::Pair { host } => pair(host).await,
+		Command::SshSession => {
+			let result = testd_client::ssh::serve(tokio::io::stdin(), tokio::io::stdout()).await;
+			let code = match result {
+				Ok(()) => 0,
+				Err(error) => {
+					eprintln!("testd: {error:#}");
+					1
+				},
+			};
+			/* The blocking stdio reader can still be waiting for the SSH channel to close. */
+			std::process::exit(code);
+		},
 		Command::Host => host::run().await,
 		Command::Dashboard => dashboard(),
 		Command::Url { url } => url_action(&url),
