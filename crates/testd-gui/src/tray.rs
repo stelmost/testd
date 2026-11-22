@@ -121,9 +121,14 @@ impl Tray {
 				item.set_checked(enabled);
 			}
 		}
-		if next.icon() != self.state.icon() {
-			self.icon
-				.set_icon_with_as_template(Some(tray_icon(next.icon())?), next.icon().as_template())?;
+		let next_icon = next.icon();
+		if next_icon != self.state.icon() {
+			let icon = Some(tray_icon(next_icon)?);
+			/* The template setter only updates the icon on macOS. */
+			#[cfg(target_os = "macos")]
+			self.icon.set_icon_with_as_template(icon, next_icon.as_template())?;
+			#[cfg(not(target_os = "macos"))]
+			self.icon.set_icon(icon)?;
 		}
 		self.state = next;
 		Ok(())
