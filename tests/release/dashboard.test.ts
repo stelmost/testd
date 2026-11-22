@@ -123,6 +123,39 @@ test('one click opens an SSH app when its registered HTTPS URL is ready', async 
 	expect(visited).toEqual(['https://app.example.test:8443']);
 });
 
+test('SSH host-key confirmation exposes trust and cancel actions', () => {
+	const source = inlineFunction(dashboard, 'sshPromptForm', 'parseCommand');
+	const document = {
+		createElement(tag: string) {
+			return {
+				tag, textContent: '', dataset: {}, children: [] as any[],
+				events: new Map<string, (event?: any) => void>(),
+				append(...children: any[]) { this.children.push(...children); },
+				addEventListener(event: string, callback: (event?: any) => void) { this.events.set(event, callback); },
+			};
+		},
+	};
+	const sent: unknown[] = [];
+	const render = new Function('document', 'post', 'refreshState', 'notice', source + '\nreturn sshPromptForm;')(
+		document, async (_path: string, body: unknown) => sent.push(body), () => {}, () => {},
+	);
+	const launch = { id: 'devbox' };
+	const prompt = { id: 'host-key', kind: 'confirm', message: 'ED25519 key fingerprint is SHA256:fixture.' };
+	const confirmation = render(launch, prompt);
+	expect(confirmation.children.map((child: { tag: string }) => child.tag)).toEqual(['p', 'div']);
+	expect(confirmation.children[0].textContent).toBe(prompt.message);
+	const [trust, cancel] = confirmation.children[1].children;
+	expect([trust.textContent, cancel.textContent]).toEqual(['Trust and connect', 'Cancel']);
+	confirmation.events.get('submit')({ preventDefault() {} });
+	render(launch, prompt).children[1].children[1].events.get('click')();
+	expect(sent).toEqual([
+		{ id: 'devbox', prompt: 'host-key', answer: 'yes' },
+		{ id: 'devbox', prompt: 'host-key', answer: null },
+	]);
+	const password = render(launch, { id: 'password', kind: 'response', message: 'SSH password:' });
+	expect(password.children[1].type).toBe('password');
+});
+
 test('quick launches display captured output as text', () => {
 	const elements: any[] = [];
 	const document = {

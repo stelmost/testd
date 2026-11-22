@@ -796,23 +796,28 @@
 		const form = document.createElement('form');
 		form.className = 'field ssh-prompt';
 		form.dataset.prompt = prompt.id;
-		const message = document.createElement('label');
+		const confirmsHost = prompt.kind === 'confirm';
+		const requestsInput = prompt.kind === 'response';
+		const message = document.createElement(requestsInput ? 'label' : 'p');
 		message.textContent = prompt.message;
-		const input = document.createElement('input');
-		input.className = 'input';
-		input.type = 'password';
-		input.autocomplete = 'off';
-		input.maxLength = 4096;
-		input.id = 'ssh-answer-' + prompt.id;
-		message.htmlFor = input.id;
 		form.append(message);
-		if (prompt.kind === 'response') form.append(input);
+		let input;
+		if (requestsInput) {
+			input = document.createElement('input');
+			input.className = 'input';
+			input.type = 'password';
+			input.autocomplete = 'off';
+			input.maxLength = 4096;
+			input.id = 'ssh-answer-' + prompt.id;
+			message.htmlFor = input.id;
+			form.append(input);
+		}
 		const actions = document.createElement('div');
 		actions.className = 'row-actions';
 		const send = document.createElement('button');
 		send.className = 'btn btn-sm btn-primary';
 		send.type = 'submit';
-		send.textContent = prompt.kind === 'confirm' ? 'Trust host' : 'Continue';
+		send.textContent = confirmsHost ? 'Trust and connect' : 'Continue';
 		const cancel = document.createElement('button');
 		cancel.className = 'btn btn-sm';
 		cancel.type = 'button';
@@ -820,7 +825,7 @@
 		const answer = async (value) => {
 			send.disabled = true;
 			cancel.disabled = true;
-			input.value = '';
+			if (input) input.value = '';
 			try {
 				await post('/api/local/launches/ssh/answer', { id: launch.id, prompt: prompt.id, answer: value });
 				await refreshState();
@@ -832,7 +837,7 @@
 		};
 		form.addEventListener('submit', (event) => {
 			event.preventDefault();
-			answer(prompt.kind === 'confirm' ? 'yes' : prompt.kind === 'notice' ? '' : input.value);
+			answer(input?.value ?? (confirmsHost ? 'yes' : ''));
 		});
 		cancel.addEventListener('click', () => answer(null));
 		actions.append(send, cancel);

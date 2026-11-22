@@ -430,7 +430,7 @@
 	.field[hidden] { display: none; }
 	.field-wide { grid-column: 1 / -1; }
 	.ssh-prompt { display: grid; gap: 8px; margin-top: 16px; }
-	.ssh-prompt label { white-space: pre-wrap; overflow-wrap: anywhere; }
+	.ssh-prompt label, .ssh-prompt p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 	.field label, .field legend { color: var(--text-secondary); font-size: 12px; font-weight: 550; }
 	.radio-group { margin: 0; padding: 0; border: 0; }
 	.radio-group legend { padding: 0; margin-bottom: 5px; }

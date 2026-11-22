@@ -17,6 +17,8 @@ use crate::task::BackgroundTask;
 const ENV: &str = "TESTD_SSH_ASKPASS";
 const ANSWER_LIMIT: usize = 4096;
 const PROMPT_TIMEOUT: Duration = Duration::from_secs(110);
+const HOST_KEY_RETRY: &str = "Please type 'yes', 'no' or the fingerprint:";
+const YES_NO_RETRY: &str = "Please type 'yes' or 'no':";
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -48,7 +50,46 @@ struct Pending {
 #[derive(Default)]
 struct State {
 	pending: Option<Pending>,
+	host_key_details: Option<String>,
 	cancelled: bool,
+}
+
+impl State {
+	fn prompt(&mut self, id: String, request: Request) -> Prompt {
+		let Request { mut message, mut kind, .. } = request;
+		if matches!(kind, Kind::Response) {
+			/* OpenSSH can ask for host-key confirmation without an askpass hint. */
+			let text = message.trim();
+			if let Some(details) = host_key_details(text) {
+				self.host_key_details = Some(details.to_owned());
+			} else if text != HOST_KEY_RETRY && (text != YES_NO_RETRY || self.host_key_details.is_none()) {
+				self.host_key_details = None;
+				return Prompt { id, message, kind };
+			}
+			message = self
+				.host_key_details
+				.clone()
+				.unwrap_or_else(|| "Confirm the SSH host key to connect.".into());
+			kind = Kind::Confirm;
+		} else {
+			self.host_key_details = None;
+		}
+		Prompt { id, message, kind }
+	}
+}
+
+fn host_key_details(message: &str) -> Option<&str> {
+	let (details, question) = message.rsplit_once('\n')?;
+	if !matches!(
+		question,
+		"Are you sure you want to continue connecting (yes/no/[fingerprint])?"
+			| "Are you sure you want to continue connecting (yes/no)?"
+	) || !details.starts_with("The authenticity of host '")
+		|| !details.lines().any(|line| line.contains(" key fingerprint is "))
+	{
+		return None;
+	}
+	Some(details.trim_end())
 }
 
 pub(crate) struct Prompts {
@@ -151,10 +192,11 @@ async fn respond(prompts: &Prompts, token: &str, stream: &mut tokio::net::TcpStr
 	}
 
 	let (reply, received) = oneshot::channel();
-	let view = Prompt { id: generate_operator_secret()?, message: request.message, kind: request.kind };
+	let id = generate_operator_secret()?;
 	let accepts_prompt = {
 		let mut state = prompts.state.lock().expect("SSH prompts poisoned");
 		if !state.cancelled {
+			let view = state.prompt(id, request);
 			state.pending = Some(Pending { view, reply });
 		}
 		!state.cancelled
@@ -219,7 +261,6 @@ fn ask(capability: &str) -> anyhow::Result<Option<String>> {
 		.map_err(|_| anyhow::anyhow!("expected one SSH prompt"))?;
 	let kind = match std::env::var("SSH_ASKPASS_PROMPT").as_deref() {
 		Ok("none") => Kind::Notice,
-		Ok("confirm") if message.to_string_lossy().contains("(yes/no/[fingerprint])") => Kind::Confirm,
 		_ => Kind::Response,
 	};
 	let request = Request { token: token.to_owned(), message: message.to_string_lossy().into_owned(), kind };
@@ -240,6 +281,41 @@ fn ask(capability: &str) -> anyhow::Result<Option<String>> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn host_key_questions_and_retries_keep_the_fingerprint() {
+		let details = "The authenticity of host 'devbox (192.0.2.1)' can't be established.\r\n\
+			ED25519 key fingerprint is SHA256:fixture.";
+		let mut state = State::default();
+		let mut prompt =
+			|message| state.prompt("fixture".into(), Request { token: String::new(), message, kind: Kind::Response });
+		for (question, retry) in [
+			("Are you sure you want to continue connecting (yes/no/[fingerprint])?", HOST_KEY_RETRY),
+			("Are you sure you want to continue connecting (yes/no)?", YES_NO_RETRY),
+		] {
+			let initial = prompt(format!("{details}\r\n{question} "));
+			assert!(matches!(initial.kind, Kind::Confirm));
+			assert_eq!(initial.message, details);
+
+			let retry = prompt(format!("{retry} "));
+			assert!(matches!(retry.kind, Kind::Confirm));
+			assert_eq!(retry.message, details);
+		}
+
+		let password = prompt("devbox's password: ".into());
+		assert!(matches!(password.kind, Kind::Response));
+		assert_eq!(password.message, "devbox's password: ");
+	}
+
+	#[test]
+	fn a_fingerprint_retry_is_a_confirmation_even_without_earlier_details() {
+		let prompt = State::default().prompt(
+			"fixture".into(),
+			Request { token: String::new(), message: HOST_KEY_RETRY.into(), kind: Kind::Response },
+		);
+		assert!(matches!(prompt.kind, Kind::Confirm));
+		assert!(!prompt.message.contains("Please type"));
+	}
 
 	#[tokio::test]
 	async fn prompts_are_scoped_to_the_launch_and_cancelled_prompts_do_not_retry() {
