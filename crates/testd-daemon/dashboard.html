@@ -105,20 +105,12 @@
 							<h2>Quick launches</h2>
 							<span class="count" id="launch-count">0</span>
 						</div>
-						<p class="card-desc">Open a local command or an app on an SSH host at a local HTTPS name.</p>
+						<p class="card-desc">Run a local command at an HTTPS name.</p>
 					</div>
 				</div>
 				<div class="card-body">
 					<div id="launch-list"></div>
-					<div id="ssh-prompts"></div>
 					<form class="form-grid" onsubmit="saveLaunch(event)" autocomplete="off">
-						<div class="field field-wide">
-							<label for="launch-type">Connection</label>
-							<select class="input" id="launch-type" onchange="setLaunchFields()">
-								<option value="local">Local command</option>
-								<option value="ssh">SSH tunnel</option>
-							</select>
-						</div>
 						<div class="field">
 							<label for="launch-label">Launch name</label>
 							<input class="input" id="launch-label" placeholder="Web app" required>
@@ -127,16 +119,6 @@
 							<label for="launch-domain">Domain</label>
 							<input class="input" id="launch-domain" placeholder="app.example" required
 								spellcheck="false">
-						</div>
-						<div class="field" id="launch-ssh-host-field" hidden>
-							<label for="launch-ssh-host">SSH host</label>
-							<input class="input" id="launch-ssh-host" placeholder="devbox or user@devbox"
-								spellcheck="false" disabled>
-						</div>
-						<div class="field" id="launch-ssh-port-field" hidden>
-							<label for="launch-ssh-port">Remote app port</label>
-							<input class="input" id="launch-ssh-port" type="number" min="1" max="65535"
-								placeholder="3000" disabled>
 						</div>
 						<div class="field" id="launch-target-field">
 							<label for="launch-target">Target (optional)</label>
@@ -155,6 +137,40 @@
 						</div>
 						<div class="form-actions">
 							<button class="btn btn-primary btn-sm" type="submit">Save launch</button>
+						</div>
+					</form>
+				</div>
+			</section>
+
+			<section class="card" id="ssh-apps">
+				<div class="card-head">
+					<div class="card-title-row">
+						<h2>SSH apps</h2>
+						<span class="count" id="ssh-app-count">0</span>
+					</div>
+				</div>
+				<div class="card-body">
+					<div id="ssh-app-list"></div>
+					<div id="ssh-prompts"></div>
+					<form class="form-grid" onsubmit="saveSshApp(event)" autocomplete="off">
+						<div class="field">
+							<label for="ssh-label">App name</label>
+							<input class="input" id="ssh-label" placeholder="Web app" required>
+						</div>
+						<div class="field">
+							<label for="ssh-domain">Local domain</label>
+							<input class="input" id="ssh-domain" placeholder="app.example" spellcheck="false" required>
+						</div>
+						<div class="field">
+							<label for="ssh-host">SSH host</label>
+							<input class="input" id="ssh-host" placeholder="devbox or user@devbox" spellcheck="false" required>
+						</div>
+						<div class="field">
+							<label for="ssh-port">Remote app port</label>
+							<input class="input" id="ssh-port" type="number" min="1" max="65535" placeholder="3000" required>
+						</div>
+						<div class="form-actions">
+							<button class="btn btn-primary btn-sm" type="submit">Save SSH app</button>
 						</div>
 					</form>
 				</div>
@@ -673,12 +689,18 @@
 	}
 
 	function renderLaunches(launches) {
-		const container = document.getElementById('launch-list');
+		renderLaunchRows('launch', launches.filter((launch) => !launch.ssh),
+			'No quick launches', 'Save a command to run on this machine.');
+		renderLaunchRows('ssh-app', launches.filter((launch) => launch.ssh),
+			'No SSH apps', 'Save an app to open over SSH.');
+	}
+
+	function renderLaunchRows(id, launches, title, description) {
+		const container = document.getElementById(id + '-list');
 		container.replaceChildren();
-		updateCount('launch-count', launches.length);
+		updateCount(id + '-count', launches.length);
 		if (!launches.length) {
-			container.append(emptyState('No quick launches',
-				'Save a local command or SSH tunnel to open it here.'));
+			container.append(emptyState(title, description));
 			return;
 		}
 		const rows = document.createElement('ul');
@@ -794,16 +816,6 @@
 		return form;
 	}
 
-	function setLaunchFields() {
-		const isSsh = document.getElementById('launch-type').value === 'ssh';
-		for (const [field, ssh] of [['target', false], ['cwd', false], ['command', false], ['ssh-host', true], ['ssh-port', true]]) {
-			const input = document.getElementById('launch-' + field);
-			input.disabled = isSsh !== ssh;
-			input.required = !input.disabled && field !== 'target';
-			document.getElementById('launch-' + field + '-field').hidden = input.disabled;
-		}
-	}
-
 	// Split a command line into argv, honoring single and double quotes.
 	function parseCommand(text) {
 		const parts = [];
@@ -856,37 +868,33 @@
 
 	function saveLaunch(event) {
 		event.preventDefault();
-		const value = (field) => (document.getElementById('launch-' + field).value || '').trim();
-		const domain = value('domain');
-		const form = event.target;
-		const body = { label: value('label'), entries: [{ domain }] };
-		if (value('type') === 'ssh') {
-			body.ssh = { host: value('ssh-host'), port: Number(value('ssh-port')) };
-		} else {
-			let argv;
-			try {
-				argv = parseCommand(value('command'));
-			} catch (error) {
-				notice(error.message);
-				return;
-			}
-			if (!argv.length) {
-				notice('Enter a command to run.');
-				return;
-			}
-			body.program = argv[0];
-			body.args = argv.slice(1);
-			body.cwd = value('cwd');
-			body.entries[0].target = value('target');
+		const value = (field) => document.getElementById('launch-' + field).value.trim();
+		try {
+			const [program, ...args] = parseCommand(value('command'));
+			if (!program) throw new Error('Enter a command to run.');
+			const entries = [{ domain: value('domain'), target: value('target') }];
+			submitLaunch(event.target, { label: value('label'), program, args, cwd: value('cwd'), entries }, 'Launch saved.');
+		} catch (error) {
+			notice(error.message);
 		}
+	}
+
+	function saveSshApp(event) {
+		event.preventDefault();
+		const value = (field) => document.getElementById('ssh-' + field).value.trim();
+		const ssh = { host: value('host'), port: Number(value('port')) };
+		const entries = [{ domain: value('domain') }];
+		submitLaunch(event.target, { label: value('label'), ssh, entries }, 'SSH app saved.');
+	}
+
+	function submitLaunch(form, body, message) {
 		post('/api/local/launches/save', body)
 			.then(() => {
 				form.reset();
-				if (body.ssh) setLaunchFields();
-				notice('Launch saved.', false);
+				notice(message, false);
 				return refreshState();
 			})
-			.catch((e) => notice(e.message));
+			.catch((error) => notice(error.message));
 	}
 
 	function ago(seconds) {

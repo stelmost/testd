@@ -86,7 +86,8 @@ The dashboard shows:
 - Active shares, with a stop button
 - Access requests, with approve and deny
 - Issued tokens, with a revoke button
-- Quick launches, with start, stop, and logs
+- Quick launches for local commands, with start, stop, and logs
+- SSH apps, with open, stop, and SSH prompts
 - Certificate trust state, fingerprint, and expiry, with install and remove actions
 
 The loopback listener checks the Host header, and the edge forwards the dashboard name only for clients on this machine. A foreign Host or a non-loopback dashboard peer is refused even when it supplies a credential.

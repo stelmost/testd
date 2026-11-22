@@ -65,6 +65,7 @@ pub struct LaunchRow {
 	id: String,
 	label: String,
 	running: bool,
+	is_ssh: bool,
 }
 
 /* Native callbacks are Send + Sync; only the clicked value crosses that boundary, never the main-thread widget. */
@@ -206,17 +207,20 @@ fn append_domains(menu: &Menu, state: &State) -> anyhow::Result<()> {
 }
 
 fn append_launches(menu: &Menu, launches: &[LaunchRow]) -> anyhow::Result<()> {
-	if launches.is_empty() {
-		return Ok(());
+	for (is_ssh, id, title) in [(false, "quick-launches", "Quick launches"), (true, "ssh-apps", "SSH apps")] {
+		let mut entries = launches.iter().filter(|launch| launch.is_ssh == is_ssh).peekable();
+		if entries.peek().is_none() {
+			continue;
+		}
+		menu.append(&MenuItem::with_id(id, title, false, None))?;
+		for launch in entries {
+			let submenu = Submenu::with_id(format!("launch:{}", launch.id), &launch.label, true);
+			let action = if launch.running { "stop" } else { "start" };
+			submenu.append(&MenuItem::with_id(format!("launch-{action}:{}", launch.id), action, true, None))?;
+			menu.append(&submenu)?;
+		}
+		menu.append(&PredefinedMenuItem::separator())?;
 	}
-	menu.append(&MenuItem::with_id("quick-launches", "Quick launches", false, None))?;
-	for launch in launches {
-		let submenu = Submenu::with_id(format!("launch:{}", launch.id), &launch.label, true);
-		let action = if launch.running { "stop" } else { "start" };
-		submenu.append(&MenuItem::with_id(format!("launch-{action}:{}", launch.id), action, true, None))?;
-		menu.append(&submenu)?;
-	}
-	menu.append(&PredefinedMenuItem::separator())?;
 	Ok(())
 }
 
@@ -245,11 +249,19 @@ fn append_shares(menu: &Menu, shares: &[ShareView]) -> anyhow::Result<()> {
 pub fn summarize_launches(views: &[LaunchView]) -> Vec<LaunchRow> {
 	views
 		.iter()
-		.map(|view| LaunchRow { id: view.definition.id.clone(), label: launch_label(view), running: view.running })
+		.map(|view| LaunchRow {
+			id: view.definition.id.clone(),
+			label: launch_label(view),
+			running: view.running,
+			is_ssh: view.definition.ssh.is_some(),
+		})
 		.collect()
 }
 
 fn launch_label(view: &LaunchView) -> String {
+	if let Some(ssh) = &view.definition.ssh {
+		return format!("{} ({} port {})", view.definition.label, ssh.host, ssh.port);
+	}
 	let mut ports = Vec::new();
 	for entry in &view.definition.entries {
 		let target = view

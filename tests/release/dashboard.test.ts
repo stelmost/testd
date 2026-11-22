@@ -9,7 +9,18 @@ const commandSource = dashboard.slice(dashboard.indexOf('function parseCommand('
 // Exercise the shipped inline parser, not a copy of its implementation.
 const parseCommand = new Function(`return (${commandSource});`)() as (text: string) => string[];
 
-test('quick launches save the selected project directory', async () => {
+function submitForm(name: string, values: Record<string, string>) {
+	let saved: any;
+	const save = new Function('document', 'parseCommand', 'post', 'notice', 'refreshState',
+		inlineFunction(dashboard, 'saveLaunch', 'ago') + '\nreturn ' + name + ';')(
+		{ getElementById: (id: string) => ({ value: values[id] }) }, parseCommand,
+		async (_path: string, body: unknown) => { saved = body; }, () => {}, () => {},
+	);
+	save({ preventDefault() {}, target: { reset() {} } });
+	return saved;
+}
+
+test('quick launches save the selected project directory', () => {
 	const values: Record<string, string> = {
 		'launch-command': 'npm run dev',
 		'launch-label': 'App',
@@ -17,37 +28,34 @@ test('quick launches save the selected project directory', async () => {
 		'launch-target': '',
 		'launch-cwd': '/home/me/project',
 	};
-	let saved: any;
-	const saveLaunch = new Function('document', 'parseCommand', 'post', 'notice', 'refreshState',
-		`return (${inlineFunction(dashboard, 'saveLaunch', 'ago')});`)(
-		{ getElementById: (id: string) => ({ value: values[id] }) }, parseCommand,
-		async (_path: string, body: unknown) => { saved = body; }, () => {}, () => {},
-	);
-	saveLaunch({ preventDefault() {}, target: { reset() {} } });
-	await Promise.resolve();
+	const saved = submitForm('saveLaunch', values);
 	expect(saved.cwd).toBe('/home/me/project');
 	expect(saved.program).toBe('npm');
 	expect(saved.args).toEqual(['run', 'dev']);
 	expect(dashboard).toContain('id="launch-cwd"');
 });
 
-test('an SSH quick launch saves the alias and remote port without a local command', async () => {
-	const values: Record<string, string> = {
-		'launch-type': 'ssh',
-		'launch-label': 'Web',
-		'launch-domain': 'app.example',
-		'launch-ssh-host': 'devbox',
-		'launch-ssh-port': '3000',
-	};
-	let saved;
-	const saveLaunch = new Function('document', 'post', 'notice', 'refreshState', 'setLaunchFields',
-		'return (' + inlineFunction(dashboard, 'saveLaunch', 'ago') + ');')(
-		{ getElementById: (id: string) => ({ value: values[id] }) },
-		async (_path: string, body: unknown) => { saved = body; }, () => {}, () => {}, () => {},
-	);
-	saveLaunch({ preventDefault() {}, target: { reset() {} } });
-	await Promise.resolve();
+test('SSH apps save the alias and remote port', () => {
+	const saved = submitForm('saveSshApp', {
+		'ssh-label': 'Web',
+		'ssh-domain': 'app.example',
+		'ssh-host': 'devbox',
+		'ssh-port': '3000',
+	});
 	expect(saved).toEqual({ label: 'Web', entries: [{ domain: 'app.example' }], ssh: { host: 'devbox', port: 3000 } });
+});
+
+test('saved SSH forwards render in SSH apps', () => {
+	const groups = new Map();
+	const renderLaunches = new Function('renderLaunchRows',
+		`return (${inlineFunction(dashboard, 'renderLaunches', 'renderLaunchRows')});`)(
+		(id: string, launches: unknown) => groups.set(id, launches),
+	);
+	const local = { id: 'local', program: 'npm' };
+	const remote = { id: 'remote', ssh: { host: 'devbox', port: 3000 } };
+	renderLaunches([local, remote]);
+	expect(groups.get('launch')).toEqual([local]);
+	expect(groups.get('ssh-app')).toEqual([remote]);
 });
 
 test('one click opens an SSH app when its registered HTTPS URL is ready', async () => {
