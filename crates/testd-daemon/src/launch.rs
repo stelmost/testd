@@ -388,7 +388,9 @@ impl LaunchBook {
 
 	pub fn answer_ssh(&self, id: &str, prompt: &str, answer: Option<String>) -> Result<(), String> {
 		let running = self.running.lock().expect("launch state poisoned");
-		let run = running.get(id).ok_or_else(|| "this SSH launch is no longer waiting".to_owned())?;
+		let run = running
+			.get(id)
+			.ok_or_else(|| "this SSH launch is no longer waiting".to_owned())?;
 		let prompts = run.prompts.as_ref().ok_or_else(|| "this is not an SSH launch".to_owned())?;
 		if answer.is_some() {
 			return prompts.answer(prompt, answer);

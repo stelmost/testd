@@ -601,8 +601,7 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
 			| "proxy-authenticate"
 			| "proxy-authorization"
 			| "proxy-connection"
-			| "te"
-			| "trailer"
+			| "te" | "trailer"
 			| "transfer-encoding"
 	)
 }

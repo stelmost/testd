@@ -569,9 +569,9 @@ async fn wait_for_ssh_http(pid: u32, target: &str, domain: &str, timeout: Durati
 			if !owns_listener {
 				owns_listener = tokio::task::spawn_blocking(move || {
 					listeners::discover(pid).map(|sockets| {
-						sockets.iter().any(|socket| {
-							socket.address == address.ip() && socket.port == address.port()
-						})
+						sockets
+							.iter()
+							.any(|socket| socket.address == address.ip() && socket.port == address.port())
 					})
 				})
 				.await
@@ -1072,8 +1072,7 @@ mod tests {
 										&Response::PendingGrant { id: "pending".into(), domain: domain.to_owned() },
 									)
 									.await
-									.is_ok()
-										&& protocol::send(&mut writer, &Response::Ok).await.is_ok()
+									.is_ok() && protocol::send(&mut writer, &Response::Ok).await.is_ok()
 								},
 							}
 						} else {
