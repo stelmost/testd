@@ -9,15 +9,66 @@ const commandSource = dashboard.slice(dashboard.indexOf('function parseCommand('
 // Exercise the shipped inline parser, not a copy of its implementation.
 const parseCommand = new Function(`return (${commandSource});`)() as (text: string) => string[];
 
-function submitForm(name: string, values: Record<string, string | boolean>) {
-	let saved: any;
-	const save = new Function('document', 'parseCommand', 'post', 'notice', 'refreshState',
-		inlineFunction(dashboard, 'saveLaunch', 'ago') + '\nreturn ' + name + ';')(
-		{ getElementById: (id: string) => ({ value: values[id], checked: values[id] === true }) }, parseCommand,
-		async (_path: string, body: unknown) => { saved = body; }, () => {}, () => {},
+function launchForm(prefix: 'launch' | 'ssh', values: Record<string, string | boolean> = {}) {
+	function input(initial: string | boolean = '') {
+		let value = String(initial);
+		return {
+			get value() { return value; },
+			set value(next) { value = String(next).replace(/[\r\n]/g, ''); },
+			checked: initial === true,
+			disabled: false,
+			hidden: false,
+			required: false,
+			focused: false,
+			focus() { this.focused = true; },
+		};
+	}
+	const fields = new Map<string, ReturnType<typeof input>>();
+	const field = (id: string) => {
+		if (!fields.has(id)) fields.set(id, input(values[id]));
+		return fields.get(id)!;
+	};
+	const cancel = { disabled: false, hidden: true };
+	const submit = { disabled: false };
+	const controls: Record<string, object> = {
+		'[type="reset"]': cancel,
+		'[type="submit"]': submit,
+		'[data-create-label]': { hidden: false },
+		'[data-edit-label]': { hidden: true },
+	};
+	const form = {
+		id: prefix + '-form',
+		querySelector: (selector: string) => controls[selector],
+		elements: {
+			namedItem: () => ({
+				set value(mode: string) { field('ssh-mode-command').checked = mode === 'command'; },
+			}),
+		},
+		reset() {
+			handlers.resetLaunchForm({ target: form });
+			for (const [id, element] of fields) {
+				element.value = String(values[id] ?? '');
+				element.checked = values[id] === true;
+			}
+		},
+	};
+	const saved: any[] = [];
+	const handlers = new Function('document', 'parseCommand', 'post', 'notice', 'refreshState',
+		inlineFunction(dashboard, 'saveLaunch', 'ago') +
+		'\nreturn { saveLaunch, saveSshApp, editLaunch, resetLaunchForm, formatCommand };')(
+		{ getElementById: (id: string) => id === form.id ? form : field(id) }, parseCommand,
+		async (_path: string, body: unknown) => { saved.push(body); }, () => {}, () => {},
 	);
-	save({ preventDefault() {}, target: { reset() {} } });
-	return saved;
+	const save = () => (prefix === 'ssh' ? handlers.saveSshApp : handlers.saveLaunch)({
+		preventDefault() {}, target: form,
+	});
+	return { field, form, cancel, save, saved, edit: handlers.editLaunch, formatCommand: handlers.formatCommand };
+}
+
+function submitForm(name: string, values: Record<string, string | boolean>) {
+	const ui = launchForm(name === 'saveSshApp' ? 'ssh' : 'launch', values);
+	ui.save();
+	return ui.saved[0];
 }
 
 test('quick launches save the selected project directory', () => {
@@ -87,6 +138,81 @@ test('SSH apps save the remote command as argv and its working directory', () =>
 		host: 'devbox', port: 3000,
 		command: { program: 'program', args: ['two words', '$literal'], cwd: '/srv/web app' },
 	});
+});
+
+test('editing a quick launch preserves its ID, arguments, extra domains and options', async () => {
+	const ui = launchForm('launch');
+	const launch = {
+		id: 'local-web',
+		label: 'Web',
+		program: 'C:\\Program Files\\runner.exe',
+		args: ['', 'C:\\dev\\', 'a "quoted" word', "it's quoted", 'line\nbreak'],
+		cwd: null,
+		entries: [
+			{ domain: 'app.example', target: '3000' },
+			{ domain: 'admin.example', target: '3001' },
+		],
+		env: [['MODE', 'dev']],
+		share: true,
+		running: true,
+	};
+	ui.edit(launch);
+	expect(ui.field('launch-label').focused).toBe(true);
+	expect(ui.field('launch-cwd').required).toBe(false);
+	expect(ui.cancel.hidden).toBe(false);
+	expect(parseCommand(ui.formatCommand(launch))).toEqual([launch.program, ...launch.args]);
+
+	ui.field('launch-label').value = 'Updated web';
+	ui.field('launch-target').value = '4000';
+	await ui.save();
+	expect(ui.saved).toEqual([{
+		id: launch.id, label: 'Updated web', program: launch.program, args: launch.args, cwd: undefined,
+		entries: [{ domain: 'app.example', target: '4000' }, launch.entries[1]],
+		env: launch.env, share: true,
+	}]);
+	expect(ui.cancel.hidden).toBe(true);
+	expect(ui.field('launch-cwd').required).toBe(true);
+});
+
+test('editing an SSH app fills its mode and updates the same ID when switching to forwarding', async () => {
+	const ui = launchForm('ssh');
+	const launch = {
+		id: 'remote-web', label: 'Remote web', entries: [{ domain: 'app.example', target: '' }], env: [], share: false,
+		ssh: { host: 'devbox', port: 3000, command: { program: 'npm', args: ['run', 'dev'], cwd: '/srv/web' } },
+	};
+	ui.edit(launch);
+	expect(ui.field('ssh-mode-command').checked).toBe(true);
+	expect(ui.field('ssh-command').value).toBe('npm run dev');
+	expect(ui.field('ssh-command').disabled).toBe(false);
+	expect(ui.field('ssh-cwd').value).toBe('/srv/web');
+
+	ui.field('ssh-mode-command').checked = false;
+	ui.field('ssh-port').value = '4000';
+	await ui.save();
+	expect(ui.saved).toEqual([{
+		id: launch.id, label: launch.label, entries: launch.entries, env: [], share: false,
+		ssh: { host: 'devbox', port: 4000 },
+	}]);
+	expect(ui.field('ssh-command').disabled).toBe(true);
+});
+
+test('canceling an edit clears the saved ID before creating another quick launch', async () => {
+	const ui = launchForm('launch');
+	ui.edit({
+		id: 'old', label: 'Old', program: 'npm', args: ['run', 'dev'], cwd: 'C:\\dev',
+		entries: [{ domain: 'old.example', target: '' }],
+	});
+	ui.form.reset();
+	expect(ui.cancel.hidden).toBe(true);
+	expect(ui.field('launch-label').value).toBe('');
+
+	ui.field('launch-label').value = 'New';
+	ui.field('launch-domain').value = 'new.example';
+	ui.field('launch-cwd').value = 'C:\\next';
+	ui.field('launch-command').value = 'npm run start';
+	await ui.save();
+	expect(ui.saved[0].id).toBeUndefined();
+	expect(ui.saved[0].entries).toEqual([{ domain: 'new.example', target: '' }]);
 });
 
 test('saved SSH forwards render in SSH apps', () => {

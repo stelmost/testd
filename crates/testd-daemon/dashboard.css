@@ -460,6 +460,7 @@
 	.input::placeholder { color: var(--text-muted); }
 	.input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 	.form-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; }
+	.form-actions [hidden] { display: none; }
 
 	/* Certificate */
 

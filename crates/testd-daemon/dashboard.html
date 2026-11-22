@@ -110,7 +110,8 @@
 				</div>
 				<div class="card-body">
 					<div id="launch-list"></div>
-					<form class="form-grid" onsubmit="saveLaunch(event)" autocomplete="off">
+					<form class="form-grid" id="launch-form" onsubmit="saveLaunch(event)"
+						onreset="resetLaunchForm(event)" autocomplete="off">
 						<div class="field">
 							<label for="launch-label">Launch name</label>
 							<input class="input" id="launch-label" placeholder="Web app" required>
@@ -136,7 +137,11 @@
 								spellcheck="false">
 						</div>
 						<div class="form-actions">
-							<button class="btn btn-primary btn-sm" type="submit">Save launch</button>
+							<button class="btn btn-sm" type="reset" hidden>Cancel</button>
+							<button class="btn btn-primary btn-sm" type="submit">
+								<span data-create-label>Save launch</span>
+								<span data-edit-label hidden>Save changes</span>
+							</button>
 						</div>
 					</form>
 				</div>
@@ -152,7 +157,8 @@
 				<div class="card-body">
 					<div id="ssh-app-list"></div>
 					<div id="ssh-prompts"></div>
-					<form class="form-grid" onsubmit="saveSshApp(event)" onreset="queueMicrotask(setSshFields)" autocomplete="off">
+					<form class="form-grid" id="ssh-form" onsubmit="saveSshApp(event)"
+						onreset="resetLaunchForm(event)" autocomplete="off">
 						<fieldset class="field field-wide radio-group" onchange="setSshFields()">
 							<legend>On open</legend>
 							<div class="radio-options">
@@ -192,7 +198,11 @@
 							<small>Requires testd on the SSH host’s PATH.</small>
 						</div>
 						<div class="form-actions">
-							<button class="btn btn-primary btn-sm" type="submit">Save SSH app</button>
+							<button class="btn btn-sm" type="reset" hidden>Cancel</button>
+							<button class="btn btn-primary btn-sm" type="submit">
+								<span data-create-label>Save SSH app</span>
+								<span data-edit-label hidden>Save changes</span>
+							</button>
 						</div>
 					</form>
 				</div>
@@ -706,7 +716,14 @@
 		remove.textContent = 'Delete';
 		remove.disabled = launch.running;
 		remove.addEventListener('click', () => launchAction('delete', launch.id));
-		actions.append(toggle, remove);
+
+		const edit = document.createElement('button');
+		edit.type = 'button';
+		edit.className = 'btn btn-sm';
+		edit.textContent = 'Edit';
+		edit.ariaLabel = 'Edit ' + launch.label;
+		edit.addEventListener('click', () => editLaunch(launch));
+		actions.append(toggle, edit, remove);
 
 		row.append(main, actions);
 		return row;
@@ -897,12 +914,14 @@
 
 	function saveLaunch(event) {
 		event.preventDefault();
+		const form = event.target;
 		const value = (field) => document.getElementById('launch-' + field).value.trim();
 		try {
-			const [program, ...args] = parseCommand(value('command'));
+			const [program, ...args] = launchCommand(form, document.getElementById('launch-command'));
 			if (!program) throw new Error('Enter a command to run.');
 			const entries = [{ domain: value('domain'), target: value('target') }];
-			submitLaunch(event.target, { label: value('label'), program, args, cwd: value('cwd'), entries }, 'Launch saved.');
+			const cwd = value('cwd') || undefined;
+			return submitLaunch(form, { label: value('label'), program, args, cwd, entries }, 'Launch saved.');
 		} catch (error) {
 			notice(error.message);
 		}
@@ -920,11 +939,12 @@
 
 	function saveSshApp(event) {
 		event.preventDefault();
+		const form = event.target;
 		const value = (field) => document.getElementById('ssh-' + field).value.trim();
 		const ssh = { host: value('host'), port: Number(value('port')) };
 		if (document.getElementById('ssh-mode-command').checked) {
 			try {
-				const [program, ...args] = parseCommand(value('command'));
+				const [program, ...args] = launchCommand(form, document.getElementById('ssh-command'));
 				if (!program) throw new Error('Enter a remote command to run.');
 				ssh.command = { program, args, cwd: value('cwd') || undefined };
 			} catch (error) {
@@ -933,17 +953,88 @@
 			}
 		}
 		const entries = [{ domain: value('domain') }];
-		submitLaunch(event.target, { label: value('label'), ssh, entries }, 'SSH app saved.');
+		return submitLaunch(form, { label: value('label'), ssh, entries }, 'SSH app saved.');
+	}
+
+	const launchEdits = new WeakMap();
+
+	function editLaunch(launch) {
+		const prefix = launch.ssh ? 'ssh' : 'launch';
+		const form = document.getElementById(prefix + '-form');
+		const field = (name) => document.getElementById(prefix + '-' + name);
+		const process = launch.ssh ? launch.ssh.command : launch;
+		const [entry] = launch.entries;
+
+		field('label').value = launch.label;
+		field('domain').value = entry.domain;
+		field('cwd').value = process?.cwd ?? '';
+		const command = field('command');
+		command.value = process ? formatCommand(process) : '';
+
+		if (launch.ssh) {
+			field('host').value = launch.ssh.host;
+			field('port').value = launch.ssh.port;
+			form.elements.namedItem('ssh-mode').value = process ? 'command' : 'forward';
+			setSshFields();
+		} else {
+			field('target').value = entry.target;
+			field('cwd').required = Boolean(launch.cwd);
+		}
+
+		launchEdits.set(form, { launch, command: command.value });
+		setLaunchEditActions(form, true);
+		field('label').focus();
+	}
+
+	function formatCommand({ program, args }) {
+		// Single quotes preserve backslashes, including at the end of Windows paths.
+		return [program, ...args].map((part) => {
+			if (part && !/[\s'"]|\\$/.test(part)) return part;
+			return "'" + part.replaceAll("'", "'\\''") + "'";
+		}).join(' ');
+	}
+
+	function launchCommand(form, input) {
+		const edit = launchEdits.get(form);
+		const process = edit?.launch.ssh ? edit.launch.ssh.command : edit?.launch;
+		if (process && input.value === edit.command) return [process.program, ...process.args];
+		return parseCommand(input.value.trim());
+	}
+
+	function setLaunchEditActions(form, editing) {
+		form.querySelector('[data-create-label]').hidden = editing;
+		form.querySelector('[data-edit-label]').hidden = !editing;
+		form.querySelector('[type="reset"]').hidden = !editing;
+	}
+
+	function resetLaunchForm(event) {
+		const form = event.target;
+		launchEdits.delete(form);
+		setLaunchEditActions(form, false);
+		if (form.id === 'ssh-form') queueMicrotask(setSshFields);
+		else document.getElementById('launch-cwd').required = true;
 	}
 
 	function submitLaunch(form, body, message) {
-		post('/api/local/launches/save', body)
+		const submit = form.querySelector('[type="submit"]');
+		if (submit.disabled) return;
+		const cancel = form.querySelector('[type="reset"]');
+		const edit = launchEdits.get(form);
+		if (edit) {
+			const { launch } = edit;
+			const entries = [{ ...launch.entries[0], ...body.entries[0] }, ...launch.entries.slice(1)];
+			body = { id: launch.id, env: launch.env, share: launch.share, ...body, entries };
+			message = 'Changes saved for the next start.';
+		}
+		submit.disabled = cancel.disabled = true;
+		return post('/api/local/launches/save', body)
 			.then(() => {
-				form.reset();
+				if (launchEdits.get(form) === edit) form.reset();
 				notice(message, false);
 				return refreshState();
 			})
-			.catch((error) => notice(error.message));
+			.catch((error) => notice(error.message))
+			.finally(() => { submit.disabled = cancel.disabled = false; });
 	}
 
 	function ago(seconds) {
