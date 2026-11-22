@@ -308,7 +308,16 @@ async fn setup_state() -> SetupState {
 }
 
 async fn handle_resolver(writer: &mut (impl AsyncWriteExt + Unpin)) -> io::Result<()> {
-	match tokio::task::spawn_blocking(|| testd_setup::setup_os_resolver_gui(TLD, resolver_addr())).await {
+	let result = tokio::task::spawn_blocking(|| {
+		let addr = resolver_addr();
+		testd_setup::setup_os_resolver_gui(TLD, addr)?;
+		if !testd_setup::is_os_resolver_configured(TLD, addr) {
+			return Err(io::Error::other("could not verify the system DNS route after setup"));
+		}
+		Ok(())
+	})
+	.await;
+	match result {
 		Ok(Ok(())) => respond_json(writer, "200 OK", &serde_json::json!({ "ok": true })).await,
 		Ok(Err(e)) => {
 			respond_json(writer, "500 Internal Server Error", &serde_json::json!({ "error": e.to_string() })).await

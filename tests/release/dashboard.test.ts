@@ -184,15 +184,46 @@ test('dashboard bootstrap survives unavailable session storage and removes the c
 test('setup repair buttons regain their names when a prerequisite disappears', async () => {
 	const setup = await Bun.file(new URL('../../crates/testd-daemon/setup.html', import.meta.url)).text();
 	const button = { disabled: false, textContent: '' };
-	const setReady = new Function('document', `return (${inlineFunction(setup, 'setReady', 'updateConnection')});`)(
-		{ getElementById: () => button },
-	);
+	const source = `return (${inlineFunction(setup, 'setReady', 'updateConnection')});`;
+	const setReady = new Function('document', 'isSettingUpResolver', source)({ getElementById: () => button }, false);
 	for (const [id, label] of [['resolver-action', 'Set up resolver'], ['certificate-action', 'Install certificate']]) {
 		setReady(id, true);
 		expect(button.disabled).toBe(true);
 		setReady(id, false);
 		expect(button.disabled).toBe(false);
 		expect(button.textContent).toBe(label);
+	}
+});
+
+test('setup confirms resolver readiness from the refreshed state', async () => {
+	const setup = await Bun.file(new URL('../../crates/testd-daemon/setup.html', import.meta.url)).text();
+	const source = setup.slice(setup.indexOf('function setReady('), setup.indexOf('\n\tasync function setupCertificate('));
+	for (const [resolver, expectedNotice] of [
+		[true, ''],
+		[false, 'Could not verify the system DNS route after setup.'],
+		[undefined, 'Cannot read setup state: unavailable'],
+	] as const) {
+		const button = { disabled: false, textContent: '' };
+		const document = { getElementById: (id: string) => id === 'resolver-action' ? button : { value: '' } };
+		let message = '';
+		const run = new Function('document', 'request', 'getJson', 'setPill', 'notice', 'hideNotice', `
+			let resolverReady = false;
+			let certificateReady = false;
+			let isSettingUpResolver = false;
+			${source}
+			return setupResolver;
+		`)(
+			document, async () => ({ ok: true }),
+			async () => {
+				if (resolver === undefined) throw new Error('unavailable');
+				return { resolver };
+			},
+			() => {}, (value: string) => { message = value; }, () => {},
+		);
+		await run();
+		expect(button.disabled).toBe(resolver === true);
+		expect(button.textContent).toBe(resolver ? 'Done' : 'Set up resolver');
+		expect(message).toBe(expectedNotice);
 	}
 });
 

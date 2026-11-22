@@ -353,7 +353,7 @@ fn nrpt_query_command(tld: &str) -> String {
 		foreach ($rule in $rules) {{ \
 		if (@($rule.Namespace).Count -ne 1 -or @($rule.NameServers).Count -ne 1 -or \
 		$rule.DirectAccessEnabled -or $rule.DnsSecEnabled -or $rule.DnsSecValidationRequired) {{ exit 1 }}; \
-		$rule.NameServers }}"
+		[string](@($rule.NameServers)[0]) }}"
 	)
 }
 
@@ -800,6 +800,22 @@ mod tests {
 		let command = nrpt_query_command("test");
 		assert!(command.contains("Namespace -contains '.test'"));
 		assert!(command.contains("NameServers"));
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn nrpt_query_prints_ip_address_as_text() {
+		let fixture = concat!(
+			"function Get-DnsClientNrptRule { ",
+			"[pscustomobject]@{ Namespace = @('.test'); NameServers = [ipaddress]'127.0.0.1' } }; ",
+		);
+		let output = silent_command(windows_helper::powershell().unwrap())
+			.args(["-NoProfile", "-NonInteractive", "-Command"])
+			.arg(format!("{fixture}{}", nrpt_query_command("test")))
+			.output()
+			.unwrap();
+		assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+		assert!(nrpt_has_name_server(&String::from_utf8_lossy(&output.stdout), "127.0.0.1:53".parse().unwrap()));
 	}
 
 	#[test]

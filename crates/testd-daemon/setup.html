@@ -208,6 +208,7 @@
 
 	let resolverReady = false;
 	let certificateReady = false;
+	let isSettingUpResolver = false;
 
 	function sessionToken() {
 		const parameters = new URLSearchParams(location.hash.slice(1));
@@ -268,6 +269,7 @@
 	}
 
 	function setReady(id, ready) {
+		if (id === 'resolver-action' && isSettingUpResolver) return;
 		const button = document.getElementById(id);
 		button.disabled = ready;
 		button.textContent = ready ? 'Done'
@@ -294,12 +296,14 @@
 	}
 
 	async function refresh() {
+		let state;
 		try {
-			const state = await getJson('/api/setup/state');
-			resolverReady = state.resolver;
+			state = await getJson('/api/setup/state');
+			resolverReady = state.resolver === true;
 			setPill('resolver-pill', resolverReady ? 'Configured' : 'Required', resolverReady ? 'ok' : 'warn');
 			document.getElementById('resolver-detail').textContent =
-				resolverReady ? 'Names under .test resolve on this machine.' : 'Not configured yet.';
+				resolverReady ? 'The DNS route is configured. The resolver starts when you finish setup.'
+					: 'Not configured yet.';
 			setReady('resolver-action', resolverReady);
 
 			certificateReady = Boolean(state.certificate && state.certificate.trusted);
@@ -312,21 +316,25 @@
 		}
 		updateConnection();
 		updateFinish();
+		return state;
 	}
 
 	async function setupResolver() {
+		if (isSettingUpResolver) return;
+		isSettingUpResolver = true;
 		const button = document.getElementById('resolver-action');
 		button.disabled = true;
 		button.textContent = 'Setting up...';
+		hideNotice();
 		try {
 			await request('/api/setup/resolver');
-			await refresh();
-			notice('Resolver configured.', false);
+			const state = await refresh();
+			if (state && state.resolver !== true) notice('Could not verify the system DNS route after setup.');
 		} catch (e) {
 			notice('Resolver setup failed: ' + e.message);
 		} finally {
-			button.disabled = false;
-			button.textContent = resolverReady ? 'Done' : 'Set up resolver';
+			isSettingUpResolver = false;
+			setReady('resolver-action', resolverReady);
 		}
 	}
 
