@@ -52,6 +52,8 @@ testd host
 testd doctor --fix
 ```
 
+On Windows, review the PowerShell script for the DNS rule and machine root certificate before approving the UAC prompts. testd launches it via a plaintext command and verifies the script bytes against the copy embedded in the binary. [Windows setup script](scripts/testd-elevated.ps1)
+
 On Linux, port 443 requires privileges. For a root-managed system service, use `packaging/systemd/testd@.service`, which grants only `CAP_NET_BIND_SERVICE`. For a foreground CLI, run `sudo setcap 'cap_net_bind_service=+ep' "$(readlink -f "$(command -v testd)")"` after installing or replacing the executable. For a tray build, grant it to the actual tray executable, not an AppImage wrapper. Alternatively, set `[host] edge_addr = '127.0.0.1:8443'` and include `:8443` in browser URLs. A systemd user service with `NoNewPrivileges=yes` cannot acquire a file capability: use a high port there.
 
 Then, in the project:

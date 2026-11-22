@@ -58,6 +58,8 @@ def package(args):
 	files += [(path, str(path.relative_to(ROOT))) for path in ROOT.glob('packaging/systemd/*.service')]
 	files += [(ROOT / 'packaging/launchd/dev.testd.host.plist', 'packaging/launchd/dev.testd.host.plist')]
 	if platform == 'windows':
+		helper = 'scripts/testd-elevated.ps1'
+		files.append((ROOT / helper, helper))
 		with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as target:
 			for source, name in files:
 				target.write(source, f'{base}/{name}')
