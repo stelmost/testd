@@ -30,9 +30,11 @@ These checks do not establish current-release coverage and must not be recorded 
 
 Use the [SSH forwarding recipe](../../docs/advanced.md#ssh-forwarding) with a test app that provides an HTTP response and a WebSocket echo. Bind the app to the SSH server's loopback and keep the testd listeners at their loopback defaults.
 
-- [ ] SSH-01. Verify HTTPS with the local testd CA and exchange a `wss` message through the tunnel. Check that the forwarding port listens only on `127.0.0.1`.
-- [ ] SSH-02. Stop SSH while the wrapper is running. Check that the name is deregistered and the local forwarding port is released. Repeat by interrupting `testd run`.
-- [ ] SSH-03. Run the recipe with the local port already occupied. Confirm that SSH reports the bind failure, `testd run` returns a failure, and no live registration remains.
+- [ ] SSH-01: Verify HTTPS with the local testd CA and exchange a `wss` message through the tunnel. Check that the forwarding port listens only on `127.0.0.1`.
+- [ ] SSH-02: Stop SSH while the wrapper is running. Check that the name is deregistered and the local forwarding port is released. Repeat by interrupting `testd run`.
+- [ ] SSH-03: Run the recipe with the local port already occupied. Confirm that SSH reports the bind failure, `testd run` returns a failure, and no live registration remains.
+- [ ] SSH-04: Open a saved [SSH app](../../docs/advanced.md#ssh-apps) for a running remote service from the packaged tray's dashboard. Decline the first host-key prompt and verify no name is published. After independently verifying and accepting the key, open trusted HTTPS and exchange a `wss` message. Stop the launch and verify the tunnel and name are gone but the remote service is still running.
+- [ ] SSH-05: Use **Start a remote command** with the matching candidate CLI installed on the SSH host. Verify HTTPS opens only after the remote app responds. Stop the launch and verify the remote command, its children, the local tunnel, and the name are gone. Repeat with an interrupted SSH session and verify cleanup on both machines.
 
 ## Share lifetime
 

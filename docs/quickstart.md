@@ -116,7 +116,7 @@ testd requests
 testd approve <id>
 ```
 
-The token is saved on the leaf and reused. The app must listen on an address the host can reach; a server bound only to `127.0.0.1` on the remote machine is not reachable from the host.
+The token is saved on the leaf and reused. The app can listen on the leaf's `127.0.0.1`; the leaf forwards requests to it locally.
 
 Remote credentials are sent only after verifying the paired host over TLS 1.3. Application requests use mutual TLS to the leaf. The host must be able to reach the leaf's dynamically allocated TLS ports; pairing does not create a route through NAT. Do not expose port 7737 to the internet. See [Security](security.md).
 
