@@ -372,16 +372,16 @@ impl LaunchBook {
 
 	pub fn answer_ssh(&self, id: &str, prompt: &str, answer: Option<String>) -> Result<(), String> {
 		let running = self.running.lock().expect("launch state poisoned");
-		let prompts = running
-			.get(id)
-			.and_then(|run| run.prompts.as_ref())
-			.ok_or_else(|| "this SSH launch is no longer waiting".to_owned())?;
-		prompts.answer(prompt, answer)
+		let run = running.get(id).ok_or_else(|| "this SSH launch is no longer waiting".to_owned())?;
+		let prompts = run.prompts.as_ref().ok_or_else(|| "this is not an SSH launch".to_owned())?;
+		if answer.is_some() {
+			return prompts.answer(prompt, answer);
+		}
+		prompts.answer(prompt, None)?;
+		self.stop_run(run)
 	}
 
-	pub fn stop(&self, id: &str) -> Result<(), String> {
-		let running = self.running.lock().expect("launch state poisoned");
-		let Some(run) = running.get(id) else { return Ok(()) };
+	fn stop_run(&self, run: &Running) -> Result<(), String> {
 		let mut state = run.state.lock().expect("launch state poisoned");
 		match state.phase {
 			RunPhase::Starting | RunPhase::Running => {
@@ -393,6 +393,12 @@ impl LaunchBook {
 		drop(state);
 		self.bump();
 		Ok(())
+	}
+
+	pub fn stop(&self, id: &str) -> Result<(), String> {
+		let running = self.running.lock().expect("launch state poisoned");
+		let Some(run) = running.get(id) else { return Ok(()) };
+		self.stop_run(run)
 	}
 
 	pub async fn rebind(&self, id: &str, domain: String, target: String) -> Result<(), String> {

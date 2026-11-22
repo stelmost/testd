@@ -705,9 +705,10 @@
 		sshTabs.set(id, { tab, started: false });
 		try {
 			await post('/api/local/launches/start', { id });
+			const state = await getJson('/api/local/state');
 			const pending = sshTabs.get(id);
 			if (pending) pending.started = true;
-			updateSshLaunches((await getJson('/api/local/state')).launches || []);
+			updateSshLaunches(state.launches || []);
 		} catch (error) {
 			sshTabs.delete(id);
 			if (tab) tab.close();
@@ -747,7 +748,7 @@
 
 	function sshPromptForm(launch, prompt) {
 		const form = document.createElement('form');
-		form.className = 'ssh-prompt';
+		form.className = 'field ssh-prompt';
 		form.dataset.prompt = prompt.id;
 		const message = document.createElement('label');
 		message.textContent = prompt.message;
@@ -759,13 +760,13 @@
 		input.id = 'ssh-answer-' + prompt.id;
 		message.htmlFor = input.id;
 		form.append(message);
-		if (prompt.kind !== 'notice') form.append(input);
+		if (prompt.kind === 'response') form.append(input);
 		const actions = document.createElement('div');
 		actions.className = 'row-actions';
 		const send = document.createElement('button');
 		send.className = 'btn btn-sm btn-primary';
 		send.type = 'submit';
-		send.textContent = 'Continue';
+		send.textContent = prompt.kind === 'confirm' ? 'Trust host' : 'Continue';
 		const cancel = document.createElement('button');
 		cancel.className = 'btn btn-sm';
 		cancel.type = 'button';
@@ -776,7 +777,6 @@
 			input.value = '';
 			try {
 				await post('/api/local/launches/ssh/answer', { id: launch.id, prompt: prompt.id, answer: value });
-				if (value === null) await launchAction('stop', launch.id);
 				await refreshState();
 			} catch (error) {
 				send.disabled = false;
@@ -786,7 +786,7 @@
 		};
 		form.addEventListener('submit', (event) => {
 			event.preventDefault();
-			answer(prompt.kind === 'notice' ? '' : input.value);
+			answer(prompt.kind === 'confirm' ? 'yes' : prompt.kind === 'notice' ? '' : input.value);
 		});
 		cancel.addEventListener('click', () => answer(null));
 		actions.append(send, cancel);

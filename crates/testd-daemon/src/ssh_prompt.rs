@@ -22,6 +22,7 @@ const PROMPT_TIMEOUT: Duration = Duration::from_secs(110);
 #[serde(rename_all = "lowercase")]
 enum Kind {
 	Response,
+	Confirm,
 	Notice,
 }
 
@@ -114,6 +115,7 @@ impl Askpass {
 			.into_os_string()
 			.into_string()
 			.map_err(|_| anyhow::anyhow!("the testd executable path is not valid UTF-8"))?;
+		/* Older Windows OpenSSH builds require DISPLAY to use askpass even with no console. */
 		let display = std::env::var("DISPLAY").unwrap_or_else(|_| "testd".into());
 		let env = vec![
 			("SSH_ASKPASS".into(), executable),
@@ -217,6 +219,7 @@ fn ask(capability: &str) -> anyhow::Result<Option<String>> {
 		.map_err(|_| anyhow::anyhow!("expected one SSH prompt"))?;
 	let kind = match std::env::var("SSH_ASKPASS_PROMPT").as_deref() {
 		Ok("none") => Kind::Notice,
+		Ok("confirm") if message.to_string_lossy().contains("(yes/no/[fingerprint])") => Kind::Confirm,
 		_ => Kind::Response,
 	};
 	let request = Request { token: token.to_owned(), message: message.to_string_lossy().into_owned(), kind };
