@@ -49,7 +49,7 @@ First public alpha. The CLI, daemon, and tray ship as one version; desktop bundl
 - Name-grant deletion and registration share a lock, preventing a waiting registration from restoring withdrawn access
 - Private state is replaced atomically; failed quick-launch edits preserve live definitions, and unreadable launch files stop startup rather than being overwritten
 - Windows credentials, control data, and PKI keys use protected owner-scoped ACLs from creation; owner-rights entries are accepted only for verified owners, while unsafe existing files and unverifiable parents are refused before use
-- Windows resolver and root removal require unchanged administrator-owned records; CLI uninstall remains blocked pending native validation
+- Windows CLI uninstall checks the entire installation's recorded resolver and trust state before removing it; purge retains local data if ownership or cleanup cannot be verified
 - Windows elevation uses the system PowerShell and verifies a single in-memory helper-source snapshot before execution without exceeding the native command-line limit; helper and certificate staging files close before the elevated process reads them
 - macOS certificate actions preserve other installations' roots, and Windows resolver setup refuses conflicting unowned rules
 - Failed startup releases background listeners; setup rejects concurrent finishes, retains earlier recovery backups, and accepts another attempt after a start failure

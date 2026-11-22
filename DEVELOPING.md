@@ -217,12 +217,12 @@ This is the runbook for checks **outside hosted CI**: actual OS resolver/trust c
 
 | Check | Debian 13 amd64 VM | macOS 15 and 26 arm64 VMs | Windows 10 22H2 amd64 VM |
 |---|---|---|---|
-| Resolver/trust installation and owned cleanup | `host --system`; shared trust effects still require independent comparison | `host --system`; full-system trust comparison still required | Blocked by ownership safeguards |
+| Resolver/trust installation and owned cleanup | `host --system`; shared trust effects still require independent comparison | `host --system`; full-system trust comparison still required | Manual `SYS-16`; automated system checks remain blocked |
 | Actual service supervision | `service` with a real systemd user session | `service` with a logged-in launchd GUI session | Not applicable: no CLI service shipped |
 | Real browser | Fixture-owned setup with `browser --system` | Fixture-owned setup with `browser --system` | Preconfigured mode only; separately proven DNS/trust setup required |
 | Tray, setup, login, GUI workflow | `desktop`, plus separate logout/login evidence | `desktop --app candidate.app --bin candidate`, plus separate login evidence | Desktop runner blocked |
 | Archive/package smoke | `artifacts`; real uninstall remains incomplete | `artifacts`; not complete installed-app evidence | `artifacts`; not complete installed-app evidence |
-| Full installation/upgrade/uninstall | Manual checklist with owned integration and full-system comparison | Manual checklist with owned integration and full-system comparison | Resolver/trust cleanup coverage blocked |
+| Full installation/upgrade/uninstall | Manual checklist with owned integration and full-system comparison | Manual checklist with owned integration and full-system comparison | Manual checklist with owned integration and full-system comparison |
 | Signing/notarization | Unsigned alpha; checksums and SBOMs | Optional ad-hoc resource integrity only; not trusted or notarized | Unsigned alpha; no Authenticode claim |
 
 A VM does not bypass a blocked runner. Do not remove its guards, force system checks through direct scripts, or mark blocked platform coverage passed. Required native signoff uses Debian 13 amd64, macOS 15 arm64, macOS 26 arm64, and Windows 10 22H2 amd64. Run the Mac column separately on 15 and 26 using the same Mac 15-built ARM artifact and record its source/hash in each report. Other versions/architectures are best effort. Missing native Mac 15 access remains an access gate, not a deferred hardware-specific check.
@@ -517,7 +517,7 @@ on Windows. Privileged actions are delegated to
 IPv4 address, certificate thumbprint, and CA constraints. If testd is not
 elevated, Windows shows one UAC prompt for that helper only.
 
-The Windows snapshot helper verifies NRPT rules and machine roots without deleting or recreating them by name. Real product system and desktop checks remain blocked because the helper cannot prove ownership of every change; use the persisted full-system snapshot for recovery. Windows NRPT rules cannot specify a port, so the daemon binds `:53`. If it is occupied, use a different disposable host rather than stopping an unrelated service.
+The Windows snapshot helper verifies NRPT rules and machine roots without deleting or recreating them by name. Automated system and desktop runners remain blocked; use the [manual ownership checklist](tests/manual/system-integration.md#platform-evidence) for native Windows uninstall evidence and the persisted full-system snapshot for recovery. Windows NRPT rules cannot specify a port, so the daemon binds `:53`. If it is occupied, use a different disposable host rather than stopping an unrelated service.
 
 ### Launch at login
 

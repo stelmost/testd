@@ -204,7 +204,7 @@ def main():
 		print('curl -fsSLo testd-install.sh https://testd.dev/install.sh')
 		print(f"TESTD_VERSION='{args.version}' sh ./testd-install.sh")
 		print('```\n')
-		print('On Linux and macOS, run `testd uninstall` before removing the app. Windows CLI uninstall remains blocked.')
+		print('On Linux, macOS, and Windows, stop testd and run `testd uninstall` before removing the app.')
 	elif args.command == 'package':
 		package(args)
 	elif args.command == 'homebrew':

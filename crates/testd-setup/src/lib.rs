@@ -1387,6 +1387,16 @@ fn untrust_root_windows(cert_pem: &str) -> io::Result<()> {
 	run_windows_helper("RemoveRoot", &[("Thumbprint", &sha1_hex(&der)), ("Fingerprint", &sha256_hex(&der))])
 }
 
+#[cfg(windows)]
+pub fn remove_windows_integration(tld: &str, cert_pem: &str) -> io::Result<()> {
+	validate_windows_resolver_tld(tld)?;
+	let der = single_anchor_der(cert_pem)?;
+	run_windows_helper(
+		"RemoveInstallation",
+		&[("Tld", tld), ("Thumbprint", &sha1_hex(&der)), ("Fingerprint", &sha256_hex(&der))],
+	)
+}
+
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 fn sha256_hex(bytes: &[u8]) -> String {
 	use sha2::{Digest, Sha256};

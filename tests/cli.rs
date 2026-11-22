@@ -159,6 +159,23 @@ fn uninstall_help_offers_only_purge() {
 	assert!(!help.contains("--keep-certificate"), "{help}");
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_uninstall_preserves_local_state_without_an_ownership_id() {
+	let home = TempDir::new().unwrap();
+	let pki = config_dir(home.path()).join("pki");
+	testd_pki::Ca::load_or_init(&pki).unwrap();
+	let root = pki.join("root.crt");
+	let before = std::fs::read(&root).unwrap();
+	for arguments in [&["uninstall"][..], &["uninstall", "--purge"]] {
+		let result = testd(home.path(), arguments);
+		let stderr = String::from_utf8_lossy(&result.stderr);
+		assert!(!result.status.success(), "{stderr}");
+		assert!(stderr.contains("private installation ownership ID is missing"), "{stderr}");
+		assert_eq!(std::fs::read(&root).unwrap(), before);
+	}
+}
+
 #[cfg(unix)]
 #[test]
 fn init_creates_private_directories_under_a_group_writable_umask() {

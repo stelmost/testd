@@ -284,8 +284,8 @@ testd uninstall
 testd uninstall --purge
 ```
 
-On Linux, `uninstall` removes owned resolver and trust integration and retains local data. `--purge` also deletes the configuration directory, including its default PKI and tokens, but only after system cleanup succeeds. A custom PKI outside that directory is not deleted. Unowned or changed system state is left untouched and conflicts are reported. If the local root certificate is missing, trust removal and purge are incomplete; restore the certificate before retrying.
+On Linux, macOS, and Windows, `uninstall` removes owned resolver and trust integration and retains local data. `--purge` also deletes the configuration directory, including its default PKI and tokens, but only after system cleanup succeeds. A custom PKI outside that directory is not deleted. Unowned or changed system state is left untouched and conflicts are reported. If the local root certificate is missing, trust removal and purge are incomplete; restore the certificate before retrying.
 
-Windows removal requires the private installation ID and unchanged administrator-owned NRPT or root-store records. Compatible pre-existing integration is never adopted. Records left incomplete by interrupted setup are preserved for review rather than treated as permission to delete live resources; failed removals retain their record for retry. Ownership-record backups remain in `%ProgramData%/testd/ownership/history`.
+Windows removal requires the private installation ID and unchanged administrator-owned NRPT and root-store records. It checks the current targets and every record owned by the same installation, including previous roots, before cleanup starts. Compatible pre-existing integration is never adopted. Records left incomplete by interrupted setup are preserved for review rather than treated as permission to delete live resources; failed removals retain their record for retry. Ownership-record backups remain in `%ProgramData%/testd/ownership/history`.
 
-Uninstall remains blocked on macOS until equivalent safeguards exist, and on Windows until the new ownership safeguards are validated natively. It does not remove the executable or desktop app.
+Uninstall does not remove the executable or desktop app.

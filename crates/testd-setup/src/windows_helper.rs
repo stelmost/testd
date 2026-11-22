@@ -123,6 +123,12 @@ pub(super) fn run(action: &str, args: &[(&str, &str)]) -> std::io::Result<()> {
 
 	let owner =
 		if action.starts_with("Install") { Some(InstallationId::load_or_create()?) } else { InstallationId::load()? };
+	if action == "RemoveInstallation" && owner.is_none() {
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::NotFound,
+			"private installation ownership ID is missing; restore it before retrying uninstall",
+		));
+	}
 	let owner = owner.map(|owner| owner.fingerprint()).unwrap_or_default();
 	let mut args = args.to_vec();
 	args.push(("Owner", &owner));

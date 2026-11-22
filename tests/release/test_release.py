@@ -288,8 +288,7 @@ class ReleaseTests(unittest.TestCase):
 		self.assertIn('SBOM', text)
 		self.assertIn('curl -fsSLo testd-install.sh https://testd.dev/install.sh', text)
 		self.assertIn(f"TESTD_VERSION='{version}' sh ./testd-install.sh", text)
-		self.assertIn('On Linux and macOS, run `testd uninstall` before removing the app.', text)
-		self.assertIn('Windows CLI uninstall remains blocked.', text)
+		self.assertIn('On Linux, macOS, and Windows, stop testd and run `testd uninstall` before removing the app.', text)
 
 	@unittest.skipIf(os.name == 'nt', 'not applicable: the website installer is POSIX-only')
 	def test_website_installer_uses_the_pinned_release_and_refuses_a_bad_checksum(self):

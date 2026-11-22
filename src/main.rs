@@ -1104,6 +1104,14 @@ fn uninstall(purge: bool) -> anyhow::Result<()> {
 	let tld = testd_core::config::host_tld();
 	let dir = testd_core::config::config_dir();
 	let local_data = if purge { LocalDataAction::Purge } else { LocalDataAction::Keep };
+	#[cfg(windows)]
+	return finish_uninstall(local_data, &dir, || {
+		let (pki_dir, pem) = read_uninstall_root(config.as_ref())?;
+		eprintln!("removing Windows resolver and trust integration owned by this installation");
+		testd_setup::remove_windows_integration(tld, &pem)?;
+		disable_automatic_trust(&pki_dir, config.as_ref())
+	});
+	#[cfg(not(windows))]
 	uninstall_with(
 		local_data,
 		&dir,
@@ -1117,11 +1125,7 @@ fn uninstall(purge: bool) -> anyhow::Result<()> {
 
 fn require_owned_uninstall(system: &str) -> anyhow::Result<()> {
 	match system {
-		"linux" | "macos" => Ok(()),
-		"windows" => anyhow::bail!(
-			"uninstall is blocked on {system} until resolver and trust ownership can be verified; \
-			 system and local state were left untouched"
-		),
+		"linux" | "macos" | "windows" => Ok(()),
 		_ => anyhow::bail!("uninstall is not supported on {system}; system and local state were left untouched"),
 	}
 }
@@ -1138,34 +1142,47 @@ fn load_uninstall_config() -> anyhow::Result<Option<testd_core::config::HostConf
 	}
 }
 
+#[cfg(any(not(windows), test))]
 fn uninstall_with(
 	local_data: LocalDataAction,
 	dir: &std::path::Path,
 	remove_resolver: impl FnOnce() -> std::io::Result<()>,
 	remove_certificate: impl FnOnce() -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
+	finish_uninstall(local_data, dir, || {
+		let mut errors = Vec::new();
+		if let Err(error) = remove_resolver() {
+			errors.push(format!("resolver: {error}"));
+		}
+		if let Err(error) = remove_certificate() {
+			errors.push(format!("certificate: {error:#}"));
+		}
+		if !errors.is_empty() {
+			anyhow::bail!("{}", errors.join("\n  - "));
+		}
+		Ok(())
+	})
+}
+
+fn finish_uninstall(
+	local_data: LocalDataAction,
+	dir: &std::path::Path,
+	remove_integration: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
 	let local_snapshot = match local_data {
 		LocalDataAction::Keep => None,
 		LocalDataAction::Purge => snapshot_local_data(dir)?,
 	};
-	let mut errors = Vec::new();
-	if let Err(error) = remove_resolver() {
-		errors.push(format!("resolver: {error}"));
-	}
-	if let Err(error) = remove_certificate() {
-		errors.push(format!("certificate: {error:#}"));
-	}
-	if matches!(local_data, LocalDataAction::Purge) {
-		if errors.is_empty() {
-			if let Err(error) = remove_local_data(dir, local_snapshot) {
-				errors.push(format!("local data: {error:#}"));
-			}
-		} else {
+	if let Err(error) = remove_integration() {
+		if matches!(local_data, LocalDataAction::Purge) {
 			eprintln!("local data kept because system cleanup failed; fix the errors and run again");
 		}
+		anyhow::bail!("uninstall is incomplete:\n  - {error:#}");
 	}
-	if !errors.is_empty() {
-		anyhow::bail!("uninstall is incomplete:\n  - {}", errors.join("\n  - "));
+	if matches!(local_data, LocalDataAction::Purge)
+		&& let Err(error) = remove_local_data(dir, local_snapshot)
+	{
+		anyhow::bail!("uninstall is incomplete:\n  - local data: {error:#}");
 	}
 	eprintln!("testd-owned system integration removed");
 	if matches!(local_data, LocalDataAction::Keep) {
@@ -1174,7 +1191,17 @@ fn uninstall_with(
 	Ok(())
 }
 
+#[cfg(any(not(windows), test))]
 fn remove_trusted_root(config: Option<&testd_core::config::HostConfig>) -> anyhow::Result<()> {
+	let (pki_dir, pem) = read_uninstall_root(config)?;
+	eprintln!("removing the trusted root {}", pki_dir.join("root.crt").display());
+	testd_setup::untrust_root(&pem)?;
+	disable_automatic_trust(&pki_dir, config)
+}
+
+fn read_uninstall_root(
+	config: Option<&testd_core::config::HostConfig>,
+) -> anyhow::Result<(std::path::PathBuf, String)> {
 	let pki_dir = config
 		.map(|config| config.pki_dir.clone())
 		.unwrap_or_else(|| testd_core::config::config_dir().join("pki"));
@@ -1186,10 +1213,15 @@ fn remove_trusted_root(config: Option<&testd_core::config::HostConfig>) -> anyho
 		},
 		Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
 	};
-	eprintln!("removing the trusted root {}", path.display());
-	testd_setup::untrust_root(&pem)?;
+	Ok((pki_dir, pem))
+}
+
+fn disable_automatic_trust(
+	pki_dir: &std::path::Path,
+	config: Option<&testd_core::config::HostConfig>,
+) -> anyhow::Result<()> {
 	if pki_dir.exists() || config.is_some() {
-		testd_daemon::health::set_auto_trust(&pki_dir, false)?;
+		testd_daemon::health::set_auto_trust(pki_dir, false)?;
 	}
 	Ok(())
 }
@@ -1252,10 +1284,9 @@ mod uninstall_tests {
 	fn platforms_without_ownership_guards_cannot_uninstall() {
 		assert!(require_owned_uninstall("linux").is_ok());
 		assert!(require_owned_uninstall("macos").is_ok());
-		for system in ["windows", "freebsd"] {
-			let error = require_owned_uninstall(system).unwrap_err().to_string();
-			assert!(error.contains("left untouched"), "{error}");
-		}
+		assert!(require_owned_uninstall("windows").is_ok());
+		let error = require_owned_uninstall("freebsd").unwrap_err().to_string();
+		assert!(error.contains("left untouched"), "{error}");
 	}
 
 	#[test]
