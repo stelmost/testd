@@ -270,7 +270,11 @@ jobs:
       - if: steps.packager.outputs.cache-hit != 'true'
         run: cargo install cargo-packager --locked --version 0.11.8
       - run: cargo build --release --bin testd --locked --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
       - run: cargo build --release -p testd-gui --locked --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
       - name: Package native tray without a webview runtime
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'

@@ -688,7 +688,20 @@ Linux and macOS CLI:
 cargo build --release --bin testd
 ```
 
-Tray app (per platform):
+Windows CLI and tray (PowerShell):
+
+```powershell
+$env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = '-C target-feature=+crt-static'
+cargo build --release --bin testd --locked --target x86_64-pc-windows-msvc
+cargo build --release -p testd-gui --locked --target x86_64-pc-windows-msvc
+cargo packager --release --packages testd-gui --target x86_64-pc-windows-msvc --formats nsis `
+  --binaries-dir target/x86_64-pc-windows-msvc/release `
+  --out-dir target/x86_64-pc-windows-msvc/release/bundle
+```
+
+Windows release executables link the MSVC runtime statically. The CLI ZIP requires no separately installed Visual C++ redistributable. Keep `--target` explicit for Windows release builds.
+
+Linux and macOS tray:
 
 ```sh
 cargo build --release -p testd-gui --locked
