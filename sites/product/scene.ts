@@ -89,8 +89,6 @@ export interface Scene {
 export interface LinkState {
 	/** 0 when the link is down, 1 when established. */
 	progress: number;
-	/** 0..1 while a pulse travels the link; outside that range there is none. */
-	pulse: number;
 }
 
 export interface Label {
@@ -105,6 +103,11 @@ type Point = [number, number];
 
 const SEAL_EVERY = 16;
 const LIVE_AT = 0.98;
+/* Gate ring radius, and the speed of the light bouncing along each link, both in canvas widths. */
+const GATE = 0.0085;
+const BOUNCE_SPEED = 0.2;
+const TRAIL_DOTS = 8;
+const FLASH_REACH = PITCH * 9;
 
 export function buildScene(width: number, height: number, fontPx: number): Scene {
 	const unit = (vector: World['light']): World['light'] => {
@@ -181,12 +184,11 @@ interface LinkStyle {
 	from: Point;
 	to: Point;
 	progress: number;
-	pulse: number;
 	color: Rgb;
 	gate: number;
 }
 
-function drawLink(sink: DotSink, { from, to, progress, pulse, color, gate }: LinkStyle): void {
+function drawLink(sink: DotSink, { from, to, progress, color, gate }: LinkStyle): void {
 	const { direction, length } = towards(from, to);
 	const normal: Point = [-direction[1], direction[0]];
 	const isLive = progress >= LIVE_AT;
@@ -212,14 +214,6 @@ function drawLink(sink: DotSink, { from, to, progress, pulse, color, gate }: Lin
 			sink.dot(x + normal[0] * offset, y + normal[1] * offset, 0.6, LIGHT, 0.45);
 		}
 	}
-
-	if (pulse <= 0 || pulse >= 1) return;
-	for (let trail = 0; trail < 6; trail++) {
-		const distance = pulse * reach - trail * PITCH * 1.5;
-		if (distance < 0) break;
-		const [x, y] = at(distance);
-		sink.dot(x, y, 1.25 * (1 - trail * 0.12), BLUE, 1 - trail / 6);
-	}
 }
 
 // The browser: a small delta-wing craft in orbit above the host.
@@ -236,18 +230,69 @@ function craft(sink: DotSink, [x, y]: Point, size: number): void {
 	}
 }
 
-/** Draw everything that changes: links, gates, lights, pulses and the browser. */
+/** Draw what changes only when a link comes up or drops: links, gates, lights and the browser. */
 export function drawLinks(sink: DotSink, scene: Scene, states: LinkState[]): void {
-	const gate = scene.width * 0.0085;
+	const gate = scene.width * GATE;
 	scene.leaves.forEach((leaf, index) => {
 		const { start, end } = linkEnds(scene, leaf);
-		const { progress, pulse } = states[index];
-		drawLink(sink, { from: start, to: end, progress, pulse, color: WORLD_COLOR[leaf.kind], gate });
+		drawLink(sink, { from: start, to: end, progress: states[index].progress, color: WORLD_COLOR[leaf.kind], gate });
 	});
 
 	const { start, end } = browserEnds(scene);
-	drawLink(sink, { from: start, to: end, progress: 1, pulse: -1, color: WORLD_COLOR.host, gate });
+	drawLink(sink, { from: start, to: end, progress: 1, color: WORLD_COLOR.host, gate });
 	craft(sink, [scene.browser.x, scene.browser.y], scene.width * 0.011);
+}
+
+/** How far along a link of `reach` the light is after `seconds`: out and back at constant speed, like a ball. */
+export function bouncePosition(
+	reach: number,
+	seconds: number,
+	speed: number,
+): { distance: number; isForward: boolean } {
+	const cycle = reach * 2;
+	const travelled = (seconds * speed) % cycle;
+	const isForward = travelled <= reach;
+	return { distance: isForward ? travelled : cycle - travelled, isForward };
+}
+
+const BOUNCER = mix(BLUE, LIGHT, 0.55);
+
+/**
+ * The light that bounces between the two ends of every link that is up, flashing the gate it reaches.
+ * `live[i]` is how many seconds link i has been up, negative while it is down; the last entry is the
+ * browser's link. Cheap enough to redraw every frame on its own layer.
+ */
+export function drawBounce(sink: DotSink, scene: Scene, live: number[]): void {
+	const gate = scene.width * GATE;
+	const speed = scene.width * BOUNCE_SPEED;
+	const ends = [...scene.leaves.map((leaf) => linkEnds(scene, leaf)), browserEnds(scene)];
+	ends.forEach(({ start, end }, index) => {
+		if (!(live[index] >= 0)) return;
+
+		const { direction, length } = towards(start, end);
+		const reach = length - gate * 2;
+		if (reach <= 0) return;
+
+		const { distance, isForward } = bouncePosition(reach, live[index], speed);
+		const at = (along: number): Point => [
+			start[0] + direction[0] * (gate + along),
+			start[1] + direction[1] * (gate + along),
+		];
+
+		// Each gate lights up as the light arrives at it and fades as it leaves.
+		const [near, far] = [Math.max(0, 1 - distance / FLASH_REACH), Math.max(0, 1 - (reach - distance) / FLASH_REACH)];
+		if (near > 0) sink.glow(...start, PITCH * 5, BLUE, 0.6 * near);
+		if (far > 0) sink.glow(...end, PITCH * 3.5, BLUE, 0.6 * far);
+
+		for (let trail = TRAIL_DOTS; trail >= 1; trail--) {
+			const behind = distance + (isForward ? -1 : 1) * trail * PITCH * 1.4;
+			if (behind < 0 || behind > reach) continue;
+			sink.dot(...at(behind), 1.7 * (1 - trail / (TRAIL_DOTS + 2)), BLUE, 0.9 * (1 - trail / (TRAIL_DOTS + 1)));
+		}
+		const [x, y] = at(distance);
+		sink.glow(x, y, PITCH * 6, BLUE, 0.6);
+		sink.dot(x, y, 2.2, BOUNCER, 1);
+	});
 }
 
 /** Label positions in device pixels. Text is monospace, so widths are exact: 0.6 em per character. */
