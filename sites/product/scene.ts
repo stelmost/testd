@@ -105,7 +105,7 @@ const SEAL_EVERY = 16;
 const LIVE_AT = 0.98;
 /* Gate ring radius, and the speed of the light bouncing along each link, both in canvas widths. */
 const GATE = 0.0085;
-const BOUNCE_SPEED = 0.2;
+const BOUNCE_SPEED = 0.1;
 const TRAIL_DOTS = 8;
 const FLASH_REACH = PITCH * 9;
 
