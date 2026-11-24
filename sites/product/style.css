@@ -317,10 +317,6 @@ th,
 	border: 1px solid var(--line);
 }
 
-.command-install[hidden] {
-	display: none;
-}
-
 .actions {
 	display: flex;
 	flex-wrap: wrap;

@@ -133,19 +133,6 @@ function setupHeroInstall(): void {
 		heroDownload.href = guiLink.href;
 		heroDownload.textContent = guiLink.textContent;
 	}
-
-	if (os !== 'windows') return;
-
-	const cliBar = document.querySelector<HTMLElement>('[data-hero-cli]');
-	const cliAlt = document.querySelector<HTMLElement>('[data-hero-cli-alt]');
-	const cliAltLink = document.querySelector<HTMLAnchorElement>('[data-hero-cli-download]');
-	const windowsCliLink = panel?.querySelector<HTMLAnchorElement>('.downloads .button-quiet');
-	if (cliBar) cliBar.hidden = true;
-	if (cliAlt && cliAltLink && windowsCliLink) {
-		cliAltLink.href = windowsCliLink.href;
-		cliAltLink.textContent = windowsCliLink.textContent;
-		cliAlt.hidden = false;
-	}
 }
 
 function setupLightbox(): void {
