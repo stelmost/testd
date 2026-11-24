@@ -3,10 +3,13 @@
 	<url><loc>https://testd.dev/</loc></url>
 	<url><loc>https://testd.dev/docs/</loc></url>
 	<url><loc>https://testd.dev/docs/quickstart.html</loc></url>
-	<url><loc>https://testd.dev/docs/desktop.html</loc></url>
-	<url><loc>https://testd.dev/docs/usage.html</loc></url>
-	<url><loc>https://testd.dev/docs/advanced.html</loc></url>
+	<url><loc>https://testd.dev/docs/host.html</loc></url>
+	<url><loc>https://testd.dev/docs/system.html</loc></url>
+	<url><loc>https://testd.dev/docs/local.html</loc></url>
+	<url><loc>https://testd.dev/docs/remote.html</loc></url>
+	<url><loc>https://testd.dev/docs/sharing.html</loc></url>
 	<url><loc>https://testd.dev/docs/reference.html</loc></url>
+	<url><loc>https://testd.dev/docs/troubleshooting.html</loc></url>
 	<url><loc>https://testd.dev/docs/security.html</loc></url>
 	<url><loc>https://testd.dev/docs/developers/</loc></url>
 	<url><loc>https://testd.dev/docs/developers/testing.html</loc></url>

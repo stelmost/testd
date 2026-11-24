@@ -19,11 +19,14 @@ No Caddy, no per-project `/etc/hosts` edits, and no per-project certificates. A 
 
 ## Documentation
 
-- [Quickstart](docs/quickstart.md): install, first host, first name
-- [Desktop app](docs/desktop.md): tray app install, guided setup, menu actions, notifications, launch at login
-- [Daily usage](docs/usage.md): names, dashboard, sharing, access, troubleshooting
-- [Advanced usage](docs/advanced.md): remote leaves, profiles, quick launches, tunnels, external fronts
-- [Reference](docs/reference.md): commands, configuration, files, endpoints, limits
+- [Quickstart](docs/quickstart.md): install the desktop app or CLI, set up your host, open your first name
+- [Running the host](docs/host.md): desktop tray app, guided setup, headless daemon, and the dashboard
+- [Local apps](docs/local.md): `testd run`, naming rules, lifetimes, and quick launches
+- [Remote & SSH](docs/remote.md): SSH apps, direct remote leaves, pairing, grants, and profiles
+- [Sharing & tunnels](docs/sharing.md): share live names over `cloudflared`, `ngrok`, or `tailscale`
+- [System integration](docs/system.md): privileged ports, DNS, PKI, external fronts, and uninstall
+- [CLI & configuration](docs/reference.md): commands, configuration, files, endpoints, limits
+- [Troubleshooting](docs/troubleshooting.md): `testd doctor`, tray alerts, common fixes, and diagnostics
 - [Security](docs/security.md): trust boundaries, credentials, exposure, hardening
 
 The same pages are published at <https://testd.dev/docs/>. The product site lives at <https://testd.dev>.
@@ -65,7 +68,7 @@ Download the package for your platform from [GitHub Releases](https://github.com
 - **Linux (`x86_64`, GNU libc):** `Testd_<version>_x64.deb` (`sudo apt install ./Testd_<version>_x64.deb`) or `Testd_<version>_x64.AppImage`
 - **Windows (`x64`):** `Testd_<version>_x64-setup.exe` (per-user installer)
 
-See [docs/desktop.md](docs/desktop.md) for guided setup, tray actions, and Linux port 443 permissions.
+See [Running the host](docs/host.md) for guided setup, tray actions, and [Privileged ports](docs/system.md#privileged-ports) for Linux port 443 permissions.
 
 ### CLI (`testd`)
 
@@ -137,11 +140,11 @@ testd run 10.0.0.5:myapp:3000 -- npm run dev   # custom target host
 
 ## Remote dev environments
 
-If you reach your dev machine over SSH, forward the app and open its `.test` URL on the machine running testd. [SSH forwarding](docs/advanced.md#ssh-forwarding)
+If you reach your dev machine over SSH, forward the app and open its `.test` URL on the machine running testd. [SSH apps & forwarding](docs/remote.md#ssh-apps)
 
 Paired leaves use TLS 1.3 for registration and token issuance. Pair each host before sending credentials; application requests then use mutual TLS between the host and a connection-scoped leaf forwarder. The dev server can remain HTTP on the leaf. Do not expose port 7737 to the public internet.
 
-The host intake defaults to loopback. For a remote leaf, configure a reachable `[host] listen_addr` and restrict access; see [Advanced usage](docs/advanced.md#remote-development).
+The host intake defaults to loopback. For a remote leaf, configure a reachable `[host] listen_addr` and restrict access; see [Remote & SSH](docs/remote.md#direct-remote-leaves).
 
 From the VM, container, or WSL instance, pair once, then run:
 

@@ -2251,9 +2251,9 @@ quick_launch_diagnostics fixture
 			('tests/check-links.ts', (False, True, True)),
 			('tests/ci-changes.sh', (False, True, True)),
 			('install.sh', (False, True, True)),
-			('docs/usage.md', (False, False, True)),
+			('docs/host.md', (False, False, True)),
 			('.github/workflows/ci.yml', (True, True, True)),
-			('README.md\ndocs/usage.md', (True, False, True)),
+			('README.md\ndocs/host.md', (True, False, True)),
 			('unrelated.txt', (False, False, False)),
 		)
 		with tempfile.TemporaryDirectory() as directory:
