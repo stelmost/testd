@@ -1,4 +1,5 @@
 import './style.css';
+import { highlightShell } from './highlight';
 import { mountLease } from './lease';
 import { mountLimb } from './limb';
 
@@ -121,6 +122,7 @@ function setupTabs(): void {
 	});
 }
 
+document.querySelectorAll<HTMLElement>('[data-shell]').forEach(highlightShell);
 setupCopyButtons();
 setupTabs();
 

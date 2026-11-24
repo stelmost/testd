@@ -2,18 +2,36 @@
 @import '@fontsource-variable/jetbrains-mono';
 
 /*
-	Elmo St. identity: Night ground, Light words. Blue and amber are lights, not colours: they
-	appear only in the diagram, the studio lockup, and nowhere as fills, links, or themes.
+	Elmo St. identity on a product page: Night ground, Light words, St. Elmo blue and amber for the
+	lights, widened so a page you read and work from is comfortable. Surfaces step up from the ground
+	in cool tints; three muted hues colour the worlds and the code.
 */
 :root {
 	color-scheme: dark;
-	--night: #05070b;
-	--light: #ecf2f9;
-	--light-dim: rgb(236 242 249 / 56%);
-	--rule: rgb(236 242 249 / 14%);
-	--wash: rgb(236 242 249 / 4%);
+
+	/* Surfaces, darkest to lightest */
+	--ground: #05070b;
+	--inset: #070b11;
+	--raised: #0a0f17;
+	--line: rgb(236 242 249 / 11%);
+	--line-strong: rgb(236 242 249 / 22%);
+
+	/* Text tiers */
+	--text: #ecf2f9;
+	--text-2: rgb(236 242 249 / 78%);
+	--text-3: rgb(236 242 249 / 56%);
+
+	/* Lights and interaction */
 	--blue: #5ce1ff;
+	--link: #8fddf0;
 	--amber: #ff7828;
+	--amber-soft: #ffb27f;
+
+	/* Muted hues: worlds, code, markers */
+	--teal: #5bb5aa;
+	--violet: #9c92d8;
+	--sand: #d2b98f;
+
 	--serif: 'Alegreya Variable', Alegreya, Georgia, serif;
 	--mono: 'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
 	--gutter: 13rem;
@@ -27,7 +45,7 @@
 }
 
 html {
-	background: var(--night);
+	background: var(--ground);
 	-webkit-text-size-adjust: 100%;
 }
 
@@ -40,14 +58,14 @@ html {
 body {
 	margin: 0;
 	min-height: 100vh;
-	background: var(--night);
-	color: var(--light);
+	background: var(--ground);
+	color: var(--text);
 	font: 1.1875rem/1.6 var(--serif);
 }
 
 ::selection {
-	background: var(--light);
-	color: var(--night);
+	background: var(--text);
+	color: var(--ground);
 }
 
 h1,
@@ -66,17 +84,18 @@ h2 {
 }
 
 a {
-	color: inherit;
+	color: var(--link);
 	text-decoration-thickness: 1px;
 	text-underline-offset: 0.2em;
 }
 
 a:hover {
+	color: var(--blue);
 	text-decoration-thickness: 2px;
 }
 
 :focus-visible {
-	outline: 2px solid var(--light);
+	outline: 2px solid var(--blue);
 	outline-offset: 3px;
 }
 
@@ -101,17 +120,17 @@ th,
 	font: 0.75rem/1.6 var(--mono);
 	letter-spacing: 0.21em;
 	text-transform: uppercase;
-	color: var(--light-dim);
+	color: var(--text-3);
 }
 
 .meta {
 	font: 0.8125rem/1.6 var(--mono);
-	color: var(--light-dim);
+	color: var(--text-3);
 }
 
 .note {
 	font-size: 1rem;
-	color: var(--light-dim);
+	color: var(--text-2);
 }
 
 .skip-link {
@@ -120,8 +139,8 @@ th,
 	left: 1rem;
 	z-index: 10;
 	padding: 0.6rem 1rem;
-	background: var(--light);
-	color: var(--night);
+	background: var(--text);
+	color: var(--ground);
 }
 
 .skip-link:focus {
@@ -143,6 +162,7 @@ th,
 	display: inline-flex;
 	align-items: center;
 	gap: 0.6rem;
+	color: var(--text);
 	font: 600 1.0625rem/1 var(--mono);
 	letter-spacing: 0.04em;
 	text-decoration: none;
@@ -161,22 +181,34 @@ th,
 }
 
 .site-nav a {
-	color: var(--light-dim);
+	color: var(--text-2);
 	text-decoration: none;
 }
 
 .site-nav a:hover {
-	color: var(--light);
+	color: var(--text);
 	text-decoration: underline;
 }
 
 /* Hero */
 
 .hero {
+	position: relative;
+	isolation: isolate;
 	display: grid;
 	align-items: center;
 	gap: clamp(2rem, 5vw, 3.5rem);
 	padding-block: clamp(2rem, 6vw, 4.5rem) clamp(2.5rem, 6vw, 4rem);
+}
+
+/* A faint blue haze behind the worlds, like the glow of the host's atmosphere. */
+.hero::before {
+	content: '';
+	position: absolute;
+	inset: -10% 0 -10% 25%;
+	z-index: -1;
+	background: radial-gradient(55% 60% at 35% 60%, rgb(92 225 255 / 7%), transparent 72%);
+	pointer-events: none;
 }
 
 @media (min-width: 62rem) {
@@ -208,8 +240,8 @@ th,
 	gap: 0.75rem;
 	margin-top: 1.75rem;
 	padding: 0.6rem 0.6rem 0.6rem 1rem;
-	border: 1px solid var(--rule);
-	background: var(--wash);
+	border: 1px solid var(--line);
+	background: var(--inset);
 	font-size: 0.9375rem;
 }
 
@@ -220,7 +252,7 @@ th,
 
 .command-prompt {
 	font-family: var(--mono);
-	color: var(--light-dim);
+	color: var(--text-3);
 }
 
 .actions {
@@ -234,16 +266,31 @@ th,
 .button {
 	display: inline-block;
 	padding: 0.7rem 1.6rem;
-	border: 1px solid var(--light);
-	background: var(--light);
-	color: var(--night);
+	border: 1px solid var(--blue);
+	background: var(--blue);
+	color: var(--ground);
 	font-weight: 600;
 	text-decoration: none;
 }
 
 .button:hover {
 	background: transparent;
-	color: var(--light);
+	color: var(--blue);
+}
+
+/* Version and status chips in the hero's meta line */
+
+.chip {
+	display: inline-block;
+	padding: 0 0.55rem;
+	border: 1px solid var(--line-strong);
+	border-radius: 2px;
+	color: var(--text-2);
+}
+
+.chip-alpha {
+	border-color: rgb(255 178 127 / 50%);
+	color: var(--amber-soft);
 }
 
 /* Lease diagram */
@@ -289,7 +336,7 @@ html:not(.js) .lease {
 	gap: 0.75rem 1.5rem;
 	margin-top: 0.5rem;
 	padding-top: 0.9rem;
-	border-top: 1px solid var(--rule);
+	border-top: 1px solid var(--line);
 }
 
 .lease-status {
@@ -297,14 +344,14 @@ html:not(.js) .lease {
 	min-height: 3.2em;
 	max-width: 30rem;
 	font: 0.8125rem/1.6 var(--mono);
-	color: var(--light-dim);
+	color: var(--text-2);
 }
 
 .lease-toggle,
 .copy-button {
-	border: 1px solid var(--rule);
+	border: 1px solid var(--line-strong);
 	background: transparent;
-	color: var(--light-dim);
+	color: var(--text-2);
 	font: 0.6875rem/1.3 var(--mono);
 	letter-spacing: 0.15em;
 	text-transform: uppercase;
@@ -313,24 +360,27 @@ html:not(.js) .lease {
 
 .lease-toggle {
 	padding: 0.6rem 0.85rem;
-	border-color: var(--light-dim);
-	color: var(--light);
+	color: var(--text);
 	text-align: left;
 }
 
 .lease-toggle:hover,
 .copy-button:hover {
-	border-color: var(--light);
-	color: var(--light);
+	border-color: var(--blue);
+	color: var(--blue);
 }
 
-/* "No ..." band */
+/* Full-bleed bands lift a section one surface above the ground. */
+
+.band {
+	border-block: 1px solid var(--line);
+	background: var(--raised);
+}
 
 .skips {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
 	padding: 0;
-	border-block: 1px solid var(--rule);
 	list-style: none;
 }
 
@@ -339,6 +389,19 @@ html:not(.js) .lease {
 	align-items: baseline;
 	gap: 0.85rem;
 	padding: 1.1rem 1.5rem 1.1rem 0;
+}
+
+.skips .label {
+	color: var(--teal);
+}
+
+.install-band {
+	margin-top: clamp(4rem, 9vw, 7rem);
+	padding-bottom: clamp(3rem, 6vw, 5rem);
+}
+
+.install-band .section {
+	padding-top: clamp(3rem, 6vw, 5rem);
 }
 
 /* Sections and plates */
@@ -355,19 +418,19 @@ html:not(.js) .lease {
 .section-lede {
 	max-width: var(--measure);
 	margin-top: 1rem;
-	color: var(--light-dim);
+	color: var(--text-2);
 }
 
 .plates {
 	margin-top: clamp(1.75rem, 3vw, 2.5rem);
-	border-top: 1px solid var(--rule);
+	border-top: 1px solid var(--line);
 }
 
 .plate {
 	display: grid;
 	gap: 0.6rem 3rem;
 	padding-block: 1.6rem;
-	border-bottom: 1px solid var(--rule);
+	border-bottom: 1px solid var(--line);
 }
 
 @media (min-width: 52rem) {
@@ -401,15 +464,15 @@ html:not(.js) .lease {
 	left: 0;
 	width: 0.75rem;
 	height: 1px;
-	background: var(--light-dim);
+	background: var(--text-3);
 }
 
 /* Code */
 
 .code {
 	position: relative;
-	border: 1px solid var(--rule);
-	background: var(--wash);
+	border: 1px solid var(--line);
+	background: var(--inset);
 }
 
 .code pre {
@@ -434,8 +497,26 @@ html:not(.js) .lease {
 	padding: 0.45rem 0.6rem;
 }
 
+/* Shell highlighting: the command, its subcommand, flags, and values such as hosts and paths. */
+
 .comment {
-	color: var(--light-dim);
+	color: var(--text-3);
+}
+
+.tok-command {
+	color: var(--text);
+}
+
+.tok-sub {
+	color: var(--sand);
+}
+
+.tok-flag {
+	color: var(--teal);
+}
+
+.tok-value {
+	color: var(--violet);
 }
 
 /* Tables */
@@ -462,28 +543,34 @@ caption {
 
 th {
 	padding: 0.5rem 1.25rem 0.5rem 0;
-	border-bottom: 1px solid var(--rule);
+	border-bottom: 1px solid var(--line-strong);
 	font-weight: 400;
 	text-align: left;
 }
 
 td {
 	padding: 0.6rem 1.25rem 0.6rem 0;
-	border-bottom: 1px solid var(--rule);
+	border-bottom: 1px solid var(--line);
 	vertical-align: top;
 }
 
-/* Dashboard screenshot */
+/* Dashboard screenshot: the real, light UI, mounted on a raised frame so it sits calmly on the dark page. */
+
+.shot {
+	padding: 0.75rem;
+	border: 1px solid var(--line);
+	background: var(--raised);
+}
 
 .shot img {
 	display: block;
 	width: 100%;
 	height: auto;
-	border: 1px solid var(--rule);
+	border-radius: 2px;
 }
 
 .shot figcaption {
-	margin-top: 0.6rem;
+	margin-top: 0.75rem;
 }
 
 /* Install */
@@ -492,7 +579,7 @@ td {
 	display: flex;
 	gap: 2rem;
 	margin-top: 2rem;
-	border-bottom: 1px solid var(--rule);
+	border-bottom: 1px solid var(--line);
 }
 
 .tabs [role='tab'] {
@@ -505,12 +592,12 @@ td {
 }
 
 .tabs [role='tab']:hover {
-	color: var(--light);
+	color: var(--text);
 }
 
 .tabs [aria-selected='true'] {
-	border-bottom-color: var(--light);
-	color: var(--light);
+	border-bottom-color: var(--blue);
+	color: var(--text);
 }
 
 [role='tabpanel'] .plates {
@@ -518,14 +605,13 @@ td {
 	border-top: 0;
 }
 
+/* The unsigned-alpha notice is the one caution on the page, so it carries the amber edge. */
 .install-note {
 	max-width: var(--measure);
 	margin-top: 2rem;
-	color: var(--light-dim);
-}
-
-.install-note a {
-	color: var(--light);
+	padding-left: 1rem;
+	border-left: 2px solid var(--amber);
+	color: var(--text-2);
 }
 
 /* Footer */
@@ -568,6 +654,7 @@ td {
 	display: inline-flex;
 	align-items: center;
 	gap: 1.25rem;
+	color: var(--text);
 	text-decoration: none;
 }
 
@@ -609,7 +696,7 @@ td {
 	display: grid;
 	font: 0.71875rem/1.55 var(--mono);
 	letter-spacing: 0.21em;
-	color: var(--light-dim);
+	color: var(--text-3);
 }
 
 .blue {
@@ -623,6 +710,14 @@ td {
 	font-size: 1.0625rem;
 }
 
+.footer-links a {
+	color: var(--text-2);
+}
+
+.footer-links a:hover {
+	color: var(--text);
+}
+
 /* Copy confirmation */
 
 .toast {
@@ -630,8 +725,8 @@ td {
 	bottom: 1.5rem;
 	left: 50%;
 	padding: 0.6rem 1rem;
-	border: 1px solid var(--light-dim);
-	background: var(--night);
+	border: 1px solid var(--line-strong);
+	background: var(--raised);
 	font: 0.8125rem/1.4 var(--mono);
 	opacity: 0;
 	pointer-events: none;
