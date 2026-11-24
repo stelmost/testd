@@ -8,4 +8,9 @@
 	<url><loc>https://testd.dev/docs/advanced.html</loc></url>
 	<url><loc>https://testd.dev/docs/reference.html</loc></url>
 	<url><loc>https://testd.dev/docs/security.html</loc></url>
+	<url><loc>https://testd.dev/docs/developers/</loc></url>
+	<url><loc>https://testd.dev/docs/developers/testing.html</loc></url>
+	<url><loc>https://testd.dev/docs/developers/release-validation.html</loc></url>
+	<url><loc>https://testd.dev/docs/developers/releasing.html</loc></url>
+	<url><loc>https://testd.dev/docs/developers/dependency-policy.html</loc></url>
 </urlset>

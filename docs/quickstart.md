@@ -72,7 +72,7 @@ Release archives (`testd-<version>-<target>.tar.gz` / `.zip`) and the generated 
 cargo install --path .
 ```
 
-Linux `aarch64` has no prebuilt CLI archive yet; build from source there. See [DEVELOPING.md](https://github.com/stelmost/testd/blob/master/DEVELOPING.md#release) for building and packaging details.
+Linux `aarch64` has no prebuilt CLI archive yet; build from source there. See [Developing](developers/index.md) and [Releasing](developers/releasing.md) for building and packaging details.
 
 ## 2. Set up the host (once)
 

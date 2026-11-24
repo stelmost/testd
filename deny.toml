@@ -2,7 +2,7 @@
 [advisories]
 version = 2
 yanked = "warn"
-# Informational maintenance notices, not vulnerability advisories; see DEVELOPING.md#dependency-policy.
+# Informational maintenance notices, not vulnerability advisories; see docs/developers/dependency-policy.md.
 ignore = [
 	"RUSTSEC-2024-0370", # proc-macro-error: GTK3 build-time macros
 	"RUSTSEC-2026-0370", # zvariant: merged into zbus 6

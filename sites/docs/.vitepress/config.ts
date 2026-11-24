@@ -59,6 +59,17 @@ export default defineConfig({
 					{ text: 'Security', link: '/security' },
 				],
 			},
+			{
+				text: 'Developers',
+				collapsed: true,
+				items: [
+					{ text: 'Overview & build', link: '/developers/' },
+					{ text: 'Testing', link: '/developers/testing' },
+					{ text: 'Release validation', link: '/developers/release-validation' },
+					{ text: 'Releasing', link: '/developers/releasing' },
+					{ text: 'Dependency policy', link: '/developers/dependency-policy' },
+				],
+			},
 		],
 		socialLinks: [{ icon: 'github', link: REPO }],
 		editLink: {
