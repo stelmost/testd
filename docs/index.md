@@ -55,6 +55,13 @@ There are two sides:
 
 If you connect to a remote machine over SSH, you can also skip setting up a network listener altogether and use **SSH apps** right from the dashboard.
 
+## Support and contact
+
+- **Bugs and pull requests:** open an [issue](https://github.com/stelmost/testd/issues) or [pull request](https://github.com/stelmost/testd/pulls) on GitHub
+- **Discord:** join the [Discord server](https://discord.gg/skEnmNGm9G) and ask in `#testd-support`
+- **Email:** [hey@elmo.st](mailto:hey@elmo.st)
+- **Security vulnerabilities:** use [GitHub private vulnerability reporting](https://github.com/stelmost/testd/security/advisories/new) instead of a public issue
+
 ## Source and releases
 
 The source code, changelog, and release archives live at <https://github.com/stelmost/testd>. The product site is at <https://testd.dev>. testd is ISC licensed and has no account, telemetry, public DNS, or ACME dependency.

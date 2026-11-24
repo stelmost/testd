@@ -28,6 +28,13 @@ No Caddy, no per-project `/etc/hosts` edits, and no per-project certificates. A 
 
 The same pages are published at <https://testd.dev/docs/>. The product site lives at <https://testd.dev>.
 
+## Support
+
+- **Bugs and pull requests:** [GitHub issues](https://github.com/stelmost/testd/issues) and [pull requests](https://github.com/stelmost/testd/pulls)
+- **Discord:** [Discord invite](https://discord.gg/skEnmNGm9G) (`#testd-support`)
+- **Email:** <hey@elmo.st>
+- **Security:** [private vulnerability reporting](https://github.com/stelmost/testd/security/advisories/new) (see [SECURITY.md](SECURITY.md))
+
 ## Support matrix
 
 The required first-release targets are exactly:

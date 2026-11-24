@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitepress';
 
 const REPO = 'https://github.com/stelmost/testd';
+const DISCORD = 'https://discord.gg/skEnmNGm9G';
 const SITE = 'https://testd.dev';
 const outDir = process.env.TESTD_SITE_OUT_DIR
 	? `${process.env.TESTD_SITE_OUT_DIR}/docs`
@@ -71,7 +72,10 @@ export default defineConfig({
 				],
 			},
 		],
-		socialLinks: [{ icon: 'github', link: REPO }],
+		socialLinks: [
+			{ icon: 'github', link: REPO },
+			{ icon: 'discord', link: DISCORD },
+		],
 		editLink: {
 			pattern: `${REPO}/edit/master/docs/:path`,
 			text: 'Edit this page',
