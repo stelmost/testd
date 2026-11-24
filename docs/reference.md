@@ -5,7 +5,7 @@ description: 'Commands, configuration keys, files, endpoints, limits, and platfo
 
 # Reference
 
-This page is the lookup guide for every CLI command, flag, environment variable, config key, file path, HTTP endpoint, operational limit, and platform detail in testd. For step-by-step guides, see the [Quickstart](quickstart.md) and [Daily usage](usage.md).
+This page is the lookup guide for every CLI command, flag, environment variable, config key, file path, HTTP endpoint, operational limit, and platform detail in testd. For task guides, see [Quickstart](quickstart.md), [Running the host](host.md), [Local apps](local.md), and [Remote & SSH](remote.md).
 
 ## Concepts
 
@@ -381,19 +381,4 @@ All providers require the plain HTTP routing listener. The provider hostname is 
 - Firefox: may use its own trust store. The dashboard checks an HTTPS connection from Firefox separately from system trust, shows root import instructions if the check fails, and checks again on focus or with **Check again**. DNS or connectivity failures can also leave Firefox trust unconfirmed.
 - Caddy: optional. The built-in edge needs no external front.
 
-## Troubleshooting by layer
-
-| Check | Command or observation |
-|---|---|
-| Configuration present | `testd doctor`; first check is `config` |
-| Operator secret set | `doctor` check `secret` |
-| Resolver route | `doctor` check `resolver` |
-| Name resolves through the OS | `doctor` check `resolution` |
-| PKI can issue a leaf | `doctor` check `pki`, with the built-in edge enabled |
-| Root trusted | `doctor` check `certificate`, with the built-in edge enabled |
-| Edge listening and trusted | `doctor` check `edge` |
-| Optional Caddy wiring | `doctor` checks `caddy`, `caddyfile`, `reload` |
-| Live names and targets | `curl -H "Authorization: Bearer <dashboard_token>" http://127.0.0.1:7737/api/status` |
-| Pending requests | `testd requests` |
-| Issued tokens | `testd tokens` |
-| Shares and URLs | `testd share --list` |
+For diagnostic commands and common fixes, see [Troubleshooting](troubleshooting.md).

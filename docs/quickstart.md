@@ -1,6 +1,6 @@
 ---
 title: Quickstart
-description: 'From a clean machine to a working HTTPS name: install, first host, first registration.'
+description: 'Install testd, set up your host with the desktop app or CLI, and open your first HTTPS name.'
 ---
 
 # Quickstart
@@ -13,7 +13,7 @@ Your **host** is the machine with the browser. Your project can run on that same
 browser
   │  DNS: app.example.test → host
   ▼
-host machine (testd host)
+host machine (desktop app or testd host)
   ├─ local DNS for *.test
   ├─ HTTPS edge on :443
   └─ reverse proxy → your app
@@ -23,87 +23,105 @@ leaf (local machine, VM, container, WSL, or remote box)
   └─ testd run
 ```
 
-The browser only ever talks to the host. The host terminates HTTPS and forwards traffic to the app. For remote leaves, traffic between the host and the leaf uses mutual TLS, while the last hop from the leaf to your dev server stays plain local HTTP.
+The browser only ever talks to the host. The host terminates HTTPS and forwards traffic to the app.
 
 ## 1. Install testd
 
-testd ships as two separate binaries that share the same configuration, CA, and dashboard:
+testd ships as two binaries that share the same config directory, local CA, and dashboard:
 
-- **Desktop app (GUI):** runs the host daemon from your system tray or menu bar and guides first-run setup in your browser. Best for your **host** machine (macOS, Windows, desktop Linux).
-- **CLI (`testd`):** runs `testd run` in local terminals or remote dev boxes (VMs, containers, WSL, SSH servers), and can also run the host headlessly (`testd host`).
+- **Desktop app (GUI):** runs the host daemon from your system tray or menu bar with guided first-run setup in your browser. Best for your **host** machine.
+- **CLI (`testd`):** registers projects with `testd run` from local terminals or remote dev boxes (VMs, containers, WSL, SSH servers), and can also run the host headlessly (`testd host`).
 
-You can install both on your host machine: the desktop app runs the host daemon while `testd` registers projects from your terminal.
+You can install both on your host machine: the desktop app runs the host while `testd` registers projects from your terminal. Always verify `SHA256SUMS` from [GitHub Releases](https://github.com/stelmost/testd/releases) before installing a downloaded package.
 
-### Desktop app (GUI)
+<DocTabs :labels="['Desktop app (GUI)', 'CLI (Linux / macOS)', 'CLI (Windows)', 'From source']">
+<template #tab-0>
 
-Download the package for your platform from [GitHub Releases](https://github.com/stelmost/testd/releases) and verify `SHA256SUMS` before installing:
+Download the package for your platform from [GitHub Releases](https://github.com/stelmost/testd/releases):
 
 | Platform | Package | Install |
 |---|---|---|
-| macOS (Apple Silicon) | `Testd_<version>_aarch64.dmg` | Open the `.dmg` and drag `Testd.app` into Applications |
+| macOS (Apple Silicon) | `Testd_<version>_aarch64.dmg` | Open the `.dmg` and drag `Testd.app` into Applications (macOS 13+) |
 | macOS (Intel, best effort) | `Testd_<version>_x64.dmg` | Open the `.dmg` and drag `Testd.app` into Applications |
 | macOS (Homebrew) | `testd-gui.rb` from the release | `brew install --cask ./testd-gui.rb` |
 | Linux (`x86_64`, GNU libc) | `Testd_<version>_x64.deb` or `.AppImage` | `sudo apt install ./Testd_<version>_x64.deb` or `chmod +x` and run the `.AppImage` |
 | Windows (`x64`) | `Testd_<version>_x64-setup.exe` | Run the per-user installer |
 
-Early alpha desktop bundles are unsigned; macOS and Windows may ask you to confirm opening the app. See [Desktop app](desktop.md#install) for platform notes and Linux port 443 permissions.
+The desktop app only includes the tray/host binary (`testd-gui`); install the CLI too if you want `testd run` in your terminal. Early alpha bundles are unsigned, so macOS and Windows may ask you to confirm opening the app.
 
-### CLI (`testd`)
+On Linux, binding port `443` needs `CAP_NET_BIND_SERVICE` on the tray binary (`sudo setcap 'cap_net_bind_service=+ep' /path/to/testd-gui`, not an AppImage wrapper) or a high `edge_addr` like `127.0.0.1:8443`. See [Privileged ports](system.md#privileged-ports).
 
-**Linux and macOS (installer script):**
+</template>
+<template #tab-1>
+
+Run the installer script:
 
 ```sh
 curl -fsSL https://testd.dev/install.sh | sh
 ```
 
-The script downloads the latest release, verifies `SHA256SUMS`, and installs `testd` into `~/.local/bin` (override with `TESTD_INSTALL_DIR`). To pin a specific version, set `TESTD_VERSION` without the leading `v` (for example `TESTD_VERSION='0.1.0-alpha.1'`). On Linux `x86_64`, it picks GNU libc (`x86_64-unknown-linux-gnu`) when detected and static musl (`x86_64-unknown-linux-musl`) otherwise; set `TESTD_LIBC=gnu` or `TESTD_LIBC=musl` to choose explicitly.
+The script downloads the latest release, verifies `SHA256SUMS`, and installs `testd` into `~/.local/bin` (override with `TESTD_INSTALL_DIR`). To pin a version, set `TESTD_VERSION` without the leading `v` (for example `TESTD_VERSION='0.1.0-alpha.1'`). On Linux `x86_64`, it picks GNU libc when detected and static musl otherwise; set `TESTD_LIBC=gnu` or `TESTD_LIBC=musl` to choose explicitly.
 
-**Windows (`x64`):**
+You can also download the release `.tar.gz` archive manually or install the generated Homebrew formula attached to each release (`brew install --formula ./testd.rb`). Linux `aarch64` has no prebuilt archive yet; build from source there.
 
-Download `testd-<version>-x86_64-pc-windows-msvc.zip` and `SHA256SUMS` from [GitHub Releases](https://github.com/stelmost/testd/releases), verify the checksum (`certutil -hashfile <zip> SHA256` or `Get-FileHash`), and extract `testd.exe` to a directory on your `PATH`. The Windows CLI links the MSVC runtime statically and needs no separate Visual C++ redistributable.
+</template>
+<template #tab-2>
 
-**Manual archive or Homebrew:**
+Download `testd-<version>-x86_64-pc-windows-msvc.zip` and `SHA256SUMS` from [GitHub Releases](https://github.com/stelmost/testd/releases).
 
-Release archives (`testd-<version>-<target>.tar.gz` / `.zip`) and the generated Homebrew formula (`testd.rb`, which builds from the release source tarball via `brew install --formula ./testd.rb`) are attached to each [GitHub Release](https://github.com/stelmost/testd/releases). Always verify `SHA256SUMS` before installing.
+Verify the checksum with `certutil -hashfile <zip> SHA256` or `Get-FileHash`, then extract `testd.exe` to a directory on your `PATH`. The Windows CLI links the MSVC runtime statically and needs no separate Visual C++ redistributable.
 
-**From source (Rust 1.90+):**
+</template>
+<template #tab-3>
+
+Requires Rust 1.90+:
 
 ```sh
 cargo install --path .
 ```
 
-Linux `aarch64` has no prebuilt CLI archive yet; build from source there. See [Developing](developers/index.md) and [Releasing](developers/releasing.md) for building and packaging details.
+See [Developing](developers/index.md) and [Releasing](developers/releasing.md) for building and packaging details, including the desktop app.
 
-## 2. Set up the host (once)
+</template>
+</DocTabs>
 
-**With the desktop app:** Launch Testd. On first run it opens a guided setup page in your default browser to configure the `.test` DNS resolver, install the local root certificate, and review or edit the generated operator secret. Click **Finish setup** to start the daemon and open the dashboard, then skip ahead to [Register your first name](#_4-register-your-first-name). See [First-run setup](desktop.md#first-run-setup) for details.
+## 2. Set up and start the host
 
-**With the CLI:** Run these two commands on the machine with your browser:
+Choose either the desktop app or the CLI on your browser machine (only one host daemon can run at a time):
+
+<DocTabs :labels="['Desktop app (GUI)', 'Headless CLI']">
+<template #tab-0>
+
+1. Launch **Testd**. On first run it opens a guided setup page in your default browser.
+2. Complete **DNS resolver** and **Certificate authority** (both prompt for administrator privileges) and review the generated operator secret.
+3. Click **Finish setup**. testd writes your config, starts the host daemon in your tray or menu bar, and opens the dashboard.
+
+See [Running the host](host.md#first-run-setup) for full setup and tray details.
+
+</template>
+<template #tab-1>
+
+Initialize the host config, local CA, and system integration once:
 
 ```sh
 testd init
 testd doctor --fix
 ```
 
-`testd init` is safe to run again at any time. It:
+`testd init` is idempotent: it creates `config.toml` (`0600`), generates the local CA under `pki/`, writes an operator secret, detects Caddy if present, and installs root trust interactively (or with `--yes`). `testd doctor --fix` sets up both the `.test` resolver and root trust right away (requires administrator privileges).
 
-1. Creates `~/.config/testd/config.toml` (mode `0600`, or `%APPDATA%\testd\config.toml` on Windows).
-2. Generates a local root CA and host intermediate certificate under `~/.config/testd/pki/`.
-3. Writes an operator secret to `[host] secret`.
-4. Detects an existing Caddy installation and offers to wire up the managed Caddyfile.
-5. Installs the root certificate into your system trust store when running interactively (or with `--yes`).
-
-By default, `testd init` waits to configure the OS `.test` DNS resolver until the first remote client connects. Running `testd doctor --fix` sets up both the `.test` resolver and root certificate trust right away (this requires administrator privileges).
-
-## 3. Start the host daemon
-
-If you finished setup in the desktop app, the daemon is already running in your tray or menu bar. Otherwise, start it from the CLI:
+Then start the host daemon in a terminal (or configure a system service under [Running the host](host.md#headless-cli-and-system-services)):
 
 ```sh
 testd host
 ```
 
-Leave this running in a terminal (or use the [desktop app](desktop.md) / a system service). The daemon opens these local listeners:
+Run `testd dashboard` in another terminal to print the authenticated dashboard URL. On Linux, binding port `443` requires `CAP_NET_BIND_SERVICE` or a high `edge_addr`; see [Privileged ports](system.md#privileged-ports).
+
+</template>
+</DocTabs>
+
+The running daemon opens these local listeners by default:
 
 | Listener | Default | What it does |
 |---|---|---|
@@ -113,19 +131,15 @@ Leave this running in a terminal (or use the [desktop app](desktop.md) / a syste
 | UDP | `127.0.0.1:7753` | Local `.test` DNS on Linux and macOS |
 | UDP | `127.0.0.1:53` | Local `.test` DNS on Windows |
 
-Only one daemon can run at a time; a second instance exits immediately on the instance lock. Run `testd dashboard` in another terminal to print the authenticated dashboard URL.
+## 3. Register your first name
 
-**Linux port 443 note:** Binding port 443 on Linux needs `CAP_NET_BIND_SERVICE`. You can use the root-managed `packaging/systemd/testd@.service`, grant the capability to the `testd` binary yourself, or pick a high port like `127.0.0.1:8443` and include it in browser URLs. See [Privileged ports](advanced.md#privileged-ports).
-
-## 4. Register your first name
-
-In your project directory, point testd at the port your dev server listens on:
+You can publish a local project from the CLI or from the dashboard's **Quick launches** card:
 
 ```sh
 testd run app.example:3000
 ```
 
-You can also let testd infer the name from the folder, wrap your dev command, or register multiple services at once:
+Other common forms:
 
 ```sh
 testd run :3000                              # uses the current folder name
@@ -133,59 +147,26 @@ testd run app.example:3000 -- npm run dev    # name lives as long as the dev ser
 testd run frontend:3000 api:8080 -- npm run dev
 ```
 
-Now open `https://app.example.test` in your browser. Notice you leave `.test` off in the command; the host appends it automatically. Keep `testd run` running: pressing Ctrl+C, exiting the wrapped command, or losing the connection removes the name.
+Open `https://app.example.test` in your browser. Leave `.test` off in the command; the host appends it automatically. Keep `testd run` running: pressing Ctrl+C or exiting the wrapped command removes the name.
 
-**Tip on naming:** Prefer two-label names like `app.example` instead of single-label names like `app`. Two labels give browsers a real registrable domain so cookies behave like `app.example.com` and `api.example.com`. `testd` warns when you use a single-label name.
+**Tip on naming:** Prefer two-label names like `app.example` instead of single-label names like `app` so browsers treat `app.example.test` and `api.example.test` as sharing a registrable domain for cookies.
 
-## 5. Verify everything is green
+## 4. Verify everything is green
+
+- **Desktop app:** the tray icon is normal (no alert badge), and the dashboard's **Certificate** card shows system trust (and Firefox trust when opened in Firefox) as green.
+- **CLI:** run `testd doctor`:
 
 ```sh
 testd doctor
 ```
 
-`doctor` checks configuration, DNS resolution, PKI, root trust, and the HTTPS edge:
-
-- `0`: Everything is ready.
-- `1`: Missing or invalid configuration or state.
-- `2`: DNS resolver route or name resolution problem.
-- `3`: PKI, certificate trust, or HTTPS edge problem.
-
-Add `--json` for scripts, or `--fix` to repair the resolver, Caddyfile import, and root trust.
-
-## Connecting a remote dev box
-
-You have two ways to reach a dev server on another machine:
-
-- **Over SSH (easiest):** Open the dashboard, go to **SSH apps**, enter your SSH host alias, remote port, and local `.test` name, then click **Open**. No network ports need to be opened on your host. See [SSH apps](advanced.md#ssh-apps).
-- **Direct LAN / VM / WSL leaf:** Point a remote `testd` directly at your host over TLS 1.3.
-
-For a direct remote leaf:
-
-1. On the host, set `[host] listen_addr` in `config.toml` to an address the remote machine can reach (by default it only listens on `127.0.0.1`), and restrict port `7737` with your firewall.
-2. On the remote machine, pair once with the host, then run:
-
-```sh
-testd pair <host-lan-ip>
-testd run --host <host-lan-ip> :3000
-```
-
-During `testd pair`, both sides display a verification code. Check that they match in the host's dashboard **Access** card or via `testd requests`, approve pairing on the host, and enter the host's code on the leaf. Pairing saves host trust only; it does not grant publishing access yet.
-
-Next, `testd run` asks for permission to publish its names. Approve that request on the host:
-
-```sh
-testd requests
-testd approve <id>
-```
-
-The leaf saves its issued token and reuses it on future runs. Your app can keep listening on `127.0.0.1` on the remote machine; the leaf forwards traffic to it over local HTTP after authenticating the host over mutual TLS.
-
-The host does need a direct route to the leaf's dynamically allocated TLS ports (pairing does not traverse NAT). Never expose port `7737` to the public internet. See [Remote development](advanced.md#remote-development) and [Security](security.md).
+Exit code `0` means configuration, DNS resolution, PKI, root trust, and the HTTPS edge are all healthy. If anything fails, see [Troubleshooting](troubleshooting.md).
 
 ## Where to go next
 
-- [Desktop app](desktop.md): guided setup, tray menu, icon states, notifications, and launch at login
-- [Daily usage](usage.md): naming rules, the dashboard, SSH apps, sharing with tunnels, access requests, and troubleshooting
-- [Advanced usage](advanced.md): remote leaves, profiles, quick launches, tunnels, external fronts, and system services
-- [Reference](reference.md): every command, option, config key, file, HTTP endpoint, and limit
-- [Security](security.md): trust boundaries, credentials, exposure, and hardening
+- [Running the host](host.md): tray menu, icon states, notifications, launch at login, the web dashboard, and headless services
+- [Local apps](local.md): naming rules, targets, lifetimes, and saved quick launches
+- [Remote & SSH](remote.md): SSH apps from the dashboard, or direct paired leaves for VMs, containers, WSL, and LAN boxes
+- [Sharing & tunnels](sharing.md): share a live name over `cloudflared`, `ngrok`, or `tailscale`
+- [System integration](system.md): privileged ports, DNS, PKI, external fronts (Caddy), and clean uninstall
+- [CLI & configuration](reference.md): every command, flag, config key, file, endpoint, and limit

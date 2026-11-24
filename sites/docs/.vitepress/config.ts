@@ -33,7 +33,7 @@ export default defineConfig({
 		nav: [
 			{ text: 'Product', link: SITE },
 			{ text: 'Quickstart', link: '/quickstart' },
-			{ text: 'Desktop app', link: '/desktop' },
+			{ text: 'Host', link: '/host' },
 			{ text: 'Reference', link: '/reference' },
 			{ text: 'GitHub', link: REPO },
 		],
@@ -43,20 +43,28 @@ export default defineConfig({
 				items: [
 					{ text: 'Overview', link: '/' },
 					{ text: 'Quickstart', link: '/quickstart' },
-					{ text: 'Desktop app', link: '/desktop' },
 				],
 			},
 			{
-				text: 'Use',
+				text: 'Host',
 				items: [
-					{ text: 'Daily usage', link: '/usage' },
-					{ text: 'Advanced usage', link: '/advanced' },
+					{ text: 'Running the host', link: '/host' },
+					{ text: 'System integration', link: '/system' },
+				],
+			},
+			{
+				text: 'Workflows',
+				items: [
+					{ text: 'Local apps', link: '/local' },
+					{ text: 'Remote & SSH', link: '/remote' },
+					{ text: 'Sharing & tunnels', link: '/sharing' },
 				],
 			},
 			{
 				text: 'Reference',
 				items: [
-					{ text: 'Reference', link: '/reference' },
+					{ text: 'CLI & configuration', link: '/reference' },
+					{ text: 'Troubleshooting', link: '/troubleshooting' },
 					{ text: 'Security', link: '/security' },
 				],
 			},
