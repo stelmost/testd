@@ -2940,6 +2940,7 @@ dependencies = [
  "notify-rust",
  "plist",
  "rustls",
+ "semver",
  "serde",
  "serde_json",
  "simple-dns",

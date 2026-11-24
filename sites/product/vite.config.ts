@@ -62,8 +62,14 @@ function publicAssets(): Plugin {
 					res.end(readFileSync(asset.path));
 				});
 			}
+			server.middlewares.use('/update.json', (_req, res) => {
+				res.setHeader('Content-Type', 'application/json');
+				res.setHeader('Cache-Control', 'no-cache');
+				res.end(JSON.stringify({ version: readReleaseVersion() }));
+			});
 		},
 		generateBundle() {
+			this.emitFile({ type: 'asset', fileName: 'update.json', source: JSON.stringify({ version: readReleaseVersion() }) + '\n' });
 			for (const asset of assets) {
 				this.emitFile({ type: 'asset', fileName: asset.fileName, source: readFileSync(asset.path) });
 			}

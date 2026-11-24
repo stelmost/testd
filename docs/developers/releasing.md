@@ -84,7 +84,7 @@ Validate any ad-hoc seal on the final app before producing its DMG, then generat
 
 [Signing and notarization](#signing-and-notarization) is a credentialed reference outside this alpha. [Homebrew](#homebrew) and [Browser validation](release-validation.md#browser-validation) cover their separate checks.
 
-This repository does not ship an updater. Releases are installed by the user: the archive, `brew upgrade`, or the system package manager. The binaries never check for a new version.
+The desktop app and host daemon optionally check for newer releases at startup and daily. Users can disable checks persistently in the dashboard. Releases are installed by the user: the archive, `brew upgrade`, or the system package manager. No running executable is replaced automatically.
 
 A Linux container can build/test the CLI and native tray and run `cargo packager`, but
 cannot produce notarized or Authenticode-signed artifacts.
@@ -106,6 +106,8 @@ The public workflow does not use trusted distribution signing. A tag-push run cr
 Each release attaches an `install.sh` whose default is that release's version. `TESTD_VERSION` overrides the default; an unset or empty value uses the pin. The installer downloads exact-version assets and verifies their checksums without a release-discovery request or GitHub token. The generated installer is included in `SHA256SUMS`, and release notes link to that asset.
 
 The canonical root `install.sh` pins the version offered by `testd.dev`. Its default also supplies the website's version label and checksum link, independently of development Cargo versions. Generating a draft release's installer does not change that default.
+
+The product site generates `/update.json` from that same pin. Publishing the promoted site advertises the release to installed hosts with update checks enabled. Keep the pin on the last published release until the new assets are public; draft and development versions must not appear in this feed.
 
 After publishing and verifying the release assets, generate a replacement from the current installer source. Replace `X.Y.Z` with the published version and use a fresh staging directory. These commands retain the previous installer before replacing it:
 

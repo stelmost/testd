@@ -21,6 +21,7 @@ use crate::tray::{Phase, State, summarize_launches};
 pub enum Command {
 	Activate(Activation),
 	OpenPage,
+	OpenUpdates,
 	EnableAutostart,
 	DisableAutostart,
 	Repair(Action),
@@ -38,6 +39,7 @@ impl Command {
 			"autostart" => Some(if requested_login? { Self::EnableAutostart } else { Self::DisableAutostart }),
 			"quit" => Some(Self::Quit),
 			"dashboard-open" => Some(Self::OpenPage),
+			"updates-open" => Some(Self::OpenUpdates),
 			"setup-dns" => Some(Self::Repair(Action::SetupResolver)),
 			"trust-root" => Some(Self::Repair(Action::TrustRoot)),
 			_ => {
@@ -187,6 +189,7 @@ impl Host {
 			state.launches = summarize_launches(&host.daemon.launches().list());
 			state.tld = host.daemon.tld().to_owned();
 			state.has_request = !host.daemon.pending_requests().is_empty();
+			state.updates = Some(host.daemon.updates().status());
 		}
 		state
 	}
@@ -436,6 +439,19 @@ async fn dispatch(
 	};
 	let daemon = &host.daemon;
 	match command {
+		Command::OpenUpdates => {
+			if let testd_daemon::updates::Check::Available { release } = daemon.updates().status().check {
+				tasks.spawn(async move {
+					tokio::task::spawn_blocking(move || crate::platform::open_browser(&release.url)).await?
+				});
+			} else {
+				let url = host.page.file_url();
+				tasks.spawn(async move { tokio::task::spawn_blocking(move || crate::browser::open(&url)).await? });
+				if daemon.updates().status().enabled {
+					daemon.updates().request_check()?;
+				}
+			}
+		},
 		Command::EnableAutostart => {
 			*autostart = Some(tokio::task::spawn_blocking(crate::platform::enable_autostart).await??);
 		},

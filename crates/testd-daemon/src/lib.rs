@@ -18,3 +18,4 @@ pub mod setup;
 pub mod share;
 pub mod ssh_prompt;
 mod task;
+pub mod updates;

@@ -340,9 +340,12 @@ A cross-site form cannot set that header, and a cross-origin fetch cannot pass t
 | `GET` | `/api/status` | Names, targets, projects, advisories, shares |
 | `GET` | `/ca.crt` | Root certificate PEM |
 | `GET` | `/ok.svg` | Trivial liveness image |
-| `GET` | `/api/local/state` | Live dashboard snapshot: names, shares, launches, requests, tokens |
+| `GET` | `/api/local/state` | Live dashboard snapshot: names, shares, launches, requests, tokens, updates |
 | `GET` | `/api/local/events` | Server-sent snapshot stream for live dashboard updates |
 | `GET` | `/api/local/launches` | Quick launch definitions and running state |
+| `GET` | `/api/local/updates` | Installed version, enabled preference, check state, last check time, and available release |
+| `POST` | `/api/local/updates/check` | Request a release check; refused when checks are disabled |
+| `POST` | `/api/local/updates/preferences` | Persist `{"enabled":true}` or `{"enabled":false}`; disabling cancels an active request |
 | `POST` | `/api/local/launches/save` | Create or update a definition |
 | `POST` | `/api/local/launches/delete` | Delete a definition |
 | `POST` | `/api/local/launches/start` | Start a definition |
@@ -361,7 +364,7 @@ A cross-site form cannot set that header, and a cross-origin fetch cannot pass t
 | `POST` | `/delete/<name>` | Delete one name's grant and stop it |
 | `POST` | `/unshare/<name>` | Stop a name's tunnel |
 
-The dashboard keeps one `/api/local/events` request open and replaces its cards whenever a snapshot arrives. A snapshot is sent on connect, then whenever names, shares, launches, access requests, or tokens change; a comment frame is sent every 15 seconds to detect a dead connection.
+The dashboard keeps one `/api/local/events` request open and replaces its cards whenever a snapshot arrives. A snapshot is sent on connect, then whenever names, shares, launches, access requests, tokens, or update status change; a comment frame is sent every 15 seconds to detect a dead connection.
 
 ## Tunnels
 

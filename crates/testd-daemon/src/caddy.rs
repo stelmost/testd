@@ -92,7 +92,7 @@ fn curl_exit(host: &str, port: u16, insecure: bool) -> Option<i32> {
 		.and_then(|out| out.status.code())
 }
 
-fn curl_binary() -> std::path::PathBuf {
+pub(crate) fn curl_binary() -> std::path::PathBuf {
 	#[cfg(windows)]
 	{
 		// Prefer the inbox Schannel build; PATH may point at a different curl

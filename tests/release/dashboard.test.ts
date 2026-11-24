@@ -5,6 +5,50 @@ function inlineFunction(page: string, name: string, next: string): string {
 }
 
 const dashboard = await Bun.file(new URL('../../crates/testd-daemon/dashboard.html', import.meta.url)).text();
+
+function updateControls() {
+	const elements = new Map<string, any>();
+	const element = (id: string) => {
+		if (!elements.has(id)) elements.set(id, { hidden: false, checked: false, disabled: false, textContent: '', href: '' });
+		return elements.get(id);
+	};
+	const source = dashboard.slice(dashboard.indexOf('function renderUpdates('), dashboard.indexOf('\n\tasync function setUpdatePreference('));
+	const render = new Function('document', `return (${source});`)(
+		{ getElementById: element },
+	);
+	return { element, render };
+}
+
+test('update controls distinguish disabled, failed and available states', () => {
+	const { element, render } = updateControls();
+	const status = { enabled: true, current_version: '0.1.0-alpha.1', state: 'available',
+		release: { version: '0.1.0-alpha.2', url: 'https://github.com/stelmost/testd/releases/tag/v0.1.0-alpha.2' } };
+	render(status);
+	expect(element('update-download').hidden).toBe(false);
+	expect(element('update-download').href).toBe(status.release.url);
+	expect(element('update-detail').textContent).toContain(status.release.version);
+	render({ ...status, enabled: false, state: 'not_checked' });
+	expect(element('update-enabled').checked).toBe(false);
+	expect(element('update-badge').textContent).toBe('Checks disabled');
+	expect(element('update-download').hidden).toBe(true);
+	render({ ...status, state: 'failed', message: 'Request timed out' });
+	expect(element('update-badge').textContent).toBe('Check failed');
+	expect(element('update-detail').textContent).toContain('Request timed out');
+	expect(element('update-download').hidden).toBe(true);
+});
+
+test('the update switch persists its intent through the authenticated preferences endpoint', async () => {
+	const requests: unknown[] = [];
+	const source = dashboard.slice(dashboard.indexOf('async function setUpdatePreference('), dashboard.indexOf('\n\tasync function checkUpdates('));
+	const setPreference = new Function('post', 'renderUpdates', 'notice', 'getJson',
+		`return (${source});`)(
+		async (path: string, body: unknown) => { requests.push({ path, body }); return { enabled: false }; },
+		() => {}, () => {}, () => {},
+	);
+	await setPreference(false);
+	expect(requests).toEqual([{ path: '/api/local/updates/preferences', body: { enabled: false } }]);
+});
+
 const commandSource = dashboard.slice(dashboard.indexOf('function parseCommand('), dashboard.indexOf('\n\tfunction saveLaunch('));
 // Exercise the shipped inline parser, not a copy of its implementation.
 const parseCommand = new Function(`return (${commandSource});`)() as (text: string) => string[];

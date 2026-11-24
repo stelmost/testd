@@ -20,6 +20,7 @@ use crate::launch::LaunchBook;
 use crate::resolver::Resolver;
 use crate::resolver::dns::DnsResolver;
 use crate::share::Front;
+use crate::updates::Updates;
 
 /// A configured, ready-to-run host daemon.
 pub struct Daemon {
@@ -37,6 +38,7 @@ pub struct Daemon {
 	_control: Option<ControlServer>,
 	/// Quick launches owned by this daemon.
 	launches: Arc<LaunchBook>,
+	updates: Arc<Updates>,
 	_tasks: Vec<crate::task::BackgroundTask>,
 	/// Held for the daemon's lifetime; dropping it releases the instance lock.
 	_instance_lock: std::fs::File,
@@ -80,7 +82,9 @@ impl Daemon {
 		let access = Arc::new(Access::load_default()?);
 		let mut engine = HostEngine::new(config.clone(), Arc::clone(&resolver), Arc::clone(&access));
 		let launches = Arc::new(LaunchBook::load()?);
+		let updates = Arc::new(Updates::load()?);
 		engine.set_launches(Arc::clone(&launches));
+		engine.set_updates(Arc::clone(&updates));
 
 		let root = config
 			.edge_enabled
@@ -139,6 +143,8 @@ impl Daemon {
 		// daemon, but never prompt a terminal for `testd host`.
 		tasks.extend(health.start(elevation == Elevation::Gui));
 		tasks.push(spawn_request_notices(Arc::clone(&access), Arc::clone(&health)));
+		tasks.push(spawn_update_notices(Arc::clone(&updates), Arc::clone(&health)));
+		tasks.push(updates.start());
 
 		Ok(Self {
 			engine,
@@ -150,6 +156,7 @@ impl Daemon {
 			access,
 			_control: control,
 			launches,
+			updates,
 			_tasks: tasks,
 			_instance_lock,
 		})
@@ -163,6 +170,11 @@ impl Daemon {
 	/// The daemon's saved quick launches and their live state.
 	pub fn launches(&self) -> Arc<LaunchBook> {
 		Arc::clone(&self.launches)
+	}
+
+	/// Release update status and preferences shown by local frontends.
+	pub fn updates(&self) -> Arc<Updates> {
+		Arc::clone(&self.updates)
 	}
 
 	/// Stop the leaf that publishes one name. Its grant is kept, so a later run
@@ -294,6 +306,26 @@ fn spawn_request_notices(access: Arc<Access>, health: Arc<HealthMonitor>) -> cra
 	}))
 }
 
+fn spawn_update_notices(updates: Arc<Updates>, health: Arc<HealthMonitor>) -> crate::task::BackgroundTask {
+	let mut changes = updates.changes();
+	crate::task::BackgroundTask(tokio::spawn(async move {
+		let mut announced = HashSet::new();
+		while changes.changed().await.is_ok() {
+			let status = changes.borrow_and_update().clone();
+			if status.enabled
+				&& let crate::updates::Check::Available { release } = status.check
+				&& announced.insert(release.version.clone())
+			{
+				health.emit(Notice {
+					title: format!("testd {} is available", release.version),
+					body: "Open Updates in the dashboard or the tray's update item to download the new release.".into(),
+					action: None,
+				});
+			}
+		}
+	}))
+}
+
 impl Drop for Daemon {
 	fn drop(&mut self) {
 		self.resolver.cleanup().ok();
@@ -401,6 +433,7 @@ mod tests {
 			access,
 			_control: None,
 			launches,
+			updates: Arc::new(Updates::load_from(dir.path().join("updates.json")).unwrap()),
 			_tasks: Vec::new(),
 			_instance_lock: std::fs::File::create(dir.path().join("daemon.lock")).unwrap(),
 		};

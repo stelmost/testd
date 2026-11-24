@@ -115,8 +115,17 @@ Inside the dashboard:
 - **Access**: pending remote pairing and publishing requests, with **Approve** and **Deny**
 - **Tokens**: issued leaf tokens, with **Revoke**
 - **Certificate**: system trust status, SHA-256 fingerprint, expiry, install/remove buttons, and a separate Firefox trust check when opened in Firefox
+- **Updates**: installed version, release check status, **Check now**, a persistent **Check for updates** switch, and **Download update** when a newer version is available
 
 The dashboard only responds on loopback (`https://testd.test/` is forwarded by the edge for local clients only). Foreign `Host` headers and non-loopback peers are rejected even with a valid credential.
+
+### Update checks
+
+The desktop app and `testd host` check `https://testd.dev/update.json` over HTTPS at startup and every 24 hours. The feed uses the same published version as the website installer, including alpha releases. The tray shows **Update to VERSION...** when a newer version is available; the dashboard provides the download link and check status. Requests contain no local configuration, credentials, or installation identifier; the server receives the ordinary network address and a fixed `testd-update-check` user agent. Checks require `curl`, which is included with supported macOS and Windows hosts.
+
+Turn off **Updates → Check for updates** in the dashboard to cancel an active check and prevent further checks, including **Check now**. The preference persists across restarts in `updates.json` in the config directory. To disable checks before first startup, create that file with `{"enabled":false}`. Command-line leaves (`testd run`) and SSH helpers do not check for updates.
+
+**Download update** opens the matching GitHub release. Download the package for your platform, verify `SHA256SUMS`, quit testd, and install the new version using the same method as before. Keep the existing configuration to retain your certificate, credentials, saved launches, and login preference. Package-manager installs should use their package manager's upgrade command. testd does not replace running executables or install updates automatically.
 
 ### API access and root certificate download
 

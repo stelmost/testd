@@ -30,6 +30,7 @@ pub struct State {
 	pub launches: Vec<LaunchRow>,
 	pub tld: String,
 	pub has_request: bool,
+	pub updates: Option<testd_daemon::updates::Status>,
 }
 
 impl State {
@@ -43,6 +44,7 @@ impl State {
 			launches: Vec::new(),
 			tld: testd_core::config::host_tld().into(),
 			has_request: false,
+			updates: None,
 		}
 	}
 
@@ -53,6 +55,7 @@ impl State {
 			&& self.shares == other.shares
 			&& self.launches == other.launches
 			&& self.tld == other.tld
+			&& self.updates == other.updates
 	}
 
 	fn icon(&self) -> IconState {
@@ -166,6 +169,13 @@ fn build_menu(state: &State) -> anyhow::Result<(Menu, Option<CheckMenuItem>)> {
 	append_domains(&menu, state)?;
 	append_launches(&menu, &state.launches)?;
 	append_shares(&menu, &state.shares)?;
+	if let Some(updates) = &state.updates {
+		let label = match &updates.check {
+			testd_daemon::updates::Check::Available { release } => format!("Update to {}...", release.version),
+			_ => "Check for updates...".into(),
+		};
+		menu.append(&MenuItem::with_id("updates-open", label, true, None))?;
+	}
 	let autostart = CheckMenuItem::with_id(
 		"autostart",
 		login_label(state.autostart),

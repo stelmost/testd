@@ -263,6 +263,25 @@
 				</div>
 			</section>
 
+			<section class="card" id="updates">
+				<div class="card-head">
+					<div>
+						<div class="card-title-row">
+							<h2>Updates</h2>
+							<span id="update-badge" class="pill pill-muted">Checking...</span>
+						</div>
+						<p class="card-desc" id="update-detail">testd checks once a day for a newer release. No local data is sent.</p>
+					</div>
+				</div>
+				<div class="card-body">
+					<div class="row-actions card-actions">
+						<label class="check-row"><input id="update-enabled" type="checkbox" onchange="setUpdatePreference(this.checked)"> Check for updates</label>
+						<button class="btn btn-sm" type="button" onclick="checkUpdates()">Check now</button>
+						<a class="btn btn-sm" id="update-download" href="#" target="_blank" rel="noreferrer" hidden>Download update</a>
+					</div>
+				</div>
+			</section>
+
 			<section class="card" id="certificate">
 				<div class="card-head">
 					<div>
@@ -1230,6 +1249,7 @@
 	}
 
 	function renderState(state) {
+		renderUpdates(state.updates);
 		renderAdvisory(state.advisory || []);
 		renderDomains(state);
 		renderShares(state);
@@ -1244,6 +1264,48 @@
 			renderState(await getJson('/api/local/state'));
 		} catch (e) {
 			notice('Cannot refresh the dashboard: ' + e.message);
+		}
+	}
+
+	function renderUpdates(status) {
+		const badge = document.getElementById('update-badge');
+		const detail = document.getElementById('update-detail');
+		const enabled = document.getElementById('update-enabled');
+		const download = document.getElementById('update-download');
+		enabled.disabled = !status;
+		enabled.checked = Boolean(status && status.enabled);
+		download.hidden = true;
+		badge.className = 'pill pill-muted';
+		if (!status) {
+			badge.textContent = 'Unavailable';
+			return;
+		}
+		const labels = { not_checked: 'Not checked', checking: 'Checking...', current: 'Up to date', available: 'Update available', failed: 'Check failed' };
+		badge.textContent = status.enabled ? labels[status.state] || 'Not checked' : 'Checks disabled';
+		detail.textContent = 'Installed: ' + status.current_version + '. Checks run at startup and once a day. Updates are installed by you.';
+		if (status.state === 'failed') detail.textContent += ' ' + status.message;
+		if (status.state === 'available' && status.release) {
+			badge.className = 'pill pill-warn';
+			detail.textContent += ' Version ' + status.release.version + ' is available.';
+			download.href = status.release.url;
+			download.hidden = false;
+		}
+	}
+
+	async function setUpdatePreference(enabled) {
+		try {
+			renderUpdates(await post('/api/local/updates/preferences', { enabled }));
+		} catch (error) {
+			notice(error.message);
+			getJson('/api/local/updates').then(renderUpdates).catch((error) => notice(error.message));
+		}
+	}
+
+	async function checkUpdates() {
+		try {
+			renderUpdates(await post('/api/local/updates/check'));
+		} catch (error) {
+			notice(error.message);
 		}
 	}
 

@@ -30,6 +30,7 @@ pub struct HttpContext {
 	/// Operator actions that need the engine loop.
 	pub operator_tx: tokio::sync::mpsc::Sender<OperatorRequest>,
 	pub launches: Option<Arc<LaunchBook>>,
+	pub updates: Option<Arc<crate::updates::Updates>>,
 	pub health_refresh: Option<Arc<dyn Fn() + Send + Sync>>,
 	/// Present when the daemon owns shares; the dashboard lists and stops them.
 	pub shares: Option<Arc<crate::share::Shares>>,
@@ -142,6 +143,9 @@ where
 			respond(&mut writer, "200 OK", "image/svg+xml", br#"<svg xmlns="http://www.w3.org/2000/svg"/>"#).await
 		},
 		("GET", "/api/local/launches") => handle_launches(&mut writer, ctx).await,
+		("GET", "/api/local/updates") => handle_updates(&mut writer, ctx).await,
+		("POST", "/api/local/updates/check") => handle_update_check(&mut writer, ctx).await,
+		("POST", "/api/local/updates/preferences") => handle_update_preferences(&mut writer, ctx, &body).await,
 		("POST", "/api/local/launches/save") => handle_launch_save(&mut writer, ctx, &body).await,
 		("POST", "/api/local/launches/delete") => handle_launch_delete(&mut writer, ctx, &body).await,
 		("POST", "/api/local/launches/start") => handle_launch_start(&mut writer, ctx, &body).await,
@@ -234,6 +238,7 @@ struct DashboardState {
 	advisory: Vec<String>,
 	shares: Vec<crate::share::ShareView>,
 	launches: Vec<crate::launch::LaunchView>,
+	updates: Option<crate::updates::Status>,
 	requests: Vec<crate::access::PendingView>,
 	tokens: Vec<crate::access::TokenView>,
 }
@@ -284,6 +289,7 @@ async fn dashboard_state(ctx: &HttpContext) -> DashboardState {
 			None => Vec::new(),
 		},
 		launches,
+		updates: ctx.updates.as_ref().map(|updates| updates.status()),
 		requests: ctx.access.pending(),
 		tokens: ctx.access.tokens(),
 	}
@@ -302,6 +308,7 @@ async fn serve_events<W: AsyncWriteExt + Unpin>(writer: &mut W, ctx: &HttpContex
 	let mut access_changes = Some(ctx.access.state_changes());
 	let mut launch_changes = ctx.launches.as_ref().map(|book| book.state_changes());
 	let mut share_changes = ctx.shares.as_ref().map(|shares| shares.state_changes());
+	let mut update_changes = ctx.updates.as_ref().map(|updates| updates.changes());
 
 	const HEADERS: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n\
 		Cache-Control: no-store\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n\
@@ -334,6 +341,10 @@ async fn serve_events<W: AsyncWriteExt + Unpin>(writer: &mut W, ctx: &HttpContex
 				true
 			},
 			changed = wait_change(&mut share_changes) => {
+				if !changed { return Ok(()); }
+				true
+			},
+			changed = wait_change(&mut update_changes) => {
 				if !changed { return Ok(()); }
 				true
 			},
@@ -674,6 +685,62 @@ where
 	}
 }
 
+async fn handle_updates<W>(writer: &mut W, ctx: &HttpContext) -> io::Result<()>
+where
+	W: AsyncWriteExt + Unpin,
+{
+	match &ctx.updates {
+		Some(updates) => respond_json(writer, "200 OK", &updates.status()).await,
+		None => {
+			respond_json(
+				writer,
+				"503 Service Unavailable",
+				&serde_json::json!({ "error": "update checks are unavailable" }),
+			)
+			.await
+		},
+	}
+}
+
+async fn handle_update_check<W>(writer: &mut W, ctx: &HttpContext) -> io::Result<()>
+where
+	W: AsyncWriteExt + Unpin,
+{
+	let result = ctx
+		.updates
+		.as_ref()
+		.ok_or_else(|| "update checks are unavailable".to_owned())
+		.and_then(|updates| updates.request_check().map_err(|error| error.to_string()));
+	match result {
+		Ok(()) => handle_updates(writer, ctx).await,
+		Err(error) => respond_json(writer, "400 Bad Request", &serde_json::json!({ "error": error.to_string() })).await,
+	}
+}
+
+#[derive(serde::Deserialize)]
+struct UpdatePreferences {
+	enabled: bool,
+}
+
+async fn handle_update_preferences<W>(writer: &mut W, ctx: &HttpContext, body: &[u8]) -> io::Result<()>
+where
+	W: AsyncWriteExt + Unpin,
+{
+	let result = ctx
+		.updates
+		.as_ref()
+		.ok_or_else(|| "update checks are unavailable".to_owned())
+		.and_then(|updates| {
+			let request: UpdatePreferences =
+				serde_json::from_slice(body).map_err(|error| format!("invalid request: {error}"))?;
+			updates.set_enabled(request.enabled).map_err(|error| error.to_string())
+		});
+	match result {
+		Ok(()) => handle_updates(writer, ctx).await,
+		Err(error) => respond_json(writer, "400 Bad Request", &serde_json::json!({ "error": error })).await,
+	}
+}
+
 async fn handle_launch_save<W>(writer: &mut W, ctx: &HttpContext, body: &[u8]) -> io::Result<()>
 where
 	W: AsyncWriteExt + Unpin,
@@ -881,6 +948,56 @@ async fn serve_ca_cert<W: AsyncWriteExt + Unpin>(writer: &mut W, pki_dir: &Path)
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use tokio::io::AsyncReadExt;
+
+	async fn dashboard_request(ctx: &HttpContext, request: &str) -> String {
+		let (mut client, server) = tokio::io::duplex(4096);
+		let exchange = async {
+			client.write_all(request.as_bytes()).await.unwrap();
+			let mut response = String::new();
+			client.read_to_string(&mut response).await.unwrap();
+			response
+		};
+		let (handled, response) = tokio::join!(handle_stream(server, ctx), exchange);
+		handled.unwrap();
+		response
+	}
+
+	#[tokio::test]
+	async fn update_preferences_require_dashboard_authority_and_persist_before_publication() {
+		let directory = tempfile::tempdir().unwrap();
+		let path = directory.path().join("updates.json");
+		let updates = Arc::new(crate::updates::Updates::load_from(path.clone()).unwrap());
+		let ctx = HttpContext {
+			dashboard_token: Some("dashboard-owner".into()),
+			tld: "test".into(),
+			https_port: 443,
+			pki_dir: directory.path().into(),
+			registrations: Arc::new(tokio::sync::Mutex::new(crate::registry::Registry::default())),
+			connections: Arc::new(Connections::default()),
+			operator_tx: tokio::sync::mpsc::channel(1).0,
+			launches: None,
+			updates: Some(Arc::clone(&updates)),
+			health_refresh: None,
+			shares: None,
+			access: Arc::new(Access::load(directory.path().join("tokens.json")).unwrap()),
+			engine_events: tokio::sync::broadcast::channel(1).0,
+		};
+		const REQUEST: &str = "POST /api/local/updates/preferences HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+			Authorization: Bearer dashboard-owner\r\nX-Testd-Request: 1\r\nContent-Length: 17\r\n\r\n{\"enabled\":false}";
+		let unauthorized = REQUEST.replace("Authorization: Bearer dashboard-owner\r\n", "");
+		assert!(dashboard_request(&ctx, &unauthorized).await.starts_with("HTTP/1.1 401"));
+		let cross_site = REQUEST.replace("X-Testd-Request: 1\r\n", "");
+		assert!(dashboard_request(&ctx, &cross_site).await.starts_with("HTTP/1.1 403"));
+		assert!(!path.exists());
+		let response = dashboard_request(&ctx, REQUEST).await;
+		assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+		assert!(!crate::updates::Updates::load_from(path).unwrap().status().enabled);
+		let manual = REQUEST.replace("/preferences", "/check");
+		let response = dashboard_request(&ctx, &manual).await;
+		assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+		assert!(response.contains("update checks are disabled"));
+	}
 
 	#[test]
 	fn rendered_project_links_include_the_https_port() {

@@ -1444,7 +1444,7 @@ async fn loopback_and_registration_credentials_do_not_grant_dashboard_authority(
 	let mut leaf = Client::connect(harness.addr, &harness.token).await;
 	assert!(matches!(leaf.request(register("private.fixture", "3000", false)).await, Response::Ok));
 	let authorization = format!("Authorization: Bearer {DASHBOARD_TOKEN}\r\n");
-	for path in ["/api/status", "/api/local/state", "/api/local/events", "/api/local/requests"] {
+	for path in ["/api/status", "/api/local/state", "/api/local/events", "/api/local/requests", "/api/local/updates"] {
 		let unauthenticated = get(path, &[]).replace(&authorization, "");
 		let denied = http(harness.addr, &unauthenticated).await;
 		assert!(denied.starts_with("HTTP/1.1 401"), "{denied}");

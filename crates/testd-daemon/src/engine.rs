@@ -64,6 +64,7 @@ pub struct HostEngine {
 	dashboard_token: Option<String>,
 	/// Local-only quick launches, shared with the loopback dashboard.
 	launches: Option<Arc<LaunchBook>>,
+	updates: Option<Arc<crate::updates::Updates>>,
 	/// Re-probe health after a local certificate change.
 	health_refresh: Option<Arc<dyn Fn() + Send + Sync>>,
 	/// Operator actions from outside the serve loop. Taken once by `serve`.
@@ -86,6 +87,7 @@ impl HostEngine {
 			local_token: None,
 			dashboard_token: None,
 			launches: None,
+			updates: None,
 			health_refresh: None,
 			operator_tx,
 			operator_rx: StdMutex::new(Some(operator_rx)),
@@ -110,6 +112,10 @@ impl HostEngine {
 
 	pub fn set_launches(&mut self, launches: Arc<LaunchBook>) {
 		self.launches = Some(launches);
+	}
+
+	pub fn set_updates(&mut self, updates: Arc<crate::updates::Updates>) {
+		self.updates = Some(updates);
 	}
 
 	/// Attach the health re-probe used after local certificate changes.
@@ -193,6 +199,7 @@ impl HostEngine {
 			connections: Arc::clone(&connections),
 			operator_tx: self.operator_tx.clone(),
 			launches: self.launches.clone(),
+			updates: self.updates.clone(),
 			health_refresh: self.health_refresh.clone(),
 			shares: self.shares.clone(),
 			access: Arc::clone(&self.access),
