@@ -284,7 +284,8 @@ jobs:
       - run: cargo build --release --bin testd --locked --target ${{ matrix.target }}
         env:
           CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          # Rust's self-contained musl link avoids musl-gcc's injected dynamic loader.
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: '-C target-feature=+crt-static'
           CC_x86_64_unknown_linux_musl: musl-gcc
       - name: Verify the musl CLI is static and runs
         if: matrix.cli_only

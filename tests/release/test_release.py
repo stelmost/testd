@@ -369,7 +369,7 @@ class ReleaseTests(unittest.TestCase):
 		self.assertNotIn('- os: macos-26', bundle)
 		self.assertIn('target: x86_64-unknown-linux-musl\n            required: true\n            cli_only: true', bundle)
 		self.assertIn('sudo apt-get install -y musl-tools', bundle)
-		self.assertIn('CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc', bundle)
+		self.assertIn("CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: '-C target-feature=+crt-static'", bundle)
 		self.assertIn('readelf --program-headers', bundle)
 		self.assertIn('readelf --dynamic', bundle)
 		self.assertIn("${{ matrix.cli_only && '--cli-only' || '' }}", bundle)
