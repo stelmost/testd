@@ -271,11 +271,13 @@ class ReleaseTests(unittest.TestCase):
 			'Mutually authenticated host-to-leaf application forwarding',
 			'mutual TLS (mTLS)',
 			'daemon restart invalidates dashboard sessions',
-			'Tailscale startup no longer deletes or adopts an unowned route',
-			'The Tauri framework, webview runtime',
+			'Tailscale refuses to overwrite or adopt existing or ambiguous `:443` handlers',
+			'Native Rust tray app (Tao and tray-icon/muda)',
 		)
 		for note in implemented_notes:
 			self.assertIn(note, text)
+		for removed_section in ('### Changed', '### Fixed', '### Removed'):
+			self.assertNotIn(removed_section, text)
 		self.assertNotIn('## [Unreleased]', text)
 		self.assertNotIn('Remote registration is plain TCP', text)
 		self.assertNotIn('per-run control token', text)
