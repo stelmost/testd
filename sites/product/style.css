@@ -26,6 +26,8 @@
 
 html {
 	background: var(--ground);
+	/* Keeps a jumped-to section clear of the sticky header. */
+	scroll-padding-top: 4.5rem;
 	-webkit-text-size-adjust: 100%;
 }
 
@@ -143,7 +145,7 @@ th,
 	position: absolute;
 	top: -4rem;
 	left: 1rem;
-	z-index: 10;
+	z-index: 30;
 	padding: 0.6rem 1rem;
 	background: var(--text);
 	color: var(--ground);
@@ -153,21 +155,30 @@ th,
 	top: 1rem;
 }
 
-/* Header */
+/* Header: a bar that stays on screen, its links set as cells divided by hairlines. */
 
 .site-header {
+	position: sticky;
+	top: 0;
+	z-index: 20;
+	border-bottom: 1px solid var(--line);
+	background: rgb(5 7 11 / 88%);
+	backdrop-filter: blur(14px);
+}
+
+.site-bar {
 	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
+	align-items: stretch;
 	justify-content: space-between;
-	gap: 0.75rem 2rem;
-	padding-block: 1.5rem;
+	gap: 1.5rem;
 }
 
 .brand {
 	display: inline-flex;
+	flex: none;
 	align-items: center;
 	gap: 0.6rem;
+	padding-block: 0.8rem;
 	color: var(--text);
 	font: 600 1.0625rem/1 var(--mono);
 	letter-spacing: 0.04em;
@@ -179,23 +190,44 @@ th,
 	height: 1.75rem;
 }
 
+/* On a narrow screen the cells scroll sideways inside the bar, which keeps it one row tall. */
 .site-nav {
 	display: flex;
-	flex-wrap: wrap;
-	gap: 0.4rem 1.75rem;
+	min-width: 0;
+	overflow-x: auto;
+	scrollbar-width: none;
 	font-size: 0.75rem;
 	letter-spacing: 0.1em;
 	text-transform: uppercase;
 }
 
+.site-nav::-webkit-scrollbar {
+	display: none;
+}
+
 .site-nav a {
+	display: flex;
+	flex: none;
+	align-items: center;
+	padding-inline: 1.1rem;
+	border-left: 1px solid var(--line);
 	color: var(--text-2);
 	text-decoration: none;
+	white-space: nowrap;
+}
+
+.site-nav a:last-child {
+	border-right: 1px solid var(--line);
 }
 
 .site-nav a:hover {
+	background: var(--raised);
+	box-shadow: inset 0 -2px var(--blue);
 	color: var(--text);
-	text-decoration: underline;
+}
+
+.site-nav a:focus-visible {
+	outline-offset: -4px;
 }
 
 /* Hero */
