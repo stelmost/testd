@@ -98,6 +98,8 @@ The printed URL carries a one-run bootstrap token in its URL fragment. As soon a
 
 Inside the dashboard you will find:
 
+![Local testd dashboard in Safari showing live .test domains, Quick launches, SSH apps, Access tokens, Shares, and Certificate status](../assets/docs/dashboard.png)
+
 - **Live names**: currently registered names, with **Stop** and (for issued grants) **Delete**
 - **Shares**: active tunnel URLs, with a **Stop** button
 - **Access**: pending pairing and name-grant requests, with **Approve** and **Deny**

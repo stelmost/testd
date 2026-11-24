@@ -37,6 +37,8 @@ When you launch the desktop app without an existing host configuration, it start
 
 The setup page walks through three steps:
 
+![Guided first-run setup page in Safari showing DNS resolver, Certificate authority, Operator secret, and Finish setup](../assets/docs/setup.png)
+
 1. **DNS resolver**: configures the OS `.test` resolver route so `*.test` names reach testd's local DNS server. Requires administrator privileges.
 2. **Certificate authority**: creates the local root CA and installs it in your system trust store. Requires administrator privileges. If you open the page in Firefox, it also notes that the dashboard checks Firefox trust separately after setup.
 3. **Operator secret**: pre-filled with a generated pronounceable secret (at least 16 characters). You can copy it, click **Generate** for a new one, or edit it to match a secret your unattended clients already use.
@@ -50,6 +52,8 @@ Only one host daemon can run at a time. Launching a second copy of the desktop a
 ## The tray menu
 
 Once the daemon is running, click the tray or menu-bar icon to see live state and common actions:
+
+![macOS menu bar with the testd tray menu open showing active domains, dashboard link, quick launches, SSH apps, Launch at login, and Exit](../assets/docs/tray-menu.png)
 
 - **Repair actions** (shown only when a check fails): **Set up DNS** and **Trust certificate** trigger the same privileged repairs as `testd doctor --fix`.
 - **Active domains**: lists every currently registered `.test` name; clicking one opens it in your browser.
@@ -73,6 +77,8 @@ When a health check fails or a remote leaf asks for access, testd also raises a 
 ## Using the dashboard
 
 The desktop app does not bundle its own webview; clicking **`testd.test → dashboard`** opens the dashboard in your default HTTP browser using an owner-private HTML handoff file so admin tokens never appear in process arguments.
+
+![Local testd dashboard in Safari showing live .test domains, Quick launches, SSH apps, Access tokens, Shares, and Certificate status](../assets/docs/dashboard.png)
 
 From the dashboard you can manage everything without touching a terminal:
 

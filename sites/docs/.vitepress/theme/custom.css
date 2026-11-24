@@ -229,6 +229,13 @@ body {
 	border-top-color: var(--vp-c-divider);
 }
 
+.vp-doc img {
+	display: block;
+	margin: 1.5rem 0;
+	border: 1px solid var(--vp-c-divider);
+	border-radius: 6px;
+}
+
 /* ---------- overview grid ---------- */
 
 .doc-grid {
