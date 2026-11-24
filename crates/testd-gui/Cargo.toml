@@ -20,7 +20,7 @@ testd-core = { workspace = true }
 testd-daemon = { workspace = true }
 tokio = { workspace = true }
 tray-icon = { version = '0.25.1', default-features = false, features = ['libappindicator'] }
-url = '2'
+url = '2.5.9'
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gio = '0.18'
