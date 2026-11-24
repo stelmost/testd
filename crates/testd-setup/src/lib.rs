@@ -1289,18 +1289,11 @@ fn trust_root_linux(cert_pem: &str, elevation: Elevation) -> io::Result<()> {
 
 #[cfg(target_os = "windows")]
 fn trust_root_windows(cert_pem: &str) -> io::Result<()> {
-	// Windows certificate APIs load DER reliably; PEM support depends on the
-	// .NET version, so convert once before handing the file to the helper. The
-	// expected thumbprint comes from the PEM, not from the mutable temp file.
-	use std::io::Write;
+	/* Windows certificate APIs load DER reliably; derive the expected identity before staging it. */
 	let der = single_anchor_der(cert_pem)?;
 	let thumbprint = sha1_hex(&der);
 	let fingerprint = sha256_hex(&der);
-	let mut temporary = testd_core::private_file::temporary_in(&std::env::temp_dir())?;
-	temporary.write_all(&der)?;
-	temporary.as_file().sync_all()?;
-	/* Close the writer before the elevated helper reads this public certificate. */
-	let temporary = temporary.into_temp_path();
+	let temporary = windows_helper::stage(&der)?;
 	let cert_path = temporary.to_string_lossy();
 	run_windows_helper(
 		"InstallRoot",

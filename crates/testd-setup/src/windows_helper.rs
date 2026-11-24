@@ -6,6 +6,22 @@ const SOURCE: &str = include_str!("../../../scripts/testd-elevated.ps1");
 #[cfg(windows)]
 const COMMAND_FLAGS: [&str; 3] = ["-NoProfile", "-NonInteractive", "-Command"];
 
+pub(super) fn stage(contents: &[u8]) -> std::io::Result<tempfile::TempPath> {
+	/* The system temporary directory can grant sandbox users write access. */
+	stage_in(&testd_core::config::config_dir(), contents)
+}
+
+fn stage_in(directory: &Path, contents: &[u8]) -> std::io::Result<tempfile::TempPath> {
+	use std::io::Write;
+
+	testd_core::private_file::create_directory(directory)?;
+	let mut temporary = testd_core::private_file::temporary_in(directory)?;
+	temporary.write_all(contents)?;
+	temporary.as_file().sync_all()?;
+	/* Close the writer before the elevated helper reads the file; retain automatic cleanup. */
+	Ok(temporary.into_temp_path())
+}
+
 pub(super) fn quote(value: &str) -> String {
 	let mut literal = String::with_capacity(value.len() + 2);
 	literal.push('\'');
@@ -118,7 +134,6 @@ fn is_elevated(powershell: &Path) -> bool {
 
 #[cfg(windows)]
 pub(super) fn run(action: &str, args: &[(&str, &str)]) -> std::io::Result<()> {
-	use std::io::Write;
 	use super::{ownership::InstallationId, silent_command};
 
 	let owner =
@@ -132,11 +147,7 @@ pub(super) fn run(action: &str, args: &[(&str, &str)]) -> std::io::Result<()> {
 	let owner = owner.map(|owner| owner.fingerprint()).unwrap_or_default();
 	let mut args = args.to_vec();
 	args.push(("Owner", &owner));
-	let mut helper = testd_core::private_file::temporary_in(&std::env::temp_dir())?;
-	helper.write_all(SOURCE.as_bytes())?;
-	helper.as_file().sync_all()?;
-	/* Windows readers cannot open the file while its writer is still open. */
-	let helper = helper.into_temp_path();
+	let helper = stage(SOURCE.as_bytes())?;
 	let script = command(&helper, action, &args);
 	let powershell = powershell()?;
 	let script = if is_elevated(&powershell) { script } else { elevation_command(&powershell, &script) };
@@ -157,6 +168,106 @@ pub(super) fn run(action: &str, args: &[(&str, &str)]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	const STAGED_CONTENTS: &[u8] = b"fixture-certificate";
+
+	fn staging_fixture() -> tempfile::TempDir {
+		let directory = tempfile::tempdir().unwrap();
+		#[cfg(windows)]
+		set_directory_acl(directory.path(), "");
+		directory
+	}
+
+	#[cfg(windows)]
+	fn set_directory_acl(path: &Path, extra: &str) {
+		let script = format!(
+			"$ErrorActionPreference = 'Stop'; \
+			$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; \
+			$sddl = ('D:P(A;OICI;FA;;;{{0}})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)' -f $sid) + {}; \
+			$acl = [Security.AccessControl.DirectorySecurity]::new(); \
+			$acl.SetSecurityDescriptorSddlForm($sddl); \
+			Set-Acl -LiteralPath {} -AclObject $acl",
+			quote(extra),
+			quote(&path.to_string_lossy()),
+		);
+		let output = super::super::silent_command(powershell().unwrap())
+			.args(COMMAND_FLAGS)
+			.arg(script)
+			.output()
+			.unwrap();
+		assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+	}
+
+	#[test]
+	fn staging_closes_and_removes_private_files() {
+		let fixture = staging_fixture();
+		#[cfg(windows)]
+		set_directory_acl(fixture.path(), "(A;OICI;0x1200a9;;;WD)");
+		let directory = fixture.path().join("testd");
+		let temporary = stage_in(&directory, STAGED_CONTENTS).unwrap();
+		let path = temporary.to_path_buf();
+		assert_eq!(path.parent(), Some(directory.as_path()));
+		assert_eq!(testd_core::private_file::read(&path).unwrap(), STAGED_CONTENTS);
+		drop(temporary);
+		assert!(!path.exists());
+	}
+
+	#[test]
+	fn staging_uses_config_directory_instead_of_shared_temp() {
+		const FIXTURE: &str = "TESTD_WINDOWS_STAGING_FIXTURE";
+		if let Some(shared) = std::env::var_os(FIXTURE) {
+			assert_eq!(std::env::temp_dir(), std::path::PathBuf::from(shared));
+			let temporary = stage(STAGED_CONTENTS).unwrap();
+			assert_eq!(temporary.parent(), Some(testd_core::config::config_dir().as_path()));
+			assert_eq!(testd_core::private_file::read(&temporary).unwrap(), STAGED_CONTENTS);
+			return;
+		}
+		let fixture = staging_fixture();
+		let shared = fixture.path().join("shared-temp");
+		std::fs::create_dir(&shared).unwrap();
+		#[cfg(windows)]
+		{
+			set_directory_acl(&shared, "(A;OICI;0x1301bf;;;WD)");
+			assert_eq!(
+				testd_core::private_file::temporary_in(&shared).unwrap_err().kind(),
+				std::io::ErrorKind::PermissionDenied,
+			);
+		}
+		let home = fixture.path().join("home");
+		let appdata = fixture.path().join("roaming");
+		let config = if cfg!(windows) { appdata.join("testd") } else { home.join(".config/testd") };
+		let output = std::process::Command::new(std::env::current_exe().unwrap())
+			.args(["--exact", "windows_helper::tests::staging_uses_config_directory_instead_of_shared_temp"])
+			.env(FIXTURE, &shared)
+			.env("HOME", &home)
+			.env("APPDATA", &appdata)
+			.env("TEMP", &shared)
+			.env("TMP", &shared)
+			.env("TMPDIR", &shared)
+			.output()
+			.unwrap();
+		assert!(
+			output.status.success(),
+			"{}{}",
+			String::from_utf8_lossy(&output.stdout),
+			String::from_utf8_lossy(&output.stderr),
+		);
+		assert_eq!(std::fs::read_dir(&shared).unwrap().count(), 0);
+		assert_eq!(std::fs::read_dir(config).unwrap().count(), 0);
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn staging_rejects_writable_config_directories() {
+		let fixture = staging_fixture();
+		set_directory_acl(fixture.path(), "(A;OICI;0x1301bf;;;WD)");
+		assert_eq!(stage_in(fixture.path(), STAGED_CONTENTS).unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+		assert_eq!(std::fs::read_dir(fixture.path()).unwrap().count(), 0);
+		assert_eq!(
+			testd_core::private_file::temporary_in(fixture.path()).unwrap_err().kind(),
+			std::io::ErrorKind::PermissionDenied,
+		);
+	}
 
 	#[test]
 	fn plaintext_invocation_names_the_action_and_verifies_a_separate_source_file() {
@@ -202,11 +313,8 @@ mod tests {
 	#[cfg(windows)]
 	#[test]
 	fn a_modified_staging_file_cannot_execute_an_action() {
-		let mut temporary = testd_core::private_file::temporary_in(&std::env::temp_dir()).unwrap();
-		use std::io::Write;
-		temporary.write_all(b"throw 'fixture source executed'").unwrap();
-		temporary.as_file().sync_all().unwrap();
-		let temporary = temporary.into_temp_path();
+		let fixture = staging_fixture();
+		let temporary = stage_in(fixture.path(), b"throw 'fixture source executed'").unwrap();
 		let output = super::super::silent_command(powershell().unwrap())
 			.args(COMMAND_FLAGS)
 			.arg(command(&temporary, "RemoveNrpt", &[("Tld", "testdcheck")]))
@@ -221,12 +329,8 @@ mod tests {
 	#[cfg(windows)]
 	#[test]
 	fn an_unchanged_staging_file_is_readable_without_elevation() {
-		use std::io::Write;
-
-		let mut temporary = testd_core::private_file::temporary_in(&std::env::temp_dir()).unwrap();
-		temporary.write_all(SOURCE.as_bytes()).unwrap();
-		temporary.as_file().sync_all().unwrap();
-		let temporary = temporary.into_temp_path();
+		let fixture = staging_fixture();
+		let temporary = stage_in(fixture.path(), SOURCE.as_bytes()).unwrap();
 		/* ValidateSet rejects this action before the helper can inspect or modify system state. */
 		let output = super::super::silent_command(powershell().unwrap())
 			.args(COMMAND_FLAGS)
