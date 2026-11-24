@@ -3,9 +3,11 @@
 /*
 	Elmo St. identity on a product page: Night ground, Light words, St. Elmo blue and amber for the
 	lights, widened so a page you read and work from is comfortable. Surfaces step up from the ground
-	in cool tints; three muted hues colour the worlds and the code. Everything is set in one monospace
-	face, as on a shipyard's drawing sheets: hairline rules, tracked capitals for labels, and a short
-	blue tick where a section's rule begins.
+	in cool tints; three muted hues colour the worlds and the code.
+
+	Everything is set in one monospace face, which has no weights or sizes to lean on, so the structure
+	is drawn: a ruled sheet with indexed sections, label cells, bordered panels, and tracked capitals,
+	as on a shipyard's drawing sheets. A short blue tick marks where each section's rule begins.
 */
 :root {
 	color-scheme: dark;
@@ -24,6 +26,7 @@
 
 	/* Lights and interaction */
 	--blue: #5ce1ff;
+	--blue-line: rgb(92 225 255 / 40%);
 	--link: #8fddf0;
 	--amber: #ff7828;
 	--amber-soft: #ffb27f;
@@ -36,6 +39,7 @@
 	--mono: 'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
 	--gutter: 13rem;
 	--measure: 39rem;
+	--sheet: 56rem;
 }
 
 *,
@@ -70,18 +74,32 @@ body {
 
 h1,
 h2,
+h3,
 p,
 dl,
 dd,
 figure,
-ul {
+ul,
+ol {
 	margin: 0;
 }
 
 h1,
-h2 {
-	font-weight: 500;
+h2,
+h3 {
+	font-weight: 600;
 	letter-spacing: -0.035em;
+}
+
+h2 {
+	font-size: clamp(1.5rem, 1.1rem + 1.6vw, 2rem);
+	line-height: 1.2;
+}
+
+h3 {
+	font-size: 1.0625rem;
+	line-height: 1.35;
+	letter-spacing: -0.015em;
 }
 
 a {
@@ -123,6 +141,7 @@ pre code,
 }
 
 .label,
+.section-index,
 .plate dt,
 th,
 .tabs [role='tab'] {
@@ -286,7 +305,17 @@ th,
 	color: var(--blue);
 }
 
-/* Version and status chips in the hero's meta line */
+.button-quiet {
+	background: transparent;
+	color: var(--blue);
+}
+
+.button-quiet:hover {
+	background: var(--blue);
+	color: var(--ground);
+}
+
+/* Version and status chips in the hero's meta line, and tags elsewhere */
 
 .chip {
 	display: inline-block;
@@ -371,7 +400,7 @@ html:not(.js) .lease {
 	flex: 1 1 18rem;
 	min-height: 3.2em;
 	max-width: 30rem;
-	font: 0.8125rem/1.6 var(--mono);
+	font-size: 0.8125rem;
 	color: var(--text-2);
 }
 
@@ -405,22 +434,97 @@ html:not(.js) .lease {
 	background: var(--raised);
 }
 
-.skips {
+/* The premise: one sentence on the left, the four things you skip ruled out on the right. */
+
+.premise {
 	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+	gap: 1.5rem 4rem;
+	padding-block: clamp(2rem, 5vw, 3.5rem);
+}
+
+@media (min-width: 52rem) {
+	.premise {
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+		align-items: center;
+	}
+}
+
+.premise h2 {
+	margin-block: 0.6rem 0.9rem;
+	font-size: clamp(1.25rem, 1rem + 1vw, 1.625rem);
+	line-height: 1.25;
+}
+
+.premise p:not(.section-index) {
+	color: var(--text-2);
+}
+
+.skips {
 	padding: 0;
 	list-style: none;
+	border: 1px solid var(--line);
+	background: var(--ground);
 }
 
 .skips li {
 	display: flex;
 	align-items: baseline;
-	gap: 0.85rem;
-	padding: 1.1rem 1.5rem 1.1rem 0;
+	gap: 1rem;
+	padding: 0.85rem 1.25rem;
+	border-top: 1px solid var(--line);
+}
+
+.skips li:first-child {
+	border-top: 0;
 }
 
 .skips .label {
+	min-width: 1.75rem;
 	color: var(--teal);
+}
+
+/* Sections: each opens on a hairline rule that starts with a short blue tick, then an indexed head. */
+
+.section {
+	position: relative;
+	margin-top: clamp(4rem, 9vw, 7rem);
+	padding-top: 1.5rem;
+	border-top: 1px solid var(--line);
+}
+
+.section::before {
+	content: '';
+	position: absolute;
+	top: -1px;
+	left: 0;
+	width: 3rem;
+	height: 2px;
+	background: var(--blue);
+}
+
+.section-head {
+	display: grid;
+	gap: 0.9rem 3rem;
+	align-items: start;
+}
+
+@media (min-width: 52rem) {
+	.section-head {
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	}
+
+	.section-head .section-index {
+		grid-column: 1 / -1;
+	}
+}
+
+.section-lede {
+	max-width: var(--measure);
+	color: var(--text-2);
+}
+
+.section-head .section-lede {
+	padding-top: 0.35rem;
 }
 
 .install-band {
@@ -438,60 +542,70 @@ html:not(.js) .lease {
 	content: none;
 }
 
-/* Sections and plates: each opens on a hairline rule that starts with a short blue tick. */
-
-.section {
-	position: relative;
-	margin-top: clamp(4rem, 9vw, 7rem);
-	padding-top: 1.75rem;
-	border-top: 1px solid var(--line);
-}
-
-.section::before {
-	content: '';
-	position: absolute;
-	top: -1px;
-	left: 0;
-	width: 3rem;
-	height: 2px;
-	background: var(--blue);
-}
-
-.section h2 {
-	font-size: clamp(1.5rem, 1.1rem + 1.6vw, 2rem);
-	line-height: 1.2;
-}
-
-.section-lede {
-	max-width: var(--measure);
-	margin-top: 1rem;
-	color: var(--text-2);
-}
+/* Plates: a ruled sheet. Each row is a label cell on the left and its content on the right. */
 
 .plates {
 	margin-top: clamp(1.75rem, 3vw, 2.5rem);
-	border-top: 1px solid var(--line);
+	border: 1px solid var(--line);
 }
 
 .plate {
 	display: grid;
-	gap: 0.6rem 3rem;
-	padding-block: 1.6rem;
+	border-top: 1px solid var(--line);
+}
+
+.plate:first-child {
+	border-top: 0;
+}
+
+.plate dt {
+	padding: 0.85rem 1.25rem;
 	border-bottom: 1px solid var(--line);
+	background: var(--raised);
+}
+
+.plate dd {
+	padding: 1.4rem 1.25rem 1.6rem;
 }
 
 @media (min-width: 52rem) {
 	.plate {
-		grid-template-columns: var(--gutter) minmax(0, var(--measure));
+		grid-template-columns: var(--gutter) minmax(0, 1fr);
+	}
+
+	.plate dt {
+		padding: 1.45rem 1.25rem;
+		border-right: 1px solid var(--line);
+		border-bottom: 0;
+	}
+
+	.plate dd {
+		padding: 1.4rem 1.75rem 1.6rem;
 	}
 }
 
-.plate dt {
-	padding-top: 0.2rem;
+.plate dd > * {
+	max-width: var(--sheet);
+}
+
+.plate dd > p,
+.plate dd > ul {
+	max-width: var(--measure);
 }
 
 .plate dd > * + * {
 	margin-top: 1.1rem;
+}
+
+/* A step number in a label cell: install, prepare the host, name the project. */
+.step {
+	display: block;
+	margin-bottom: 0.35rem;
+	color: var(--blue);
+	font-size: 1.5rem;
+	font-weight: 500;
+	letter-spacing: -0.02em;
+	line-height: 1.2;
 }
 
 .notes {
@@ -514,12 +628,356 @@ html:not(.js) .lease {
 	background: var(--text-3);
 }
 
-/* Code */
+.notes strong {
+	color: var(--text);
+	font-weight: 600;
+}
+
+/* The route: browser, host, and leaf as three cells joined by the two connections. */
+
+.route {
+	display: grid;
+	margin-top: clamp(1.75rem, 3vw, 2.5rem);
+}
+
+.route > * {
+	min-width: 0;
+}
+
+/* A bracket over the nodes that share a machine. */
+.route-zone {
+	position: relative;
+	margin: 0;
+	padding: 0.55rem 0 0.7rem;
+	border-top: 1px solid var(--line-strong);
+}
+
+.route-zone::before,
+.route-zone::after {
+	content: '';
+	position: absolute;
+	top: 0;
+	width: 1px;
+	height: 6px;
+	background: var(--line-strong);
+}
+
+.route-zone::before {
+	left: 0;
+}
+
+.route-zone::after {
+	right: 0;
+}
+
+.route-zone-leaf {
+	margin-top: 1.5rem;
+}
+
+.route-node {
+	display: grid;
+	align-content: start;
+	gap: 0.75rem;
+	padding: 1.1rem 1.25rem 1.5rem;
+	border: 1px solid var(--line);
+	background: var(--raised);
+}
+
+.route-node-host {
+	border-color: var(--blue-line);
+}
+
+.route-node > code {
+	justify-self: start;
+}
+
+.node-top {
+	display: flex;
+	justify-content: space-between;
+	padding-bottom: 0.8rem;
+	border-bottom: 1px solid var(--line);
+}
+
+.node-glyph {
+	width: 2.75rem;
+	height: 2.75rem;
+	fill: none;
+	stroke: var(--text-2);
+	stroke-width: 1.25;
+	stroke-linecap: square;
+}
+
+.route-node-host .node-glyph {
+	stroke: var(--blue);
+}
+
+.node-parts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.4rem;
+	margin: 0;
+	padding: 0;
+	font-size: 0.6875rem;
+	list-style: none;
+}
+
+.route-link {
+	display: grid;
+	justify-items: center;
+	gap: 0.45rem;
+	padding: 0.9rem 0;
+	color: var(--text-3);
+	font-size: 0.75rem;
+}
+
+.route-link i {
+	position: relative;
+	display: block;
+	width: 1px;
+	height: 2rem;
+	background: var(--line-strong);
+}
+
+.route-link i::after {
+	content: '';
+	position: absolute;
+	bottom: -1px;
+	left: -3px;
+	border-inline: 3.5px solid transparent;
+	border-top: 6px solid var(--line-strong);
+}
+
+.route-link-back i {
+	transform: scaleY(-1);
+}
+
+@media (min-width: 72rem) {
+	.route {
+		grid-template-columns: minmax(0, 1fr) 8.5rem minmax(0, 1fr) 8.5rem minmax(0, 1fr);
+	}
+
+	.route-zone-host {
+		grid-column: 1 / 4;
+		grid-row: 1;
+	}
+
+	.route-zone-leaf {
+		grid-column: 5;
+		grid-row: 1;
+		margin-top: 0;
+	}
+
+	.route > :not(.route-zone) {
+		grid-row: 2;
+	}
+
+	.route-link {
+		align-content: center;
+		padding: 0 0.75rem;
+	}
+
+	.route-link i {
+		width: 100%;
+		height: 1px;
+	}
+
+	.route-link i::after {
+		top: -3px;
+		right: -1px;
+		bottom: auto;
+		left: auto;
+		border-inline: 0;
+		border-block: 3.5px solid transparent;
+		border-left: 6px solid var(--line-strong);
+	}
+
+	.route-link-back i {
+		transform: scaleX(-1);
+	}
+}
+
+/* The one rule the route leaves open: why names disappear. */
+.route-note {
+	margin-top: 1rem;
+	padding: 0.9rem 1.25rem;
+	border: 1px solid var(--line);
+	border-left: 2px solid var(--blue);
+	background: var(--inset);
+	color: var(--text-2);
+}
+
+.route-note strong {
+	color: var(--text);
+	font-weight: 600;
+}
+
+/* Cards: four short ideas, each with a small drawing of the thing it describes. */
+
+.cards {
+	display: grid;
+	gap: 1px;
+	margin-top: clamp(1.75rem, 3vw, 2.5rem);
+	border: 1px solid var(--line);
+	background: var(--line);
+}
+
+@media (min-width: 44rem) {
+	.cards {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+.card {
+	display: grid;
+	grid-template-rows: auto 8rem auto 1fr;
+	gap: 1rem;
+	padding: 1.1rem 1.5rem 1.6rem;
+	background: var(--raised);
+}
+
+.card-top {
+	display: flex;
+	justify-content: space-between;
+	margin: 0;
+	padding-bottom: 0.8rem;
+	border-bottom: 1px solid var(--line);
+}
+
+.card-figure {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 1rem;
+	margin: 0;
+	padding: 1rem 1.25rem;
+	border: 1px solid var(--line);
+	background: var(--inset);
+	list-style: none;
+}
+
+.card p:not(.card-top, .tags) {
+	color: var(--text-2);
+}
+
+.tags {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.4rem;
+	font-size: 0.6875rem;
+}
+
+.figure-number {
+	color: var(--text);
+	font-size: 2.75rem;
+	font-weight: 500;
+	letter-spacing: -0.04em;
+	line-height: 1;
+}
+
+.figure-number small {
+	margin-left: 0.15em;
+	color: var(--blue);
+	font-size: 0.45em;
+	letter-spacing: 0;
+}
+
+.figure-caption {
+	color: var(--text-3);
+	font-size: 0.75rem;
+}
+
+.figure-tag {
+	padding: 0.35rem 0.7rem;
+	border: 1px solid var(--line-strong);
+	color: var(--text-2);
+	font-size: 0.6875rem;
+	letter-spacing: 0.18em;
+	text-transform: uppercase;
+}
+
+.figure-dashes {
+	flex: 1;
+	max-width: 8rem;
+	border-top: 1px dashed var(--blue-line);
+}
+
+.figure-grants {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 0.3rem;
+	padding-block: 0.8rem;
+	font-size: 0.8125rem;
+}
+
+.figure-grants li {
+	display: flex;
+	justify-content: space-between;
+	gap: 1rem;
+	color: var(--text-3);
+}
+
+.figure-grants li.is-granted {
+	color: var(--text);
+}
+
+.figure-grants li.is-granted span:last-child {
+	color: var(--teal);
+}
+
+.figure-launch {
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 0.7rem;
+	font-size: 0.8125rem;
+}
+
+.figure-command::after {
+	content: '';
+	display: inline-block;
+	width: 0.55em;
+	height: 1em;
+	margin-left: 0.3em;
+	vertical-align: -0.15em;
+	background: var(--blue);
+}
+
+.figure-states {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.4rem 1.1rem;
+	color: var(--text-3);
+	font-size: 0.75rem;
+}
+
+.figure-states span + span::before {
+	content: '›';
+	margin-right: 1.1rem;
+	color: var(--text-3);
+}
+
+.figure-states .is-live {
+	color: var(--blue);
+}
+
+/* Code: a labelled block with its copy button in the label strip. */
 
 .code {
 	position: relative;
 	border: 1px solid var(--line);
 	background: var(--inset);
+}
+
+.code[data-label]::before {
+	content: attr(data-label);
+	display: block;
+	padding: 0.4rem 1rem;
+	border-bottom: 1px solid var(--line);
+	background: var(--raised);
+	color: var(--text-3);
+	font-size: 0.6875rem;
+	letter-spacing: 0.18em;
+	line-height: 1.7;
+	text-transform: uppercase;
 }
 
 .code pre {
@@ -530,18 +988,14 @@ html:not(.js) .lease {
 	line-height: 1.7;
 }
 
-.code:has(.copy-button) pre {
-	padding-right: 5.5rem;
-}
-
 .code .copy-button {
 	position: absolute;
-	top: 0.55rem;
-	right: 0.55rem;
+	top: 0.28rem;
+	right: 0.5rem;
 }
 
 .copy-button {
-	padding: 0.45rem 0.6rem;
+	padding: 0.3rem 0.6rem;
 }
 
 /* Shell highlighting: the command, its subcommand, flags, and values such as hosts and paths. */
@@ -652,13 +1106,13 @@ td {
 .tabs {
 	display: flex;
 	gap: 2rem;
-	margin-top: 2rem;
+	margin-top: 1.25rem;
 	border-bottom: 1px solid var(--line);
 }
 
 .tabs [role='tab'] {
 	margin-bottom: -1px;
-	padding: 0.9rem 0;
+	padding: 0.7rem 0;
 	border: 0;
 	border-bottom: 1px solid transparent;
 	background: none;
@@ -674,9 +1128,45 @@ td {
 	color: var(--text);
 }
 
-[role='tabpanel'] .plates {
-	margin-top: 0;
-	border-top: 0;
+[role='tabpanel'] {
+	padding-top: 1.5rem;
+}
+
+/* Desktop app and CLI, side by side once there is room. */
+.install-kinds {
+	display: grid;
+	gap: 1.75rem 2.5rem;
+}
+
+@media (min-width: 62rem) {
+	.install-kinds {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+.install-kind > * + * {
+	margin-top: 0.9rem;
+}
+
+.downloads {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.75rem 1.5rem;
+}
+
+.alts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.3rem 1.25rem;
+	font-size: 0.8125rem;
+}
+
+.result {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.4rem 1rem;
 }
 
 /* The unsigned-alpha notice is the one caution on the page, so it carries the amber edge. */

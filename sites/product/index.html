@@ -104,8 +104,13 @@
 				</figure>
 			</section>
 
-			<div class="band">
-				<div class="container">
+			<section class="band" aria-labelledby="premise-title">
+				<div class="container premise">
+					<div>
+						<p class="section-index">00 / Premise</p>
+						<h2 id="premise-title">One less layer between you and the thing you’re making.</h2>
+						<p>Development already has enough moving parts. Your naming layer shouldn’t add more.</p>
+					</div>
 					<ul class="skips">
 						<li><span class="label">No</span><span><code>/etc/hosts</code> edits</span></li>
 						<li><span class="label">No</span><span>per-project certificates</span></li>
@@ -113,11 +118,68 @@
 						<li><span class="label">No</span><span>account, telemetry, or public DNS</span></li>
 					</ul>
 				</div>
-			</div>
+			</section>
 
 			<section class="container section" id="how" aria-labelledby="how-title">
-				<h2 id="how-title">How it works</h2>
-				<p class="section-lede">There are two sides: the machine with your browser, and wherever your code runs.</p>
+				<header class="section-head">
+					<p class="section-index">01 / How it works</p>
+					<h2 id="how-title">Your machine is the host. Your app stays where it is.</h2>
+					<p class="section-lede">
+						Run the daemon on the machine with your browser. Each dev environment registers over a single outbound
+						connection.
+					</p>
+				</header>
+
+				<div class="route">
+					<p class="route-zone route-zone-host label">The machine with your browser</p>
+					<article class="route-node">
+						<p class="node-top"><span class="label">Browser</span><span class="label">01</span></p>
+						<svg class="node-glyph" viewBox="0 0 48 48" aria-hidden="true">
+							<rect x="5" y="8" width="38" height="32" />
+							<path d="M5 16h38M12 12h.01M18 12h.01M12 24h24M12 31h14" />
+						</svg>
+						<h3>Open a real name.</h3>
+						<code>https://app.example.test</code>
+						<p>The browser resolves <code>.test</code> to your host and connects over trusted HTTPS.</p>
+					</article>
+					<div class="route-link">
+						<span class="label">HTTPS</span><i></i><span>:443</span>
+					</div>
+					<article class="route-node route-node-host">
+						<p class="node-top"><span class="label">testd host</span><span class="label">02</span></p>
+						<svg class="node-glyph" viewBox="0 0 48 48" aria-hidden="true">
+							<circle cx="24" cy="24" r="17" />
+							<circle cx="24" cy="24" r="8" />
+							<path d="M24 3v9M24 36v9M3 24h9M36 24h9" />
+						</svg>
+						<h3>One local authority.</h3>
+						<ul class="node-parts">
+							<li class="chip">DNS</li>
+							<li class="chip">Local CA</li>
+							<li class="chip">HTTPS edge</li>
+						</ul>
+						<p>Resolves the name, mints a short-lived certificate, and proxies to the live app.</p>
+					</article>
+					<div class="route-link route-link-back">
+						<span class="label">Outbound</span><i></i><span>:7737</span>
+					</div>
+					<p class="route-zone route-zone-leaf label">Wherever your code runs</p>
+					<article class="route-node">
+						<p class="node-top"><span class="label">Dev environment</span><span class="label">03</span></p>
+						<svg class="node-glyph" viewBox="0 0 48 48" aria-hidden="true">
+							<circle cx="24" cy="24" r="9" />
+							<ellipse cx="24" cy="24" rx="20" ry="6" transform="rotate(-20 24 24)" />
+						</svg>
+						<h3>Keep building.</h3>
+						<code>testd run :3000</code>
+						<p>Your app stays plain HTTP in its container, VM, WSL instance, or remote box. HMR works too.</p>
+					</article>
+				</div>
+				<p class="route-note">
+					<strong>The connection is the lease.</strong> Stop the process or close the terminal, and its names
+					disappear. No stale routes, no cleanup job. <a href="/docs/local.html#lifetimes-and-ownership">Lifetimes and ownership</a>
+				</p>
+
 				<dl class="plates">
 					<div class="plate">
 						<dt>Host</dt>
@@ -128,14 +190,6 @@
 								authority, and proxies each request to the live app. The desktop app does the one-time steps in a
 								guided setup page.
 							</p>
-							<div class="code">
-								<pre><code data-shell id="host-commands">testd init           <span class="comment"># config, local CA, operator secret</span>
-testd doctor --fix   <span class="comment"># .test resolver and root trust; asks for administrator rights</span>
-testd host           <span class="comment"># run the daemon</span></code></pre>
-								<button class="copy-button" type="button" data-copy-target="host-commands" aria-label="Copy host commands">
-									<span class="copy-label">Copy</span>
-								</button>
-							</div>
 							<p><a href="/docs/host.html">Running the host</a></p>
 						</dd>
 					</div>
@@ -157,7 +211,6 @@ testd host           <span class="comment"># run the daemon</span></code></pre>
 								releases the names. A running leaf that drops reconnects every few seconds and registers again without a
 								new approval, as long as its token and grants still exist.
 							</p>
-							<p><a href="/docs/local.html#lifetimes-and-ownership">Lifetimes and ownership</a></p>
 						</dd>
 					</div>
 					<div class="plate">
@@ -176,7 +229,13 @@ testd host           <span class="comment"># run the daemon</span></code></pre>
 			</section>
 
 			<section class="container section" id="anywhere" aria-labelledby="anywhere-title">
-				<h2 id="anywhere-title">Wherever the code runs</h2>
+				<header class="section-head">
+					<p class="section-index">02 / Where it runs</p>
+					<h2 id="anywhere-title">Wherever the code runs</h2>
+					<p class="section-lede">
+						The name works the same from any of these. Only the route between the leaf and the host changes.
+					</p>
+				</header>
 				<dl class="plates">
 					<div class="plate">
 						<dt>This machine</dt>
@@ -185,7 +244,7 @@ testd host           <span class="comment"># run the daemon</span></code></pre>
 								Register a port from a project directory, or wrap the command that starts the server. The name lives as
 								long as the command.
 							</p>
-							<div class="code">
+							<div class="code" data-label="Run">
 								<pre><code data-shell>testd run :3000                                  <span class="comment"># name taken from the folder</span>
 testd run frontend:3000 api:8080 -- npm run dev  <span class="comment"># several names, one command</span></code></pre>
 							</div>
@@ -200,7 +259,7 @@ testd run frontend:3000 api:8080 -- npm run dev  <span class="comment"># several
 								leaf keeps its token. The host listens on loopback by default, so set <code>[host] listen_addr</code>
 								to an address the leaf can reach, and never expose port 7737 to the public internet.
 							</p>
-							<div class="code">
+							<div class="code" data-label="On the leaf">
 								<pre><code data-shell>testd pair 192.168.1.5
 testd run --host 192.168.1.5 :3000</code></pre>
 							</div>
@@ -225,7 +284,7 @@ testd run --host 192.168.1.5 :3000</code></pre>
 								Names are reachable only from the host and devices that trust its root. To show one to a phone, a
 								webhook, or a colleague, share it through a tunnel.
 							</p>
-							<div class="code">
+							<div class="code" data-label="Share a name">
 								<pre><code data-shell>testd share app.example                         <span class="comment"># cloudflared, public</span>
 testd share app.example --provider tailscale    <span class="comment"># tailnet only</span></code></pre>
 							</div>
@@ -252,7 +311,14 @@ testd share app.example --provider tailscale    <span class="comment"># tailnet 
 			</section>
 
 			<section class="container section" id="host" aria-labelledby="host-title">
-				<h2 id="host-title">On the host</h2>
+				<header class="section-head">
+					<p class="section-index">03 / The host</p>
+					<h2 id="host-title">On the host</h2>
+					<p class="section-lede">
+						Run it from the tray, or headless with <code>testd host</code>. Both share one configuration, certificate
+						authority, and dashboard.
+					</p>
+				</header>
 				<dl class="plates">
 					<div class="plate">
 						<dt>Desktop app</dt>
@@ -269,9 +335,14 @@ testd share app.example --provider tailscale    <span class="comment"># tailnet 
 						<dt>Dashboard</dt>
 						<dd>
 							<p>
-								Live names, quick launches, SSH apps, access requests, tokens, shares, and the root certificate,
-								updating without a reload. Open it from the tray, or run <code>testd dashboard</code>.
+								A live view, not another control plane. It keeps names, targets, shares, access requests, tokens, and
+								certificate health close. Open it from the tray, or run <code>testd dashboard</code>.
 							</p>
+							<ul class="notes">
+								<li><strong>Live by default.</strong> Updates stream in without a reload.</li>
+								<li><strong>Local by design.</strong> Changes need the owner’s per-run dashboard session.</li>
+								<li><strong>Ready when you are.</strong> Also available from the tray app.</li>
+							</ul>
 							<figure class="shot">
 								<img
 									src="../../assets/docs/dashboard-dark.png"
@@ -300,12 +371,78 @@ testd share app.example --provider tailscale    <span class="comment"># tailnet 
 				</dl>
 			</section>
 
+			<section class="container section" id="details" aria-labelledby="details-title">
+				<header class="section-head">
+					<p class="section-index">04 / Details</p>
+					<h2 id="details-title">Small surface. Solid foundations.</h2>
+					<p class="section-lede">
+						Purposeful defaults for everyday development, with escape hatches when your setup gets interesting.
+					</p>
+				</header>
+				<div class="cards">
+					<article class="card">
+						<p class="card-top label"><span>Local HTTPS</span><span>01</span></p>
+						<div class="card-figure" aria-hidden="true">
+							<span class="figure-number">24<small>h</small></span>
+							<span class="figure-caption">per leaf<br />certificate</span>
+						</div>
+						<h3>Certificates, handled.</h3>
+						<p>
+							A local CA mints leaf certificates on demand. They live for 24 hours; the root key never leaves your
+							host.
+						</p>
+					</article>
+					<article class="card">
+						<p class="card-top label"><span>Remote development</span><span>02</span></p>
+						<div class="card-figure" aria-hidden="true">
+							<span class="figure-tag">Host</span><i class="figure-dashes"></i><span class="figure-tag">Leaf</span>
+						</div>
+						<h3>Your environment can be elsewhere.</h3>
+						<p>
+							Connect containers, VMs, WSL, and remote boxes. Named profiles remember your hosts; reconnects reuse
+							approved grants.
+						</p>
+						<p class="tags"><span class="chip">Multi-host profiles</span><span class="chip">WebSockets + HMR</span></p>
+					</article>
+					<article class="card">
+						<p class="card-top label"><span>Scoped access</span><span>03</span></p>
+						<ul class="card-figure figure-grants" aria-hidden="true">
+							<li class="is-granted"><span>app.example</span><span>granted</span></li>
+							<li class="is-granted"><span>api.example</span><span>granted</span></li>
+							<li><span>admin.example</span><span>not granted</span></li>
+						</ul>
+						<h3>Permission, name by name.</h3>
+						<p>
+							Approve a new environment once. Issued tokens cover exact names, persist across reconnects, and can be
+							revoked without disturbing others.
+						</p>
+						<p><a href="/docs/security.html#secrets">Read the trust model</a></p>
+					</article>
+					<article class="card">
+						<p class="card-top label"><span>Quick launches</span><span>04</span></p>
+						<div class="card-figure figure-launch" aria-hidden="true">
+							<span class="figure-command">$ npm run dev</span>
+							<span class="figure-states"><span>configured</span><span>probing</span><span class="is-live">confirmed</span></span>
+						</div>
+						<h3>From saved command to live name.</h3>
+						<p>
+							Start projects from the dashboard or tray. testd detects the listening port, probes the target, and
+							registers the name once it accepts connections.
+						</p>
+						<p><a href="/docs/local.html#quick-launches">Quick launches</a></p>
+					</article>
+				</div>
+			</section>
+
 			<section class="container section" id="security" aria-labelledby="security-title">
-				<h2 id="security-title">What it trusts</h2>
-				<p class="section-lede">
-					testd is a local development tool for machines you control. It is not a production ingress controller, a
-					public DNS server, or a multi-tenant platform.
-				</p>
+				<header class="section-head">
+					<p class="section-index">05 / Security</p>
+					<h2 id="security-title">What it trusts</h2>
+					<p class="section-lede">
+						testd is a local development tool for machines you control. It is not a production ingress controller, a
+						public DNS server, or a multi-tenant platform.
+					</p>
+				</header>
 				<dl class="plates">
 					<div class="plate">
 						<dt>Root key</dt>
@@ -370,109 +507,179 @@ testd share app.example --provider tailscale    <span class="comment"># tailnet 
 
 			<div class="band install-band">
 				<section class="container section" id="install" aria-labelledby="install-title">
-					<h2 id="install-title">Install</h2>
-					<p class="section-lede">
-						testd ships as two binaries that share one configuration, certificate authority, and dashboard. The desktop
-						app runs the host from your tray. The CLI registers projects, and can also run the host without a desktop.
-					</p>
+					<header class="section-head">
+						<p class="section-index">06 / Install</p>
+						<h2 id="install-title">From zero to HTTPS in three moves.</h2>
+						<p class="section-lede">
+							testd ships as two binaries that share one configuration, certificate authority, and dashboard. The
+							desktop app runs the host from your tray. The CLI registers projects, and can also run the host without
+							a desktop.
+						</p>
+					</header>
 
-					<div class="tabs" role="tablist" aria-label="Platform">
-						<button id="os-macos-tab" type="button" role="tab" aria-selected="true" aria-controls="os-macos-panel" data-os-tab="macos">macOS</button>
-						<button id="os-linux-tab" type="button" role="tab" aria-selected="false" aria-controls="os-linux-panel" tabindex="-1" data-os-tab="linux">Linux</button>
-						<button id="os-windows-tab" type="button" role="tab" aria-selected="false" aria-controls="os-windows-panel" tabindex="-1" data-os-tab="windows">Windows</button>
-					</div>
+					<dl class="plates">
+						<div class="plate">
+							<dt><span class="step">01</span>Install</dt>
+							<dd>
+								<div class="tabs" role="tablist" aria-label="Platform">
+									<button id="os-macos-tab" type="button" role="tab" aria-selected="true" aria-controls="os-macos-panel" data-os-tab="macos">macOS</button>
+									<button id="os-linux-tab" type="button" role="tab" aria-selected="false" aria-controls="os-linux-panel" tabindex="-1" data-os-tab="linux">Linux</button>
+									<button id="os-windows-tab" type="button" role="tab" aria-selected="false" aria-controls="os-windows-panel" tabindex="-1" data-os-tab="windows">Windows</button>
+								</div>
 
-					<div id="os-macos-panel" role="tabpanel" aria-labelledby="os-macos-tab">
-						<dl class="plates">
-							<div class="plate">
-								<dt>Desktop app</dt>
-								<dd>
-									<p>
-										Open <code>Testd___TESTD_VERSION___aarch64.dmg</code> and drag Testd.app into Applications. Intel
-										Macs use <code>x64.dmg</code>, best effort. Or download <code>testd-gui.rb</code> from the release
-										and run <code>brew install --cask ./testd-gui.rb</code>.
-									</p>
-								</dd>
-							</div>
-							<div class="plate">
-								<dt>CLI</dt>
-								<dd>
-									<div class="code">
-										<pre><code data-shell id="cli-macos">curl -fsSL https://testd.dev/install.sh | sh</code></pre>
-										<button class="copy-button" type="button" data-copy-target="cli-macos" aria-label="Copy install command">
-											<span class="copy-label">Copy</span>
-										</button>
+								<div id="os-macos-panel" role="tabpanel" aria-labelledby="os-macos-tab">
+									<div class="install-kinds">
+										<div class="install-kind">
+											<p class="label">Desktop app</p>
+											<div class="downloads">
+												<a class="button" href="https://github.com/stelmost/testd/releases/download/v__TESTD_VERSION__/Testd___TESTD_VERSION___aarch64.dmg">Download for macOS (Apple Silicon)</a>
+												<p class="alts">
+													<a href="https://github.com/stelmost/testd/releases/download/v__TESTD_VERSION__/Testd___TESTD_VERSION___x64.dmg">Intel .dmg</a>
+													<a href="https://github.com/stelmost/testd/releases/download/v__TESTD_VERSION__/testd-gui.rb">Homebrew cask</a>
+													<a href="https://github.com/stelmost/testd/releases/download/v__TESTD_VERSION__/SHA256SUMS">SHA256SUMS</a>
+												</p>
+											</div>
+											<p>
+												Open the disk image and drag Testd.app into Applications. Intel Macs are best effort. For
+												Homebrew, download <code>testd-gui.rb</code> and run
+												<code>brew install --cask ./testd-gui.rb</code>.
+											</p>
+										</div>
+										<div class="install-kind">
+											<p class="label">CLI</p>
+											<div class="code" data-label="Install the CLI">
+												<pre><code data-shell id="cli-macos">curl -fsSL https://testd.dev/install.sh | sh</code></pre>
+												<button class="copy-button" type="button" data-copy-target="cli-macos" aria-label="Copy install command">
+													<span class="copy-label">Copy</span>
+												</button>
+											</div>
+											<p>
+												The installer verifies <code>SHA256SUMS</code> and puts <code>testd</code> in
+												<code>~/.local/bin</code>.
+											</p>
+										</div>
 									</div>
-									<p>
-										The installer verifies <code>SHA256SUMS</code> and puts <code>testd</code> in
-										<code>~/.local/bin</code>.
-									</p>
-								</dd>
-							</div>
-						</dl>
-					</div>
+								</div>
 
-					<div id="os-linux-panel" role="tabpanel" aria-labelledby="os-linux-tab" hidden>
-						<dl class="plates">
-							<div class="plate">
-								<dt>Desktop app</dt>
-								<dd>
-									<p>
-										Use <code>Testd___TESTD_VERSION___x64.deb</code>, or run
-										<code>Testd___TESTD_VERSION___x64.AppImage</code>. Both are built for x86_64 with GNU libc; Debian 13
-										is the baseline and other distributions are best effort. Binding port 443 needs
-										<code>CAP_NET_BIND_SERVICE</code> on the tray binary: see
-										<a href="/docs/system.html#privileged-ports">privileged ports</a>.
-									</p>
-									<div class="code">
-										<pre><code data-shell id="apt-linux">sudo apt install ./Testd___TESTD_VERSION___x64.deb</code></pre>
-										<button class="copy-button" type="button" data-copy-target="apt-linux" aria-label="Copy install command">
-											<span class="copy-label">Copy</span>
-										</button>
+								<div id="os-linux-panel" role="tabpanel" aria-labelledby="os-linux-tab" hidden>
+									<div class="install-kinds">
+										<div class="install-kind">
+											<p class="label">Desktop app</p>
+											<div class="downloads">
+												<a class="button" href="https://github.com/stelmost/testd/releases/download/v__TESTD_VERSION__/Testd___TESTD_VERSION___x64.deb">Download for Linux (.deb)</a>
+												<p class="alts">
+													<a href="https://github.com/stelmost/testd/releases/download/v__TESTD_VERSION__/Testd___TESTD_VERSION___x64.AppImage">AppImage (x64)</a>
+													<a href="https://github.com/stelmost/testd/releases/download/v__TESTD_VERSION__/SHA256SUMS">SHA256SUMS</a>
+												</p>
+											</div>
+											<div class="code" data-label="Debian and Ubuntu">
+												<pre><code data-shell id="apt-linux">sudo apt install ./Testd___TESTD_VERSION___x64.deb</code></pre>
+												<button class="copy-button" type="button" data-copy-target="apt-linux" aria-label="Copy install command">
+													<span class="copy-label">Copy</span>
+												</button>
+											</div>
+											<p>
+												Both are built for x86_64 with GNU libc; Debian 13 is the baseline and other distributions
+												are best effort. Binding port 443 needs <code>CAP_NET_BIND_SERVICE</code> on the tray
+												binary: see <a href="/docs/system.html#privileged-ports">privileged ports</a>.
+											</p>
+										</div>
+										<div class="install-kind">
+											<p class="label">CLI</p>
+											<div class="code" data-label="Install the CLI">
+												<pre><code data-shell id="cli-linux">curl -fsSL https://testd.dev/install.sh | sh</code></pre>
+												<button class="copy-button" type="button" data-copy-target="cli-linux" aria-label="Copy install command">
+													<span class="copy-label">Copy</span>
+												</button>
+											</div>
+											<p>
+												The installer verifies <code>SHA256SUMS</code>, picks GNU libc or static musl, and puts
+												<code>testd</code> in <code>~/.local/bin</code>.
+											</p>
+										</div>
 									</div>
-								</dd>
-							</div>
-							<div class="plate">
-								<dt>CLI</dt>
-								<dd>
-									<div class="code">
-										<pre><code data-shell id="cli-linux">curl -fsSL https://testd.dev/install.sh | sh</code></pre>
-										<button class="copy-button" type="button" data-copy-target="cli-linux" aria-label="Copy install command">
-											<span class="copy-label">Copy</span>
-										</button>
-									</div>
-									<p>
-										The installer verifies <code>SHA256SUMS</code>, picks GNU libc or static musl, and puts
-										<code>testd</code> in <code>~/.local/bin</code>.
-									</p>
-								</dd>
-							</div>
-						</dl>
-					</div>
+								</div>
 
-					<div id="os-windows-panel" role="tabpanel" aria-labelledby="os-windows-tab" hidden>
-						<dl class="plates">
-							<div class="plate">
-								<dt>Desktop app</dt>
-								<dd>
-									<p>
-										Run <code>Testd___TESTD_VERSION___x64-setup.exe</code>, a per-user installer. Administrator rights are
-										needed only when setup configures DNS and root trust.
-									</p>
-								</dd>
-							</div>
-							<div class="plate">
-								<dt>CLI</dt>
-								<dd>
-									<p>
-										Download <code>testd-__TESTD_VERSION__-x86_64-pc-windows-msvc.zip</code> and
-										<code>SHA256SUMS</code> from the release, check the checksum, and put <code>testd.exe</code> on your
-										<code>PATH</code>. It needs no Visual C++ redistributable.
-									</p>
-								</dd>
-							</div>
-						</dl>
-					</div>
+								<div id="os-windows-panel" role="tabpanel" aria-labelledby="os-windows-tab" hidden>
+									<div class="install-kinds">
+										<div class="install-kind">
+											<p class="label">Desktop app</p>
+											<div class="downloads">
+												<a class="button" href="https://github.com/stelmost/testd/releases/download/v__TESTD_VERSION__/Testd___TESTD_VERSION___x64-setup.exe">Download for Windows (.exe)</a>
+												<p class="alts">
+													<a href="https://github.com/stelmost/testd/releases/download/v__TESTD_VERSION__/SHA256SUMS">SHA256SUMS</a>
+												</p>
+											</div>
+											<p>
+												A per-user installer. Administrator rights are needed only when setup configures DNS and root
+												trust.
+											</p>
+										</div>
+										<div class="install-kind">
+											<p class="label">CLI</p>
+											<div class="downloads">
+												<a class="button button-quiet" href="https://github.com/stelmost/testd/releases/download/v__TESTD_VERSION__/testd-__TESTD_VERSION__-x86_64-pc-windows-msvc.zip">Download the CLI (.zip)</a>
+											</div>
+											<p>
+												Check the download against <code>SHA256SUMS</code> and put <code>testd.exe</code> on your
+												<code>PATH</code>. It needs no Visual C++ redistributable.
+											</p>
+										</div>
+									</div>
+								</div>
+							</dd>
+						</div>
+						<div class="plate">
+							<dt><span class="step">02</span>Prepare the host</dt>
+							<dd>
+								<p>
+									The desktop app walks through the <code>.test</code> DNS resolver, the local root certificate, and
+									the daemon in your browser. With the CLI, run these on the machine with your browser:
+								</p>
+								<div class="code" data-label="On the host, CLI only">
+									<pre><code data-shell id="host-commands">testd init           <span class="comment"># config, local CA, operator secret</span>
+testd doctor --fix   <span class="comment"># .test resolver and root trust; asks for administrator rights</span>
+testd host           <span class="comment"># run the daemon</span></code></pre>
+									<button class="copy-button" type="button" data-copy-target="host-commands" aria-label="Copy host commands">
+										<span class="copy-label">Copy</span>
+									</button>
+								</div>
+							</dd>
+						</div>
+						<div class="plate">
+							<dt><span class="step">03</span>Name your project</dt>
+							<dd>
+								<p>
+									Run <code>testd run</code> where your app lives, or launch it from the dashboard. Stop it to release
+									the name.
+								</p>
+								<div>
+									<div class="tabs" role="tablist" aria-label="Where the project runs">
+										<button id="run-local-tab" type="button" role="tab" aria-selected="true" aria-controls="run-local-panel">This machine</button>
+										<button id="run-remote-tab" type="button" role="tab" aria-selected="false" aria-controls="run-remote-panel" tabindex="-1">Remote environment</button>
+									</div>
+									<div id="run-local-panel" role="tabpanel" aria-labelledby="run-local-tab">
+										<div class="code" data-label="In your project">
+											<pre><code data-shell id="run-local">testd run app.example:3000 -- npm run dev</code></pre>
+											<button class="copy-button" type="button" data-copy-target="run-local" aria-label="Copy project command">
+												<span class="copy-label">Copy</span>
+											</button>
+										</div>
+									</div>
+									<div id="run-remote-panel" role="tabpanel" aria-labelledby="run-remote-tab" hidden>
+										<div class="code" data-label="On the remote box">
+											<pre><code data-shell id="run-remote">testd pair 192.168.1.5
+testd run --host 192.168.1.5 app.example:3000 -- npm run dev</code></pre>
+											<button class="copy-button" type="button" data-copy-target="run-remote" aria-label="Copy project commands">
+												<span class="copy-label">Copy</span>
+											</button>
+										</div>
+									</div>
+								</div>
+								<p class="result"><span class="label">Then open</span><code>https://app.example.test</code></p>
+							</dd>
+						</div>
+					</dl>
 
 					<p class="install-note">
 						This is an unsigned alpha. Windows artifacts have no Authenticode signature and macOS artifacts are not
