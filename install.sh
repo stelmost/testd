@@ -37,13 +37,21 @@ Linux:aarch64 | Linux:arm64)
 esac
 
 if [ -z "$version" ]; then
-	api="https://api.github.com/repos/$repo/releases/latest"
+	lookup_error="release lookup failed for $repo; check GitHub access or set TESTD_VERSION from the release notes"
 	if [ -n "${GITHUB_TOKEN:-}" ]; then
-		release=$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" "$api")
+		api="https://api.github.com/repos/$repo/releases/latest"
+		release=$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" "$api") || fail "$lookup_error"
+		version=$(printf '%s' "$release" | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p')
 	else
-		release=$(curl -fsSL "$api")
-	fi || fail "could not find a stable release for $repo; for a prerelease, use TESTD_VERSION as shown in its release notes"
-	version=$(printf '%s' "$release" | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p')
+		# The public redirect avoids GitHub's unauthenticated API rate limit.
+		release_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+			"https://github.com/$repo/releases/latest") || fail "$lookup_error"
+		tag_url="https://github.com/$repo/releases/tag/v"
+		case "$release_url" in
+		"$tag_url"*) version=${release_url#"$tag_url"} ;;
+		*) fail "could not read the release tag for $repo; set TESTD_VERSION from the release notes" ;;
+		esac
+	fi
 	[ -n "$version" ] || fail "could not read the release tag for $repo"
 fi
 

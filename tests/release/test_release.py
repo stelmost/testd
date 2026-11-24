@@ -355,7 +355,7 @@ class ReleaseTests(unittest.TestCase):
 			result = subprocess.run(command, env={**env, 'TESTD_VERSION': ''},
 				capture_output=True, text=True, timeout=15)
 			self.assertNotEqual(result.returncode, 0)
-			self.assertIn('for a prerelease, use TESTD_VERSION', result.stderr)
+			self.assertIn('check GitHub access or set TESTD_VERSION', result.stderr)
 
 	def test_ci_required_artifacts_are_selected_by_target_not_builder_os(self):
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
