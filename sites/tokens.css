@@ -1,0 +1,31 @@
+/*
+	The Elmo St. palette in its product form, shared by the product page and the docs: Night ground,
+	Light words, St. Elmo blue and amber for the lights, and three muted hues for worlds and code.
+*/
+:root {
+	/* Surfaces, darkest to lightest */
+	--ground: #05070b;
+	--inset: #070b11;
+	--raised: #0a0f17;
+	--line: rgb(236 242 249 / 11%);
+	--line-strong: rgb(236 242 249 / 22%);
+
+	/* Text tiers */
+	--text: #ecf2f9;
+	--text-2: rgb(236 242 249 / 78%);
+	--text-3: rgb(236 242 249 / 56%);
+
+	/* Lights and interaction */
+	--blue: #5ce1ff;
+	--blue-line: rgb(92 225 255 / 40%);
+	--link: #8fddf0;
+	--amber: #ff7828;
+	--amber-soft: #ffb27f;
+
+	/* Muted hues: worlds, code, markers */
+	--teal: #5bb5aa;
+	--violet: #9c92d8;
+	--sand: #d2b98f;
+
+	--mono: 'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
+}

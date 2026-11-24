@@ -1,9 +1,10 @@
 @import '@fontsource-variable/jetbrains-mono';
+@import '../tokens.css';
 
 /*
-	Elmo St. identity on a product page: Night ground, Light words, St. Elmo blue and amber for the
-	lights, widened so a page you read and work from is comfortable. Surfaces step up from the ground
-	in cool tints; three muted hues colour the worlds and the code.
+	Elmo St. identity on a product page, widened so a page you read and work from is comfortable.
+	The palette is in ../tokens.css: surfaces step up from the Night ground in cool tints, and three
+	muted hues colour the worlds and the code.
 
 	Everything is set in one monospace face, which has no weights or sizes to lean on, so the structure
 	is drawn: a ruled sheet with indexed sections, label cells, bordered panels, and tracked capitals,
@@ -12,31 +13,6 @@
 :root {
 	color-scheme: dark;
 
-	/* Surfaces, darkest to lightest */
-	--ground: #05070b;
-	--inset: #070b11;
-	--raised: #0a0f17;
-	--line: rgb(236 242 249 / 11%);
-	--line-strong: rgb(236 242 249 / 22%);
-
-	/* Text tiers */
-	--text: #ecf2f9;
-	--text-2: rgb(236 242 249 / 78%);
-	--text-3: rgb(236 242 249 / 56%);
-
-	/* Lights and interaction */
-	--blue: #5ce1ff;
-	--blue-line: rgb(92 225 255 / 40%);
-	--link: #8fddf0;
-	--amber: #ff7828;
-	--amber-soft: #ffb27f;
-
-	/* Muted hues: worlds, code, markers */
-	--teal: #5bb5aa;
-	--violet: #9c92d8;
-	--sand: #d2b98f;
-
-	--mono: 'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
 	--gutter: 13rem;
 	--measure: 39rem;
 	--sheet: 56rem;
