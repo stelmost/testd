@@ -9,10 +9,12 @@ Use hosted CI for the repeatable platform matrix. Use the OS-detecting `tests/ru
 
 | Run | Scope |
 |---|---|
-| Push to `master` or open a pull request | Change-filtered automated checks; documentation-only changes may skip builds |
-| Manual `ci.yml` workflow run | Required and best-effort platform matrix, minimum-runtime fixtures, website checks, native package builds, and workspace SBOMs; no release publishing |
+| Push to `master` or open a pull request | `ci.yml` runs for code, test, packaging, and shared build inputs; `site.yml` runs for website, documentation, and shared site inputs |
+| Manual `ci.yml` workflow run | Required and best-effort platform matrix and minimum-runtime fixtures |
+| Manual `site.yml` workflow run | Isolated website type checks, build, and link checks |
+| Manual `release.yml` workflow run | Both check workflows, native package builds, and workspace SBOMs; no release publishing |
 | Local default `check` profile | Non-GUI Rust checks, fixtures, audit, isolated website, and CLI/daemon checks; `--gui` includes native GUI compilation/tests |
-| Local `ci` profile | Unprivileged whole-workspace checks including GUI; the separate CI `site` job validates the website once |
+| Local `ci` profile | Unprivileged whole-workspace checks including GUI; the separate `site.yml` workflow validates the website once |
 | Local `all` profile | `check` plus explicitly selected system, artifact, desktop, browser, and manual stages; incomplete selected evidence remains blocked |
 
 ## Run the full matrix on GitHub
@@ -22,11 +24,11 @@ No local Rust, Python, Bun, or VM setup is needed for hosted CI. The workflow pr
 Commit and push the revision you want tested before dispatching. `--ref master` uses GitHub's copy of `master`, not local or uncommitted changes; replace `master` with a pushed branch name to test that branch. Do not push a version tag just to run tests: version-tag pushes can write GitHub Release assets.
 
 ```sh
-gh workflow run ci.yml --repo stelmost/testd --ref master
-gh run list --repo stelmost/testd --workflow ci.yml --event workflow_dispatch --limit 5
+gh workflow run release.yml --repo stelmost/testd --ref master
+gh run list --repo stelmost/testd --workflow release.yml --event workflow_dispatch --limit 5
 ```
 
-Alternatively, open the repository's **Actions → ci → Run workflow**, select the branch, and start the run. Manual runs include package and SBOM builds only after the test gates pass. GitHub Actions retains their artifacts. The release-writing job stays skipped even when the dispatch ref is a version tag.
+Alternatively, open the repository's **Actions → release → Run workflow**, select the branch, and start the run. Manual release runs call both check workflows without path filtering, then build packages and SBOMs after their gates pass. GitHub Actions retains their artifacts. The release-writing job stays skipped even when the dispatch ref is a version tag. Dispatch `ci.yml` or `site.yml` directly for a focused run.
 
 Replace `RUN_ID` in the following commands with the numeric ID from the new run. Confirm its source SHA and URL before interpreting results:
 
@@ -61,7 +63,7 @@ gh run download RUN_ID --repo stelmost/testd --name sbom --dir 'OUTPUT_DIR/sbom'
 gh run view RUN_ID --repo stelmost/testd --log > 'OUTPUT_DIR/run.log'
 ```
 
-Each `ci-summary-*` artifact contains `ci-summary.json`, with source/OS/Python metadata and stage statuses. Package and SBOM artifacts are available from full manual or tag runs, not ordinary push/PR runs. Full runner reports, fixture homes, PKI, browser profiles, and source patches are not uploaded. GitHub retains command output in the job logs; review logs before sharing because fixture output can contain sensitive data. Built artifacts are unsigned and are not installation or signing evidence.
+Each `ci-summary-*` artifact contains `ci-summary.json`, with source/OS/Python metadata and stage statuses. Package and SBOM artifacts are available from manual `release.yml` or tag runs, not ordinary push/PR runs. Full runner reports, fixture homes, PKI, browser profiles, and source patches are not uploaded. GitHub retains command output in the job logs; review logs before sharing because fixture output can contain sensitive data. Built artifacts are unsigned and are not installation or signing evidence.
 
 ## Reproduce the unprivileged suite locally
 

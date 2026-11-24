@@ -1,6 +1,7 @@
 import base64
 import contextlib
 import errno
+import fnmatch
 import importlib.util
 import hashlib
 import http.client
@@ -146,7 +147,7 @@ class ReleaseTests(unittest.TestCase):
 	def test_ci_provisions_supported_platforms_and_uploads_only_status_summaries(self):
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
 		test_job = workflow.split('\n  test:\n', 1)[1].split('\n  linux-userspace:\n', 1)[0]
-		userspace = workflow.split('\n  linux-userspace:\n', 1)[1].split('\n  site:\n', 1)[0]
+		userspace = workflow.split('\n  linux-userspace:\n', 1)[1].split('\n  system-state-fixtures:\n', 1)[0]
 		matrix = dict(re.findall(r'(?m)^          - os: (.+)\n            required: (true|false)$', test_job))
 		self.assertEqual(matrix, {'ubuntu-24.04': 'false', 'macos-15': 'true', 'macos-26': 'true',
 			'macos-15-intel': 'false', 'windows-2025': 'false'})
@@ -254,7 +255,7 @@ class ReleaseTests(unittest.TestCase):
 		self.assertNotIn('nextest', command)
 
 	def test_ci_always_runs_ignored_contracts_and_gates_release_builds(self):
-		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+		workflow = (ROOT / '.github/workflows/release.yml').read_text(encoding='utf-8')
 		checks = runner.helper('all_checks')
 		stages = checks.AllChecks(None, None, SimpleNamespace(suite='ci')).stages()
 		child = Mock()
@@ -262,15 +263,22 @@ class ReleaseTests(unittest.TestCase):
 		with patch.object(checks.shutil, 'which', return_value='installed'):
 			next(stage for stage in stages if stage.name == 'rust-tests').action(child)
 		self.assertIn('--include-ignored', child.command.call_args.args[1])
+		for name in ('ci', 'site'):
+			self.assertIn(f'uses: ./.github/workflows/{name}.yml', workflow)
+			called = (ROOT / f'.github/workflows/{name}.yml').read_text(encoding='utf-8')
+			self.assertIn('\n  workflow_call:\n', called)
 		for job, following in (('bundle', 'sbom'), ('sbom', 'release')):
 			section = workflow.split(f'\n  {job}:\n', 1)[1].split(f'\n  {following}:\n', 1)[0]
-			self.assertIn('needs: [test, linux-userspace, system-state-fixtures, site]', section)
+			self.assertIn('needs: [ci, site]', section)
 
-	def test_manual_ci_builds_packages_without_publishing_a_release(self):
-		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+	def test_manual_release_builds_packages_without_publishing_a_release(self):
+		workflow = (ROOT / '.github/workflows/release.yml').read_text(encoding='utf-8')
+		self.assertIn("tags: ['v*']", workflow)
+		self.assertIn('\n  workflow_dispatch:\n', workflow)
+		self.assertNotIn('\n    paths:', workflow)
 		for job, following in (('bundle', 'sbom'), ('sbom', 'release')):
 			section = workflow.split(f'\n  {job}:\n', 1)[1].split(f'\n  {following}:\n', 1)[0]
-			self.assertIn("github.event_name == 'workflow_dispatch'", section)
+			self.assertNotIn('\n    if:', section)
 		bundle = workflow.split('\n  bundle:\n', 1)[1].split('\n  sbom:\n', 1)[0]
 		self.assertIn('steps.version.outputs.version', bundle)
 		self.assertIn('path: ~/.cargo/bin/cargo-packager*', bundle)
@@ -363,8 +371,8 @@ class ReleaseTests(unittest.TestCase):
 					release.installer(SimpleNamespace(version='9.8.7', output=output))
 			self.assertFalse(output.exists())
 
-	def test_ci_generates_the_pinned_installer_before_checksums(self):
-		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+	def test_release_generates_the_pinned_installer_before_checksums(self):
+		workflow = (ROOT / '.github/workflows/release.yml').read_text(encoding='utf-8')
 		job = workflow.split('\n  release:\n', 1)[1]
 		generation = 'python scripts/release.py installer --version "${GITHUB_REF_NAME#v}" --output dist'
 		self.assertLess(job.index(generation), job.index('python scripts/release.py checksums dist'))
@@ -426,8 +434,8 @@ class ReleaseTests(unittest.TestCase):
 			self.assertIn('TESTD_LIBC must be gnu or musl', result.stderr)
 			self.assertEqual(installed.read_bytes(), b'fixture musl')
 
-	def test_ci_required_artifacts_are_selected_by_target_not_builder_os(self):
-		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+	def test_release_required_artifacts_are_selected_by_target_not_builder_os(self):
+		workflow = (ROOT / '.github/workflows/release.yml').read_text(encoding='utf-8')
 		bundle = workflow.split('\n  bundle:\n', 1)[1].split('\n  sbom:\n', 1)[0]
 		matrix = dict(re.findall(r'(?m)^            target: (.+)\n            required: (true|false)$', bundle))
 		self.assertEqual(matrix, {'aarch64-apple-darwin': 'true', 'x86_64-apple-darwin': 'false',
@@ -452,7 +460,7 @@ class ReleaseTests(unittest.TestCase):
 
 	def test_ci_minimum_runtime_fixtures_require_both_supported_macos_versions(self):
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
-		fixtures = workflow.split('\n  system-state-fixtures:\n', 1)[1].split('\n  bundle:\n', 1)[0]
+		fixtures = workflow.split('\n  system-state-fixtures:\n', 1)[1]
 		matrix = dict(re.findall(r'(?m)^          - os: (.+)\n            required: (true|false)$', fixtures))
 		self.assertEqual(matrix, {'ubuntu-latest': 'false', 'macos-15': 'true', 'macos-26': 'true',
 			'windows-latest': 'false'})
@@ -2308,39 +2316,50 @@ quick_launch_diagnostics fixture
 					self.assertEqual(marker.read_text(encoding='utf-8'), 'existing data')
 					self.assertFalse((root / 'output').exists())
 
-	def test_change_filter_classifies_platform_job_inputs(self):
-		self.assertNotIn('declare -n', (ROOT / 'tests/ci-changes.sh').read_text())
+	def test_workflow_paths_separate_site_and_platform_inputs(self):
+		filters = []
+		for name in ('ci', 'site'):
+			workflow = (ROOT / f'.github/workflows/{name}.yml').read_text(encoding='utf-8')
+			push, pull_request = workflow.split('\n  push:\n', 1)[1].split('\n  pull_request:\n', 1)
+			patterns = re.findall(r"(?m)^      - '([^']+)'$", push)
+			self.assertTrue(patterns)
+			self.assertEqual(patterns, re.findall(r"(?m)^      - '([^']+)'$", pull_request))
+			self.assertNotIn('\n    tags:', workflow)
+			filters.append(patterns)
 		cases = (
-			('README.md', (True, False, False)),
-			('tests/README.md', (True, True, False)),
-			('tests/manual/browser.md', (True, True, False)),
-			('tests/host/gui-checklist.md', (True, True, False)),
-			('tests/run.py', (False, True, True)),
-			('tests/release/all_checks.py', (False, True, True)),
-			('tests/check-links.ts', (False, True, True)),
-			('tests/ci-changes.sh', (False, True, True)),
-			('install.sh', (False, True, True)),
-			('docs/host.md', (False, False, True)),
-			('.github/workflows/ci.yml', (True, True, True)),
-			('README.md\ndocs/host.md', (True, False, True)),
-			('unrelated.txt', (False, False, False)),
+			('src/main.rs', (True, False)),
+			('crates/testd-daemon/dashboard.html', (True, False)),
+			('README.md', (True, False)),
+			('CHANGELOG.md', (True, False)),
+			('tests/host/gui-checklist.md', (True, False)),
+			('tests/release/test_release.py', (True, False)),
+			('tests/run.py', (True, True)),
+			('tests/release/all_checks.py', (True, True)),
+			('tests/check-links.ts', (False, True)),
+			('install.sh', (True, True)),
+			('package.json', (True, True)),
+			('bun.lock', (True, True)),
+			('tsconfig.json', (False, True)),
+			('docs/host.md', (False, True)),
+			('sites/product/index.html', (False, True)),
+			('assets/social/og.png', (False, True)),
+			('assets/brand/testd-slim.svg', (True, True)),
+			('.github/workflows/ci.yml', (True, False)),
+			('.github/workflows/site.yml', (False, True)),
+			('.github/workflows/release.yml', (True, False)),
+			('.github/actions/linux-dependencies/action.yml', (True, False)),
+			('unrelated.txt', (False, False)),
 		)
-		with tempfile.TemporaryDirectory() as directory:
-			fake_git = pathlib.Path(directory) / 'git'
-			fake_git.write_text("#!/bin/sh\ncase \"$1\" in\n"
-				"  cat-file) exit 0 ;;\n  diff) printf '%s\\n' \"$CHANGED_FILE\" ;;\n  *) exit 1 ;;\nesac\n",
-				encoding='utf-8')
-			fake_git.chmod(0o700)
-			for index, (path, flags) in enumerate(cases):
-				with self.subTest(path=path):
-					output = pathlib.Path(directory) / f'output-{index}'
-					env = {**os.environ, 'PATH': f'{directory}{os.pathsep}{os.environ.get("PATH", "")}',
-						'EVENT': 'push', 'BASE': 'fixture', 'GITHUB_REF': 'refs/heads/master',
-						'GITHUB_OUTPUT': str(output), 'CHANGED_FILE': path}
-					subprocess.run(['bash', 'tests/ci-changes.sh'], cwd=ROOT, env=env, timeout=5, check=True)
-					expected = ''.join(f'{name}={str(value).lower()}\n'
-						for name, value in zip(('rust', 'release', 'site'), flags))
-					self.assertEqual(output.read_text(), expected)
+		for path, expected in cases:
+			with self.subTest(path=path):
+				actual = []
+				for patterns in filters:
+					matched = False
+					for pattern in patterns:
+						if fnmatch.fnmatchcase(path, pattern.lstrip('!')):
+							matched = not pattern.startswith('!')
+					actual.append(matched)
+				self.assertEqual(tuple(actual), expected)
 
 	def test_system_trust_requires_a_successful_dashboard_response(self):
 		script = '''

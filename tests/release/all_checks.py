@@ -120,7 +120,7 @@ class AllChecks:
 		if self.args.suite in focused:
 			return [stage for stage in stages if stage.name == focused[self.args.suite]]
 		if self.args.suite == 'ci':
-			# The dedicated CI site job runs the same website checks once, not per OS.
+			# The site workflow runs the same website checks once, not per OS.
 			return [stage for stage in stages if stage.name != 'site']
 		return stages + (self.system_stages() if self.args.suite == 'all' else [])
 

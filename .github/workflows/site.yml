@@ -1,0 +1,46 @@
+name: site
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/site.yml'
+      - 'sites/**'
+      - 'docs/**'
+      - 'assets/**'
+      - 'tests/run.py'
+      - 'tests/release/all_checks.py'
+      - 'tests/check-links.ts'
+      - 'package.json'
+      - 'bun.lock'
+      - 'tsconfig.json'
+      - 'install.sh'
+  pull_request:
+    paths:
+      - '.github/workflows/site.yml'
+      - 'sites/**'
+      - 'docs/**'
+      - 'assets/**'
+      - 'tests/run.py'
+      - 'tests/release/all_checks.py'
+      - 'tests/check-links.ts'
+      - 'package.json'
+      - 'bun.lock'
+      - 'tsconfig.json'
+      - 'install.sh'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  site:
+    name: site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Run isolated website checks once
+        run: python3 tests/run.py site --report ci-reports --verbose
