@@ -92,7 +92,7 @@ To open the dashboard from the CLI (in the same user account that owns the daemo
 testd dashboard
 ```
 
-If you use the desktop tray app, you can also open it directly from the tray menu.
+If you use the [desktop app](desktop.md), click **`testd.test → dashboard`** in the tray or menu-bar menu instead.
 
 The printed URL carries a one-run bootstrap token in its URL fragment. As soon as the page loads, it strips the token from your browser history and stores it in origin-scoped session storage. Restarting the daemon invalidates the session, and visiting bare `http://127.0.0.1:7737/` or `https://testd.test/` without a valid session does not expose live state or admin controls. Every mutating request also requires the `X-Testd-Request: 1` header.
 

@@ -251,16 +251,13 @@ testd runs a built-in DNS server on loopback (`127.0.0.1:7753` on Linux/macOS, `
 
 ## Desktop app and OS integration
 
-The desktop tray app is a separate native Rust build. On first start, it opens a browser-based setup page on an ephemeral loopback port to configure the DNS resolver, root certificate, and operator secret (pre-filled with a generated pronounceable secret you can edit or replace). Once setup finishes and the daemon starts, the same tab navigates to the dashboard. Closing the tab leaves the tray running; use **Continue setup** to reopen it or **Exit** to stop the app.
+For installing, setting up, and using the tray app day to day, see the [Desktop app](desktop.md) guide.
 
-The tray app:
+A few OS integration details for power users and packagers:
 
-- Starts the daemon and opens the dashboard using an owner-private HTML handoff file (never passing admin credentials in process arguments)
-- Keeps **Launch at login** off until you opt in (unticking it or removing the OS login item keeps it off)
-- Shows pending access requests as desktop notifications and changes its tray icon while a request is waiting
-- Lists saved quick launches with **Start** and **Stop** actions and provides share controls
-
-Notifications and OS URL-scheme links share one action format:
+- The desktop app opens its setup page and dashboard in your default HTTP browser using an owner-private HTML handoff file so admin credentials never appear in process arguments.
+- **Launch at login** writes a per-user entry (`~/Library/LaunchAgents/dev.testd.host.plist` on macOS, `~/.config/autostart/dev.testd.host.desktop` on Linux, `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` on Windows) only when ticked, and leaves customized or conflicting entries untouched.
+- Notifications and OS URL-scheme links share one action format:
 
 ```text
 testd://fix/resolver

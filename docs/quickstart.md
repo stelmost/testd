@@ -27,17 +27,22 @@ The browser only ever talks to the host. The host terminates HTTPS and forwards 
 
 ## 1. Install testd
 
-**Option A: Download a release**
+You can run your host with the **desktop tray app** (recommended on macOS, Windows, and desktop Linux) or with the **CLI**. Both share the same configuration, CA, and dashboard.
 
-Grab CLI archives, desktop tray bundles, or Homebrew definitions from [GitHub Releases](https://github.com/stelmost/testd/releases), and verify `SHA256SUMS` before installing.
+**Option A: Desktop tray app**
+
+Download the desktop bundle for your platform from [GitHub Releases](https://github.com/stelmost/testd/releases) (`.dmg` or Homebrew cask `testd-gui` on macOS, `.deb` / `.AppImage` on Linux, `.exe` installer on Windows) and verify `SHA256SUMS` before installing. See [Desktop app](desktop.md#install) for platform notes.
+
+**Option B: CLI release**
+
+Grab CLI archives or Homebrew definitions from [GitHub Releases](https://github.com/stelmost/testd/releases), and verify `SHA256SUMS` before installing.
 
 On Linux and macOS, you can also run the version-pinned CLI installer command shown in the chosen release's notes (`TESTD_VERSION` is the tag without the leading `v`; omitting it installs only a stable release, not prereleases).
 
 - Linux `x86_64` CLI archives come in `x86_64-unknown-linux-gnu` (GNU libc) and `x86_64-unknown-linux-musl` (static musl). The installer picks GNU libc when detected and musl otherwise; set `TESTD_LIBC=gnu` or `TESTD_LIBC=musl` to choose explicitly.
 - Linux desktop packages use GNU libc. Debian 13 is the native validation baseline; other distributions are best effort.
-- The native tray app is a separate Rust build; its setup flow and dashboard open in your default browser.
 
-**Option B: Build from source**
+**Option C: Build from source**
 
 ```sh
 cargo install --path .
@@ -47,7 +52,9 @@ See [DEVELOPING.md](https://github.com/stelmost/testd/blob/master/DEVELOPING.md#
 
 ## 2. Set up the host (once)
 
-Run these two commands on the machine with your browser:
+**With the desktop app:** Launch Testd. On first run it opens a guided setup page in your default browser to configure the `.test` DNS resolver, install the local root certificate, and review or edit the generated operator secret. Click **Finish setup** to start the daemon and open the dashboard, then skip ahead to [Register your first name](#_4-register-your-first-name). See [First-run setup](desktop.md#first-run-setup) for details.
+
+**With the CLI:** Run these two commands on the machine with your browser:
 
 ```sh
 testd init
@@ -66,11 +73,13 @@ By default, `testd init` waits to configure the OS `.test` DNS resolver until th
 
 ## 3. Start the host daemon
 
+If you finished setup in the desktop app, the daemon is already running in your tray or menu bar. Otherwise, start it from the CLI:
+
 ```sh
 testd host
 ```
 
-Leave this running in a terminal (or run the desktop tray app / system service). The daemon opens these local listeners:
+Leave this running in a terminal (or use the [desktop app](desktop.md) / a system service). The daemon opens these local listeners:
 
 | Listener | Default | What it does |
 |---|---|---|
@@ -151,6 +160,7 @@ The host does need a direct route to the leaf's dynamically allocated TLS ports 
 
 ## Where to go next
 
+- [Desktop app](desktop.md): guided setup, tray menu, icon states, notifications, and launch at login
 - [Daily usage](usage.md): naming rules, the dashboard, SSH apps, sharing with tunnels, access requests, and troubleshooting
 - [Advanced usage](advanced.md): remote leaves, profiles, quick launches, tunnels, external fronts, and system services
 - [Reference](reference.md): every command, option, config key, file, HTTP endpoint, and limit

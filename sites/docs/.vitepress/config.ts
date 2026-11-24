@@ -32,6 +32,7 @@ export default defineConfig({
 		nav: [
 			{ text: 'Product', link: SITE },
 			{ text: 'Quickstart', link: '/quickstart' },
+			{ text: 'Desktop app', link: '/desktop' },
 			{ text: 'Reference', link: '/reference' },
 			{ text: 'GitHub', link: REPO },
 		],
@@ -41,6 +42,7 @@ export default defineConfig({
 				items: [
 					{ text: 'Overview', link: '/' },
 					{ text: 'Quickstart', link: '/quickstart' },
+					{ text: 'Desktop app', link: '/desktop' },
 				],
 			},
 			{

@@ -20,6 +20,7 @@ No Caddy, no per-project `/etc/hosts` edits, and no per-project certificates. A 
 ## Documentation
 
 - [Quickstart](docs/quickstart.md): install, first host, first name
+- [Desktop app](docs/desktop.md): tray app install, guided setup, menu actions, notifications, launch at login
 - [Daily usage](docs/usage.md): names, dashboard, sharing, access, troubleshooting
 - [Advanced usage](docs/advanced.md): remote leaves, profiles, quick launches, tunnels, external fronts
 - [Reference](docs/reference.md): commands, configuration, files, endpoints, limits
