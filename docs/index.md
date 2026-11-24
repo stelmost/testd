@@ -44,11 +44,6 @@ New to testd? Start with the [Quickstart](quickstart.md).
 		<strong>Security</strong>
 		<span>Trust boundaries, credentials, exposure, hardening, and the incident checklist.</span>
 	</a>
-	<a class="doc-card" href="./dependency-policy.html">
-		<span class="doc-card__index">07</span>
-		<strong>Dependency policy</strong>
-		<span>Desktop library choices, advisory exceptions, and MSRV constraints.</span>
-	</a>
 </div>
 
 ## How testd works in 30 seconds

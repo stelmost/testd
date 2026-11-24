@@ -57,7 +57,6 @@ export default defineConfig({
 				items: [
 					{ text: 'Reference', link: '/reference' },
 					{ text: 'Security', link: '/security' },
-					{ text: 'Dependency policy', link: '/dependency-policy' },
 				],
 			},
 		],
