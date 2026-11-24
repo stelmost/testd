@@ -512,8 +512,8 @@ pub async fn run(entries: &[Entry], command: &[String], force: bool, config: Cli
 		.stdin(Stdio::inherit())
 		.stdout(Stdio::inherit())
 		.stderr(Stdio::inherit());
-	let (mut child, mut process_tree) =
-		process::ProcessTree::spawn(&mut process).with_context(|| format!("failed to spawn: {}", command[0]))?;
+	let (mut child, mut process_tree) = process::ProcessTree::spawn(&mut process, process::Console::Inherit)
+		.with_context(|| format!("failed to spawn: {}", command[0]))?;
 
 	// Wait for child, signal, or a registration loop that stopped on its own.
 	let status = tokio::select! {

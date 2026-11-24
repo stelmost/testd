@@ -16,7 +16,10 @@ use tokio::time::{Instant, MissedTickBehavior, timeout, timeout_at};
 
 use testd_core::protocol::{self, MAX_FRAME_BYTES};
 
-use crate::{listeners, process::ProcessTree};
+use crate::{
+	listeners,
+	process::{Console, ProcessTree},
+};
 
 mod bootstrap;
 pub use bootstrap::{HELPER_VERSION, InstallRequest, bootstrap_command};
@@ -288,8 +291,8 @@ async fn run_app<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
 	if let Some(cwd) = app.command.cwd.filter(|cwd| !cwd.is_empty()) {
 		command.current_dir(cwd);
 	}
-	let (mut child, mut tree) =
-		ProcessTree::spawn(&mut command).with_context(|| format!("could not start {}", app.command.program))?;
+	let (mut child, mut tree) = ProcessTree::spawn(&mut command, Console::Inherit)
+		.with_context(|| format!("could not start {}", app.command.program))?;
 	let result = tokio::select! {
 		signal = shutdown => signal.map(|()| End::Stopped).map_err(Into::into),
 		result = watch_app(&mut child, app.port, inbox, output) => result,

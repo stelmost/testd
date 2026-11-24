@@ -22,7 +22,7 @@ use testd_core::protocol::{self, Request, Response};
 use testd_core::validate;
 
 use crate::listeners;
-use crate::process::ProcessTree;
+use crate::process::{Console, ProcessTree};
 use crate::ssh;
 use crate::{Entry, Reader, Writer, connect};
 
@@ -656,8 +656,8 @@ fn spawn_child(
 	for (key, value) in &spec.env {
 		command.env(key, value);
 	}
-	let (mut child, process_tree) =
-		ProcessTree::spawn(&mut command).with_context(|| format!("failed to spawn {}", spec.program.display()))?;
+	let (mut child, process_tree) = ProcessTree::spawn(&mut command, Console::Hidden)
+		.with_context(|| format!("failed to spawn {}", spec.program.display()))?;
 	let ssh = match &spec.readiness {
 		Readiness::ManagedSsh { app, installation } => {
 			Some(ssh::Session::start(&mut child, app.clone(), installation.clone(), deadline))
@@ -1216,7 +1216,7 @@ mod tests {
 	async fn stopping_an_owned_process_tree_stops_descendants() {
 		let mut command = ProcessCommand::new("sh");
 		command.args(["-c", "sleep 30 & echo $!; wait"]).stdout(Stdio::piped());
-		let (mut child, mut process_tree) = ProcessTree::spawn(&mut command).unwrap();
+		let (mut child, mut process_tree) = ProcessTree::spawn(&mut command, Console::Inherit).unwrap();
 		let mut output = BufReader::new(child.stdout.take().unwrap());
 		let mut line = String::new();
 		output.read_line(&mut line).await.unwrap();

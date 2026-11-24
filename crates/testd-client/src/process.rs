@@ -4,6 +4,11 @@ use std::io;
 use std::time::Duration;
 use tokio::process::{Child, Command};
 
+pub(crate) enum Console {
+	Inherit,
+	Hidden,
+}
+
 pub(crate) struct ProcessTree {
 	#[cfg(unix)]
 	pid: u32,
@@ -12,15 +17,21 @@ pub(crate) struct ProcessTree {
 }
 
 impl ProcessTree {
-	pub(crate) fn spawn(command: &mut Command) -> io::Result<(Child, Self)> {
+	pub(crate) fn spawn(command: &mut Command, console: Console) -> io::Result<(Child, Self)> {
 		command.kill_on_drop(true);
+		#[cfg(not(windows))]
+		let _ = console;
 		#[cfg(unix)]
 		command.process_group(0);
 		#[cfg(windows)]
-		command.creation_flags(
-			windows_sys::Win32::System::Threading::CREATE_SUSPENDED
-				| windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP,
-		);
+		{
+			use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED};
+			let console_flags = match console {
+				Console::Inherit => 0,
+				Console::Hidden => CREATE_NO_WINDOW,
+			};
+			command.creation_flags(CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | console_flags);
+		}
 		let child = command.spawn()?;
 		#[cfg(unix)]
 		let tree = Self { pid: child.id().expect("newly spawned child has a PID") };
@@ -184,7 +195,7 @@ mod tests {
 	async fn normal_parent_exit_does_not_leave_descendants_running() {
 		let mut command = Command::new("sh");
 		command.args(["-c", "sleep 30 & echo $!; exit 7"]).stdout(Stdio::piped());
-		let (mut child, mut tree) = ProcessTree::spawn(&mut command).unwrap();
+		let (mut child, mut tree) = ProcessTree::spawn(&mut command, Console::Inherit).unwrap();
 		let mut output = BufReader::new(child.stdout.take().unwrap());
 		let mut line = String::new();
 		tokio::time::timeout(Duration::from_secs(3), output.read_line(&mut line))
@@ -210,6 +221,36 @@ mod tests {
 
 	#[cfg(windows)]
 	#[tokio::test]
+	async fn hidden_children_keep_stdout_and_stderr_without_a_console() {
+		let mut command = Command::new("powershell");
+		command
+			.args([
+				"-NoProfile",
+				"-NonInteractive",
+				"-Command",
+				concat!(
+					"Add-Type -Namespace Testd -Name Console -MemberDefinition ",
+					"'[System.Runtime.InteropServices.DllImport(\"kernel32.dll\")] ",
+					"public static extern System.IntPtr GetConsoleWindow();'; ",
+					"[Console]::Out.WriteLine([Testd.Console]::GetConsoleWindow().ToInt64()); ",
+					"[Console]::Out.WriteLine('stdout'); [Console]::Error.WriteLine('stderr'); exit 7"
+				),
+			])
+			.stdin(Stdio::null())
+			.stdout(Stdio::piped())
+			.stderr(Stdio::piped());
+		let (child, _tree) = ProcessTree::spawn(&mut command, Console::Hidden).unwrap();
+		let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output())
+			.await
+			.expect("hidden child did not exit")
+			.unwrap();
+		assert_eq!(output.status.code(), Some(7));
+		assert_eq!(String::from_utf8(output.stdout).unwrap().lines().collect::<Vec<_>>(), ["0", "stdout"]);
+		assert_eq!(String::from_utf8(output.stderr).unwrap().trim(), "stderr");
+	}
+
+	#[cfg(windows)]
+	#[tokio::test]
 	async fn the_job_retains_descendants_after_parent_exit() {
 		let mut command = Command::new("powershell");
 		command
@@ -223,7 +264,7 @@ mod tests {
 				),
 			])
 			.stdout(Stdio::piped());
-		let (mut child, mut tree) = ProcessTree::spawn(&mut command).unwrap();
+		let (mut child, mut tree) = ProcessTree::spawn(&mut command, Console::Inherit).unwrap();
 		let mut line = String::new();
 		let mut output = BufReader::new(child.stdout.take().unwrap());
 		tokio::time::timeout(Duration::from_secs(15), output.read_line(&mut line))
