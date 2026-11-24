@@ -4,6 +4,17 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 
 ## [Unreleased]
 
+### Added
+
+- SSH apps can install a missing or mismatched remote testd helper after dashboard approval, verify the matching release checksum, and preserve the previous binary in a persistent backup; automatic installation supports Linux x86_64 and macOS x86_64/arm64
+- Optional update checks at host startup and daily, with available releases in the tray and dashboard, a persistent off switch, and an explicit download action
+
+### Fixed
+
+- Quick-launch stdout and stderr now update live in the dashboard, label each stream, and preserve the output panel's expansion, scroll position, and focus
+- Firefox HTTPS connectivity is checked separately from system certificate trust, with certificate import guidance when the connection cannot be confirmed
+- Supervised launches no longer open console windows on Windows
+
 ## [0.1.0-alpha.1] - 2026-11-24
 
 First public alpha. The CLI, daemon, and tray ship as one version; desktop bundles are unsigned for distribution and installed by hand.
