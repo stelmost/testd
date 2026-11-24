@@ -279,14 +279,26 @@ th,
 	align-items: center;
 	gap: 0.75rem;
 	margin-top: 1.75rem;
-	padding: 0.6rem 0.6rem 0.6rem 1rem;
-	border: 1px solid var(--line);
+	padding: 0.65rem 1rem;
+	border: 1px dashed var(--line-strong);
 	background: var(--inset);
 	font-size: 0.875rem;
 }
 
 .command-prompt {
 	color: var(--text-3);
+}
+
+.command var {
+	font-style: italic;
+	color: var(--violet);
+	text-decoration: underline dashed rgb(196 179 255 / 38%);
+	text-underline-offset: 0.25em;
+}
+
+.command-tag {
+	font-size: 0.6875rem;
+	letter-spacing: 0.14em;
 }
 
 .actions {
