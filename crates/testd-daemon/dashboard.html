@@ -641,7 +641,29 @@
 			.catch((e) => { button.disabled = false; notice(e.message); });
 	}
 
-	function launchRow(launch) {
+	function launchOutput(launch, view) {
+		const details = document.createElement('details');
+		details.dataset.launchOutput = launch.id;
+		details.open = Boolean(view && view.open);
+		const summary = document.createElement('summary');
+		summary.className = 'launch-output-toggle';
+		summary.textContent = 'Output';
+		summary.ariaLabel = 'Output for ' + launch.label;
+		const hint = document.createElement('p');
+		hint.className = 'row-meta';
+		hint.textContent = 'Latest 500 lines of stdout and stderr. Cleared when this launch or testd restarts.';
+		const output = document.createElement('pre');
+		output.className = 'launch-output mono';
+		output.tabIndex = 0;
+		output.ariaLabel = 'Output for ' + launch.label;
+		output.textContent = launch.logs && launch.logs.length
+			? launch.logs.map((item) => '[' + item.stream + '] ' + item.line).join('\n')
+			: 'No stdout or stderr yet.';
+		details.append(summary, hint, output);
+		return details;
+	}
+
+	function launchRow(launch, outputView) {
 		const row = document.createElement('li');
 		row.className = 'row';
 
@@ -692,17 +714,7 @@
 			main.append(line);
 		}
 
-		if (launch.logs && launch.logs.length) {
-			const details = document.createElement('details');
-			const summary = document.createElement('summary');
-			summary.textContent = 'Output';
-			const output = document.createElement('pre');
-			output.className = 'launch-output mono';
-			output.tabIndex = 0;
-			output.textContent = launch.logs.map((item) => item.line).join('\n');
-			details.append(summary, output);
-			main.append(details);
-		}
+		main.append(launchOutput(launch, outputView));
 
 		if (launch.error) {
 			const error = document.createElement('div');
@@ -759,6 +771,17 @@
 
 	function renderLaunchRows(id, launches, title, description) {
 		const container = document.getElementById(id + '-list');
+		const outputViews = new Map();
+		for (const details of container.querySelectorAll('[data-launch-output]')) {
+			const output = details.querySelector('pre');
+			const summary = details.querySelector('summary');
+			outputViews.set(details.dataset.launchOutput, {
+				open: details.open,
+				scrollTop: output.scrollTop,
+				follow: output.scrollTop + output.clientHeight >= output.scrollHeight - 4,
+				focus: document.activeElement === output ? 'pre' : document.activeElement === summary ? 'summary' : null,
+			});
+		}
 		container.replaceChildren();
 		updateCount(id + '-count', launches.length);
 		if (!launches.length) {
@@ -767,8 +790,15 @@
 		}
 		const rows = document.createElement('ul');
 		rows.className = 'rows';
-		for (const launch of launches) rows.append(launchRow(launch));
+		for (const launch of launches) rows.append(launchRow(launch, outputViews.get(launch.id)));
 		container.append(rows);
+		for (const details of container.querySelectorAll('[data-launch-output]')) {
+			const view = outputViews.get(details.dataset.launchOutput);
+			if (!view) continue;
+			const output = details.querySelector('pre');
+			output.scrollTop = view.follow ? output.scrollHeight : view.scrollTop;
+			if (view.focus) details.querySelector(view.focus).focus({ preventScroll: true });
+		}
 	}
 
 	function launchAction(action, id) {

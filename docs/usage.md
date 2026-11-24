@@ -106,6 +106,8 @@ Inside the dashboard you will find:
 - **SSH apps**: saved remote apps over SSH, with **Open**, **Stop**, and interactive SSH prompts
 - **Certificate**: system trust status, SHA-256 fingerprint, expiry, install/remove controls, and a separate Firefox trust check when opened in Firefox
 
+Quick launches run without a console window on Windows. Expand **Output** under a launch to view its live stdout and stderr, labeled by stream. The dashboard keeps the latest 500 lines from the current or most recent run, including after the command stops. Starting the launch again or restarting the daemon clears that output.
+
 The dashboard only responds on loopback (and `https://testd.test/` is forwarded by the edge for local clients only). Foreign `Host` headers and non-loopback peers are rejected even with a valid credential.
 
 ### SSH apps in the dashboard

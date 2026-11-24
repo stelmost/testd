@@ -296,19 +296,82 @@ test('SSH prompts expose separate trust, install, and password actions', () => {
 	]);
 });
 
-test('quick launches display captured output as text', () => {
-	const elements: any[] = [];
+function launchList() {
+	class Element {
+		children: Element[] = [];
+		dataset: Record<string, string> = {};
+		textContent = '';
+		open = false;
+		scrollTop = 0;
+		clientHeight = 100;
+		scrollHeight = 500;
+		constructor(readonly tag: string) {}
+		append(...children: Element[]) { this.children.push(...children); }
+		replaceChildren(...children: Element[]) { this.children = children; }
+		addEventListener() {}
+		focus() { document.activeElement = this; }
+		querySelectorAll(selector: string): Element[] {
+			return this.children.flatMap((child) => {
+				const matches = selector === '[data-launch-output]' ? 'launchOutput' in child.dataset : child.tag === selector;
+				return [...(matches ? [child] : []), ...child.querySelectorAll(selector)];
+			});
+		}
+		querySelector(selector: string) { return this.querySelectorAll(selector)[0]; }
+	}
+	const container = new Element('div');
 	const document = {
-		createElement(tag: string) {
-			const element = { tag, textContent: '', append() {}, addEventListener() {} };
-			elements.push(element);
-			return element;
-		},
+		activeElement: null as Element | null,
+		createElement: (tag: string) => new Element(tag),
+		getElementById: () => container,
 	};
-	const launchRow = new Function('document', 'launchAction',
-		`return (${inlineFunction(dashboard, 'launchRow', 'renderLaunches')});`)(document, () => {});
-	launchRow({ label: 'App', program: 'npm', running: false, logs: [{ line: '<script>bad</script>' }] });
-	expect(elements.find((element) => element.tag === 'pre').textContent).toBe('<script>bad</script>');
+	const source = dashboard.slice(dashboard.indexOf('function launchOutput('),
+		dashboard.indexOf('\n\tfunction launchAction('));
+	const render = new Function('document', 'updateCount', source + '\nreturn renderLaunchRows;')(document, () => {});
+	return {
+		document,
+		render: (launches: unknown[]) => render('launch', launches),
+		panel: () => container.querySelector('details'),
+		output: () => container.querySelector('pre'),
+	};
+}
+
+test('quick launches expose stdout and stderr even before any output arrives', () => {
+	const ui = launchList();
+	ui.render([{ id: 'app', label: 'App', program: 'npm', running: false, logs: [] }]);
+	expect(ui.panel().querySelector('summary').textContent).toBe('Output');
+	expect(ui.output().textContent).toBe('No stdout or stderr yet.');
+	expect(ui.panel().open).toBe(false);
+});
+
+test('quick launches label both output streams and display their content as text after stopping', () => {
+	const ui = launchList();
+	ui.render([{
+		id: 'app', label: 'App', program: 'npm', running: false,
+		logs: [{ stream: 'stdout', line: 'Listening' }, { stream: 'stderr', line: '<script>bad</script>' }],
+	}]);
+	expect(ui.output().textContent).toBe('[stdout] Listening\n[stderr] <script>bad</script>');
+});
+
+test('live output preserves expanded panels, reading position, focus and following the end', () => {
+	const ui = launchList();
+	const launch = { id: 'app', label: 'App', program: 'npm', running: true, logs: [] as unknown[] };
+	ui.render([launch]);
+	ui.panel().open = true;
+	ui.output().scrollTop = 40;
+	ui.output().focus();
+	launch.logs.push({ stream: 'stdout', line: 'New output' });
+	ui.render([launch]);
+	expect(ui.panel().open).toBe(true);
+	expect(ui.output().scrollTop).toBe(40);
+	expect(ui.document.activeElement).toBe(ui.output());
+	expect(ui.output().textContent).toBe('[stdout] New output');
+
+	ui.output().scrollTop = 400;
+	ui.render([launch]);
+	expect(ui.output().scrollTop).toBe(ui.output().scrollHeight);
+	ui.panel().open = false;
+	ui.render([launch]);
+	expect(ui.panel().open).toBe(false);
 });
 
 test('certificate status refreshes on focus and periodically', () => {

@@ -525,8 +525,16 @@ async fn run_launch(
 	};
 
 	let mut rebinding: Option<Pin<Box<dyn Future<Output = ()> + Send>>> = None;
+	let mut output_changed = false;
+	let mut output_updates = tokio::time::interval(Duration::from_millis(100));
+	output_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 	loop {
 		tokio::select! {
+			/* Batch output notifications so a noisy child cannot refresh the dashboard for every line. */
+			_ = output_updates.tick(), if output_changed => {
+				output_changed = false;
+				book.bump();
+			},
 			_ = async {
 				match rebinding.as_mut() {
 					Some(request) => request.await,
@@ -536,8 +544,10 @@ async fn run_launch(
 			event = events.recv() => {
 				let Some(event) = event else { break };
 				record(&state, &event);
-				let changed = matches!(&event, LaunchEvent::State { .. } | LaunchEvent::Exited { .. } | LaunchEvent::Failed { .. });
-				if changed {
+				if matches!(&event, LaunchEvent::Output { .. }) {
+					output_changed = true;
+				} else {
+					output_changed = false;
 					book.bump();
 				}
 				let done = matches!(&event, LaunchEvent::Exited { .. } | LaunchEvent::Failed { .. });
@@ -720,6 +730,109 @@ mod tests {
 			.unwrap()
 			.insert("one".into(), Running { stop, rebind, state: Arc::clone(&state), prompts: None, done });
 		(state, receiver)
+	}
+
+	async fn output_test_host() -> (testd_core::config::ClientConfig, tokio::task::JoinHandle<()>) {
+		use testd_core::protocol::{self, Auth, Request, Response};
+		let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+		let config = testd_core::config::ClientConfig {
+			token: String::new(),
+			token_profile: "default".into(),
+			hosts: vec![listener.local_addr().unwrap().to_string()],
+			node_profile: "default".into(),
+		};
+		let task = tokio::spawn(async move {
+			let (stream, _) = listener.accept().await.unwrap();
+			let (reader, mut writer) = stream.into_split();
+			let mut reader = tokio::io::BufReader::new(reader);
+			protocol::recv::<_, Auth>(&mut reader).await.unwrap().unwrap();
+			protocol::send(&mut writer, &Response::Ok).await.unwrap();
+			while protocol::recv::<_, Request>(&mut reader).await.unwrap().is_some() {
+				protocol::send(&mut writer, &Response::Ok).await.unwrap();
+			}
+		});
+		(config, task)
+	}
+
+	#[tokio::test]
+	async fn command_output_updates_live_views_and_remains_after_stop() {
+		let dir = tempfile::tempdir().unwrap();
+		let book = Arc::new(book(dir.path().join("launches.json")));
+		book.upsert(definition("one")).unwrap();
+		let (state, stop) = reserve_run(&book, RunPhase::Starting);
+		let (_rebind, rebind) = mpsc::channel(1);
+		let target = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+		let gate = dir.path().join("start-output");
+		#[cfg(unix)]
+		let (program, args) = (
+			"sh",
+			vec![
+				"-c",
+				concat!(
+					"while [ ! -e \"$TESTD_OUTPUT_GATE\" ]; do sleep 0.05; done; ",
+					"printf 'ready\\n'; printf 'problem\\n' >&2; sleep 30"
+				),
+			],
+		);
+		#[cfg(windows)]
+		let (program, args) = (
+			"powershell",
+			vec![
+				"-NoProfile",
+				"-NonInteractive",
+				"-Command",
+				concat!(
+					"while (!(Test-Path -LiteralPath $env:TESTD_OUTPUT_GATE)) { Start-Sleep -Milliseconds 50 }; ",
+					"[Console]::Out.WriteLine('ready'); [Console]::Error.WriteLine('problem'); Start-Sleep -Seconds 30"
+				),
+			],
+		);
+		let mut spec =
+			LaunchSpec::new(program, vec![Entry::new("app.example", target.local_addr().unwrap().to_string())]);
+		spec.args = args.into_iter().map(String::from).collect();
+		spec.env.push(("TESTD_OUTPUT_GATE".into(), gate.to_str().unwrap().into()));
+		let (config, host) = output_test_host().await;
+		let mut updates = book.state_changes();
+		let task = tokio::spawn(run_launch(Arc::clone(&book), spec, config, stop, rebind, state));
+		tokio::time::timeout(Duration::from_secs(15), async {
+			loop {
+				updates.changed().await.unwrap();
+				if book.list()[0].states.iter().any(|entry| entry.state == EntryState::Confirmed) {
+					break;
+				}
+			}
+		})
+		.await
+		.expect("launch did not finish startup");
+		updates.borrow_and_update();
+		std::fs::write(gate, b"ready").unwrap();
+		tokio::time::timeout(Duration::from_secs(15), async {
+			loop {
+				updates.changed().await.unwrap();
+				let view = book.list().remove(0);
+				if view.logs.len() == 2 {
+					assert!(view.running, "output must update before the command exits");
+					break;
+				}
+			}
+		})
+		.await
+		.expect("command output did not notify the dashboard");
+		book.stop("one").unwrap();
+		tokio::time::timeout(Duration::from_secs(15), task).await.unwrap().unwrap();
+		host.abort();
+		let view = book.list().remove(0);
+		assert!(!view.running);
+		assert!(
+			view.logs
+				.iter()
+				.any(|log| matches!(log.stream, OutputStream::Stdout) && log.line == "ready")
+		);
+		assert!(
+			view.logs
+				.iter()
+				.any(|log| matches!(log.stream, OutputStream::Stderr) && log.line == "problem")
+		);
 	}
 
 	#[test]
