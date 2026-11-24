@@ -234,6 +234,39 @@ body {
 	margin: 1.5rem 0;
 	border: 1px solid var(--vp-c-divider);
 	border-radius: 6px;
+	cursor: zoom-in;
+}
+
+:root:not(.dark) .vp-doc img.dark-only,
+.dark .vp-doc img.light-only {
+	display: none;
+}
+
+.td-lightbox {
+	margin: auto;
+	padding: 0;
+	max-width: min(94vw, 1440px);
+	max-height: 94vh;
+	border: 0;
+	background: transparent;
+	overflow: visible;
+}
+
+.td-lightbox::backdrop {
+	background: rgb(14 14 13 / 82%);
+	backdrop-filter: blur(4px);
+}
+
+.td-lightbox img {
+	display: block;
+	max-width: min(94vw, 1440px);
+	max-height: 92vh;
+	width: auto;
+	height: auto;
+	border: 1px solid rgb(242 238 228 / 22%);
+	border-radius: 8px;
+	box-shadow: 0 24px 64px rgb(0 0 0 / 55%);
+	cursor: zoom-out;
 }
 
 /* ---------- overview grid ---------- */

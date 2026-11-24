@@ -175,10 +175,42 @@ function setupReveals(): void {
 	elements.forEach((element) => observer.observe(element));
 }
 
+function setupLightbox(): void {
+	const images = document.querySelectorAll<HTMLImageElement>('img[data-lightbox]');
+	if (images.length === 0) return;
+
+	const dialog = document.createElement('dialog');
+	dialog.className = 'image-lightbox';
+	dialog.setAttribute('aria-label', 'Enlarged screenshot');
+	const preview = document.createElement('img');
+	dialog.append(preview);
+	dialog.addEventListener('click', () => dialog.close());
+	document.body.append(dialog);
+
+	const open = (img: HTMLImageElement): void => {
+		preview.src = img.currentSrc || img.src;
+		preview.alt = img.alt;
+		dialog.showModal();
+	};
+
+	images.forEach((img) => {
+		img.tabIndex = 0;
+		img.setAttribute('role', 'button');
+		img.setAttribute('aria-label', `Enlarge: ${img.alt}`);
+		img.addEventListener('click', () => open(img));
+		img.addEventListener('keydown', (event) => {
+			if (event.key !== 'Enter' && event.key !== ' ') return;
+			event.preventDefault();
+			open(img);
+		});
+	});
+}
+
 setupNavigation();
 setupCopyButtons();
 setupTabs();
 setupReveals();
+setupLightbox();
 
 document.querySelectorAll<HTMLElement>('[data-year]').forEach((element) => {
 	element.textContent = String(new Date().getFullYear());

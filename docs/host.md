@@ -15,7 +15,8 @@ You can run the host either with the **desktop tray app** or headlessly with **`
 
 When you launch the desktop app without an existing host configuration, it starts a temporary setup server on an ephemeral loopback port and opens a guided setup page in your default browser:
 
-![Guided first-run setup page in Safari showing DNS resolver, Certificate authority, Operator secret, and Finish setup](../assets/docs/setup.png)
+![Guided first-run setup page in Safari showing DNS resolver, Certificate authority, Operator secret, and Finish setup](../assets/docs/setup.png){.light-only}
+![Guided first-run setup page in Safari showing DNS resolver, Certificate authority, Operator secret, and Finish setup](../assets/docs/setup-dark.png){.dark-only}
 
 1. **DNS resolver**: configures the OS `.test` resolver route so `*.test` names reach testd's local DNS server. Requires administrator privileges.
 2. **Certificate authority**: creates the local root CA and installs it in your system trust store. Requires administrator privileges. If you open the page in Firefox, it also notes that the dashboard checks Firefox trust separately after setup.
@@ -29,7 +30,8 @@ If you close the setup tab before finishing, the tray stays running with **Conti
 
 Once the daemon is running, click the tray or menu-bar icon for live state and common actions:
 
-![macOS menu bar with the testd tray menu open showing active domains, dashboard link, quick launches, SSH apps, Launch at login, and Exit](../assets/docs/tray-menu.png)
+![macOS menu bar with the testd tray menu open showing active domains, dashboard link, quick launches, SSH apps, Launch at login, and Exit](../assets/docs/tray-menu.png){.light-only}
+![macOS menu bar with the testd tray menu open showing active domains, dashboard link, quick launches, SSH apps, Launch at login, and Exit](../assets/docs/tray-menu-dark.png){.dark-only}
 
 - **Repair actions** (shown only when a check fails): **Set up DNS** and **Trust certificate** run the same privileged repairs as `testd doctor --fix`.
 - **Active domains**: lists every currently registered `.test` name; clicking one opens it in your browser.
@@ -101,7 +103,8 @@ Both the desktop app and `testd host` serve the same local web dashboard. The de
 
 The bootstrap token is passed in the URL fragment, stripped from browser history on load, and kept in origin-scoped session storage. Restarting the daemon invalidates the session, and visiting bare `http://127.0.0.1:7737/` or `https://testd.test/` without a valid session does not expose live state or admin controls. Every mutating request also requires `X-Testd-Request: 1`.
 
-![Local testd dashboard in Safari showing live .test domains, Quick launches, SSH apps, Access tokens, Shares, and Certificate status](../assets/docs/dashboard.png)
+![Local testd dashboard in Safari showing live .test domains, Quick launches, SSH apps, Access tokens, Shares, and Certificate status](../assets/docs/dashboard.png){.light-only}
+![Local testd dashboard in Safari showing live .test domains, Quick launches, SSH apps, Access tokens, Shares, and Certificate status](../assets/docs/dashboard-dark.png){.dark-only}
 
 Inside the dashboard:
 
