@@ -122,9 +122,41 @@ function setupTabs(): void {
 	});
 }
 
+function setupLightbox(): void {
+	const images = document.querySelectorAll<HTMLImageElement>('img[data-lightbox]');
+	if (images.length === 0) return;
+
+	const dialog = document.createElement('dialog');
+	dialog.className = 'image-lightbox';
+	dialog.setAttribute('aria-label', 'Enlarged screenshot');
+	const preview = document.createElement('img');
+	dialog.append(preview);
+	dialog.addEventListener('click', () => dialog.close());
+	document.body.append(dialog);
+
+	const open = (img: HTMLImageElement): void => {
+		preview.src = img.currentSrc || img.src;
+		preview.alt = img.alt;
+		dialog.showModal();
+	};
+
+	images.forEach((img) => {
+		img.tabIndex = 0;
+		img.setAttribute('role', 'button');
+		img.setAttribute('aria-label', `Enlarge: ${img.alt}`);
+		img.addEventListener('click', () => open(img));
+		img.addEventListener('keydown', (event) => {
+			if (event.key !== 'Enter' && event.key !== ' ') return;
+			event.preventDefault();
+			open(img);
+		});
+	});
+}
+
 document.querySelectorAll<HTMLElement>('[data-shell]').forEach(highlightShell);
 setupCopyButtons();
 setupTabs();
+setupLightbox();
 
 const lease = document.querySelector<HTMLElement>('[data-lease]');
 if (lease) mountLease(lease);
