@@ -206,6 +206,31 @@ class ReleaseTests(unittest.TestCase):
 		self.assertTrue((ROOT / 'tests/check-links.ts').is_file())
 
 	@unittest.skipUnless(shutil.which('bun'), 'Bun is not installed')
+	def test_product_site_uses_the_installer_pin_instead_of_the_development_version(self):
+		staging = ROOT / 'worktrees'
+		staging.mkdir(exist_ok=True)
+		with tempfile.TemporaryDirectory(prefix='site-version-', dir=staging) as temporary:
+			root = pathlib.Path(temporary)
+			product = root / 'sites/product'
+			product.mkdir(parents=True)
+			shutil.copyfile(ROOT / 'sites/product/vite.config.ts', product / 'vite.config.ts')
+			(product / 'index.html').write_text('<!doctype html><p>Release __TESTD_VERSION__</p>')
+			(product / '404.html').write_text('<!doctype html><p>Not found</p>')
+			(root / 'Cargo.toml').write_text('[package]\nversion = "8.0.0-dev"\n')
+			installer = 'version=${TESTD_VERSION:-7.6.5}\n'
+			(root / 'install.sh').write_text(installer)
+			assets = root / 'assets/social'
+			assets.mkdir(parents=True)
+			(assets / 'og.png').write_bytes(b'social image fixture')
+			output = root / 'dist'
+			result = subprocess.run(['bun', 'run', '--bun', 'vite', 'build', str(product)], cwd=ROOT,
+				env={**os.environ, 'TESTD_SITE_OUT_DIR': str(output)}, capture_output=True, text=True, timeout=90)
+			self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+			self.assertIn('Release 7.6.5', (output / 'index.html').read_text())
+			self.assertNotIn('8.0.0-dev', (output / 'index.html').read_text())
+			self.assertEqual((output / 'install.sh').read_text(), installer)
+
+	@unittest.skipUnless(shutil.which('bun'), 'Bun is not installed')
 	def test_link_checker_uses_the_isolated_site_output(self):
 		with tempfile.TemporaryDirectory() as temporary:
 			root = pathlib.Path(temporary).resolve()
@@ -293,9 +318,57 @@ class ReleaseTests(unittest.TestCase):
 			self.assertIn(target, text)
 		self.assertIn('TESTD_LIBC=musl', text)
 		self.assertIn('curl -fsSLo testd-install.sh '
-			f'https://raw.githubusercontent.com/stelmost/testd/v{version}/install.sh', text)
-		self.assertIn(f"TESTD_VERSION='{version}' sh ./testd-install.sh", text)
+			f'https://github.com/stelmost/testd/releases/download/v{version}/install.sh', text)
+		self.assertIn('\nsh ./testd-install.sh\n', text)
 		self.assertIn('On Linux, macOS, and Windows, stop testd and run `testd uninstall` before removing the app.', text)
+
+	def test_release_installer_is_pinned_without_promoting_the_website(self):
+		original = (ROOT / 'install.sh').read_bytes()
+		version = '9.8.7-rc.1'
+		with tempfile.TemporaryDirectory() as temporary:
+			output = pathlib.Path(temporary)
+			with patch.object(sys, 'argv', ['release.py', 'installer', '--version', version,
+					'--output', str(output)]), redirect_stdout(io.StringIO()):
+				release.main()
+			installer = output / 'install.sh'
+			self.assertIn(f'version=${{TESTD_VERSION:-{version}}}', installer.read_text())
+			if os.name != 'nt':
+				self.assertTrue(os.access(installer, os.X_OK))
+			with redirect_stdout(io.StringIO()):
+				release.checksums(output)
+			digest = hashlib.sha256(installer.read_bytes()).hexdigest()
+			self.assertEqual((output / 'SHA256SUMS').read_text(), f'{digest}  install.sh\n')
+		self.assertEqual((ROOT / 'install.sh').read_bytes(), original)
+
+	def test_release_installer_refuses_existing_output(self):
+		with tempfile.TemporaryDirectory() as temporary:
+			output = pathlib.Path(temporary)
+			installer = output / 'install.sh'
+			installer.write_text('retained installer\n')
+			with self.assertRaises(FileExistsError):
+				release.installer(SimpleNamespace(version='9.8.7', output=output))
+			self.assertEqual(installer.read_text(), 'retained installer\n')
+
+	def test_release_installer_rejects_invalid_versions_and_templates(self):
+		with tempfile.TemporaryDirectory() as temporary:
+			root = pathlib.Path(temporary)
+			output = root / 'output'
+			for version in ('', 'v1.2.3', '1.2', '1.2.3\nfalse'):
+				with self.subTest(version=version), self.assertRaisesRegex(ValueError, 'invalid release version'):
+					release.installer(SimpleNamespace(version=version, output=output))
+			for text in ('#!/bin/sh\n', 'version=${TESTD_VERSION:-1.0.0}\n' * 2):
+				(root / 'install.sh').write_text(text)
+				with self.subTest(template=text), patch.object(release, 'ROOT', root), \
+						self.assertRaisesRegex(ValueError, 'exactly one TESTD_VERSION default'):
+					release.installer(SimpleNamespace(version='9.8.7', output=output))
+			self.assertFalse(output.exists())
+
+	def test_ci_generates_the_pinned_installer_before_checksums(self):
+		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+		job = workflow.split('\n  release:\n', 1)[1]
+		generation = 'python scripts/release.py installer --version "${GITHUB_REF_NAME#v}" --output dist'
+		self.assertLess(job.index(generation), job.index('python scripts/release.py checksums dist'))
+		self.assertLess(job.index('python scripts/release.py checksums dist'), job.index('gh release upload'))
 
 	@unittest.skipIf(os.name == 'nt', 'not applicable: the website installer is POSIX-only')
 	def test_website_installer_selects_libc_and_refuses_a_bad_checksum(self):
@@ -327,7 +400,7 @@ class ReleaseTests(unittest.TestCase):
 				path.chmod(0o700)
 			installed = root / 'installed' / 'testd'
 			env = {**os.environ, 'PATH': str(tools) + os.pathsep + os.environ.get('PATH', ''),
-				'GITHUB_TOKEN': '', 'TESTD_REPO': 'fixture/testd', 'TESTD_VERSION': version,
+				'TESTD_REPO': 'fixture/testd', 'TESTD_VERSION': version,
 				'TESTD_LIBC': '', 'FIXTURE_LIBC': 'gnu',
 				'FIXTURE_ASSETS': str(assets), 'TESTD_INSTALL_DIR': str(installed.parent), 'TMPDIR': temporary}
 			command = ['sh', str(ROOT / 'install.sh')]
@@ -352,10 +425,6 @@ class ReleaseTests(unittest.TestCase):
 			self.assertNotEqual(result.returncode, 0)
 			self.assertIn('TESTD_LIBC must be gnu or musl', result.stderr)
 			self.assertEqual(installed.read_bytes(), b'fixture musl')
-			result = subprocess.run(command, env={**env, 'TESTD_VERSION': ''},
-				capture_output=True, text=True, timeout=15)
-			self.assertNotEqual(result.returncode, 0)
-			self.assertIn('check GitHub access or set TESTD_VERSION', result.stderr)
 
 	def test_ci_required_artifacts_are_selected_by_target_not_builder_os(self):
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')

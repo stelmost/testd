@@ -5,7 +5,7 @@ description: 'Release checklist, Homebrew definitions, and signing and notarizat
 
 # Releasing
 
-A free release is a version tag, CLI archives, public tray bundles, workspace SBOMs, generated Homebrew definitions, and `SHA256SUMS`. The tag workflow attaches them to a draft GitHub release only after required unprivileged checks (including dependency policy/MSRV), minimum-runtime fixtures, website, artifacts, and SBOM gates pass. No commercial service or updater participates.
+A free release is a version tag, CLI archives, a pinned CLI installer, public tray bundles, workspace SBOMs, generated Homebrew definitions, and `SHA256SUMS`. The tag workflow attaches them to a draft GitHub release only after required unprivileged checks (including dependency policy/MSRV), minimum-runtime fixtures, website, artifacts, and SBOM gates pass. No commercial service or updater participates.
 
 ### Before tagging
 
@@ -92,17 +92,35 @@ cannot produce notarized or Authenticode-signed artifacts.
 ### Publish
 
 - [ ] Tag `vX.Y.Z` and push the tag after the pre-tag checks
-- [ ] Let CI build CLI archives and tray bundles, generate SBOMs, Homebrew definitions and checksums, and attach them to a draft GitHub release
+- [ ] Let CI build CLI archives and tray bundles, generate the pinned installer, SBOMs, Homebrew definitions and checksums, and attach them to a draft GitHub release
 - [ ] Download the draft assets and run artifact, host, browser, and desktop validation on the real supported platforms
 - [ ] Validate any useful, owner-approved free macOS ad-hoc resource sealing before generating definitions/checksums from final bytes; do not claim trusted signing or notarization
 - [ ] Copy the generated `testd.rb` and `testd-gui.rb` into the Homebrew tap, then audit and install them locally
 - [ ] Publish the draft with the changelog entry and validation results
+- [ ] After the release assets are public, promote the canonical installer default and publish the matching website version
 
 The public workflow does not use trusted distribution signing. A tag-push run creates a draft only if the release does not already exist. A rerun can add missing assets to an existing release, including a public one, but does not replace existing assets. Do not rerun against a public release unless adding assets is intended. Back up any asset before explicitly replacing it, and do not move an existing release tag to different source.
+
+### CLI installer
+
+Each release attaches an `install.sh` whose default is that release's version. `TESTD_VERSION` overrides the default; an unset or empty value uses the pin. The installer downloads exact-version assets and verifies their checksums without a release-discovery request or GitHub token. The generated installer is included in `SHA256SUMS`, and release notes link to that asset.
+
+The canonical root `install.sh` pins the version offered by `testd.dev`. Its default also supplies the website's version label and checksum link, independently of development Cargo versions. Generating a draft release's installer does not change that default.
+
+After publishing and verifying the release assets, generate a replacement from the current installer source. Replace `X.Y.Z` with the published version and use a fresh staging directory. These commands retain the previous installer before replacing it:
+
+```sh
+python3 scripts/release.py installer --version X.Y.Z --output worktrees/installer-X.Y.Z &&
+  cp -p install.sh worktrees/installer-X.Y.Z/install.previous.sh &&
+  cp -p worktrees/installer-X.Y.Z/install.sh install.sh
+```
+
+Commit the canonical installer change and publish it through the normal Pages Git integration. Do not promote its default while the release is a draft. Existing release assets and tags retain their original installer bytes.
 
 ### Rollback
 
 - GitHub: mark the broken version as withdrawn and publish a fixed version. Keep the previous good version and its checksums available. Existing installs keep working until the user chooses to replace them.
+- Installer and website: promote the previous published version with the same generator and commit the canonical installer change
 - Homebrew: revert the formula commit and `brew update`.
 - macOS and Windows bundles are versioned per release, so a broken version can be
   withdrawn without affecting the previous one.

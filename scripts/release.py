@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build free-release archives, Homebrew definitions, and checksums without signing."""
+"""Build free-release archives, installers, Homebrew definitions, and checksums without signing."""
 
 import argparse
 import hashlib
@@ -14,6 +14,7 @@ import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 REPOSITORY = 'https://github.com/stelmost/testd'
+VERSION_PATTERN = r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?'
 TARGETS = {
 	'aarch64-apple-darwin': ('macos', 'aarch64'),
 	'x86_64-apple-darwin': ('macos', 'x64'),
@@ -28,9 +29,13 @@ def digest(path):
 		return hashlib.file_digest(source, 'sha256').hexdigest()
 
 
-def check_version(version):
-	if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', version):
+def validate_version(version):
+	if not re.fullmatch(VERSION_PATTERN, version):
 		raise ValueError(f'invalid release version: {version}')
+
+
+def check_version(version):
+	validate_version(version)
 	manifests = [ROOT / 'Cargo.toml', *sorted(ROOT.glob('crates/*/Cargo.toml'))]
 	for path in manifests:
 		actual = tomllib.loads(path.read_text())['package']['version']
@@ -167,6 +172,21 @@ def checksums(directory):
 	print(path)
 
 
+def installer(args):
+	validate_version(args.version)
+	text = (ROOT / 'install.sh').read_text(encoding='utf-8')
+	text, count = re.subn(r'^version=\$\{TESTD_VERSION:-[^}\n]*\}$',
+		f'version=${{TESTD_VERSION:-{args.version}}}', text, flags=re.MULTILINE)
+	if count != 1:
+		raise ValueError('install.sh must contain exactly one TESTD_VERSION default')
+	args.output.mkdir(parents=True, exist_ok=True)
+	path = args.output / 'install.sh'
+	with path.open('x', encoding='utf-8', newline='\n') as target:
+		target.write(text)
+	path.chmod(0o755)
+	print(path)
+
+
 def main():
 	parser = argparse.ArgumentParser(description=__doc__)
 	commands = parser.add_subparsers(dest='command', required=True)
@@ -175,6 +195,9 @@ def main():
 	verify.add_argument('version', nargs='?', default=version)
 	notes = commands.add_parser('release-notes')
 	notes.add_argument('version')
+	install = commands.add_parser('installer', help='generate a pinned installer in a fresh staging directory')
+	install.add_argument('--version', required=True)
+	install.add_argument('--output', type=pathlib.Path, required=True)
 	build = commands.add_parser('package')
 	build.add_argument('--version', required=True)
 	build.add_argument('--target', choices=TARGETS, required=True)
@@ -206,9 +229,8 @@ def main():
 			'and as a static musl build (`x86_64-unknown-linux-musl`). Desktop packages use GNU libc.')
 		print('\nTo install this exact CLI release on Linux or macOS:')
 		print('```sh')
-		raw_repository = REPOSITORY.replace('https://github.com/', 'https://raw.githubusercontent.com/')
-		print(f'curl -fsSLo testd-install.sh {raw_repository}/v{args.version}/install.sh')
-		print(f"TESTD_VERSION='{args.version}' sh ./testd-install.sh")
+		print(f'curl -fsSLo testd-install.sh {REPOSITORY}/releases/download/v{args.version}/install.sh')
+		print('sh ./testd-install.sh')
 		print('```\n')
 		print('The installer detects GNU libc on Linux and otherwise selects musl. '
 			'Set `TESTD_LIBC=gnu` or `TESTD_LIBC=musl` to override its Linux selection.')
@@ -217,6 +239,8 @@ def main():
 		package(args)
 	elif args.command == 'homebrew':
 		homebrew(args)
+	elif args.command == 'installer':
+		installer(args)
 	elif args.command == 'require-clean-sbom':
 		_, documents = scan_sbom()
 		if documents:

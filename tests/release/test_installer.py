@@ -2,15 +2,17 @@ import hashlib
 import io
 import os
 import pathlib
+import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-VERSION = '0.1.0-alpha.1'
+OVERRIDE_VERSION = '9.8.7-fixture.1'
 TARGET = 'aarch64-apple-darwin'
 BINARY = b'#!/bin/sh\nprintf "testd fixture\\n"\n'
 
@@ -21,6 +23,8 @@ class InstallerTests(unittest.TestCase):
 		temporary = tempfile.TemporaryDirectory()
 		self.addCleanup(temporary.cleanup)
 		self.root = pathlib.Path(temporary.name)
+		installer = (ROOT / 'install.sh').read_text(encoding='utf-8')
+		self.version = re.search(r'^version=\$\{TESTD_VERSION:-([^}]+)\}$', installer, re.MULTILINE).group(1)
 		tools = self.root / 'tools'
 		tools.mkdir()
 		uname = tools / 'uname'
@@ -29,73 +33,80 @@ class InstallerTests(unittest.TestCase):
 		curl = tools / 'curl'
 		shutil.copyfile(ROOT / 'tests/release/fixtures/installer-curl.sh', curl)
 		curl.chmod(0o700)
-		self.archive = self.root / f'testd-{VERSION}-{TARGET}.tar.gz'
-		with tarfile.open(self.archive, 'w:gz') as archive:
-			entry = tarfile.TarInfo(f'testd-{VERSION}-{TARGET}/testd')
-			entry.mode = 0o755
-			entry.size = len(BINARY)
-			archive.addfile(entry, io.BytesIO(BINARY))
-		digest = hashlib.sha256(self.archive.read_bytes()).hexdigest()
-		(self.root / 'SHA256SUMS').write_text(f'{digest}  {self.archive.name}\n')
+		checksums = []
+		for version in (self.version, OVERRIDE_VERSION):
+			path = self.root / f'testd-{version}-{TARGET}.tar.gz'
+			with tarfile.open(path, 'w:gz') as archive:
+				entry = tarfile.TarInfo(f'testd-{version}-{TARGET}/testd')
+				entry.mode = 0o755
+				entry.size = len(BINARY)
+				archive.addfile(entry, io.BytesIO(BINARY))
+			digest = hashlib.sha256(path.read_bytes()).hexdigest()
+			checksums.append(f'{digest}  {path.name}\n')
+		self.archive = self.root / f'testd-{self.version}-{TARGET}.tar.gz'
+		(self.root / 'SHA256SUMS').write_text(''.join(checksums))
 		self.installed = self.root / 'installed/testd'
 		self.requests = self.root / 'requests'
 		self.env = {**os.environ, 'PATH': str(tools) + os.pathsep + os.environ.get('PATH', ''),
-			'GITHUB_TOKEN': '', 'TESTD_REPO': 'fixture/testd', 'TESTD_VERSION': '',
+			'TESTD_REPO': 'fixture/testd',
 			'TESTD_INSTALL_DIR': str(self.installed.parent), 'TMPDIR': temporary.name,
 			'FIXTURE_REQUESTS': str(self.requests), 'FIXTURE_ASSETS': str(self.root),
-			'FIXTURE_VERSION': VERSION, 'FIXTURE_LOOKUP': 'success',
-			'FIXTURE_REDIRECT': f'https://github.com/fixture/testd/releases/tag/v{VERSION}'}
+			'FIXTURE_VERSION': self.version, 'FIXTURE_DOWNLOAD': 'success'}
+		self.env.pop('TESTD_VERSION', None)
+		self.env.pop('GITHUB_TOKEN', None)
 
-	def run_installer(self, **env):
-		return subprocess.run(['sh', str(ROOT / 'install.sh')], env={**self.env, **env},
+	def run_installer(self, installer=ROOT / 'install.sh', **env):
+		return subprocess.run(['sh', str(installer)], env={**self.env, **env},
 			capture_output=True, text=True, timeout=15)
 
-	def test_anonymous_install_avoids_the_rate_limited_api(self):
+	def test_default_version_installs_without_release_discovery(self):
 		result = self.run_installer()
 		self.assertEqual(result.returncode, 0, result.stderr)
 		self.assertEqual(self.installed.read_bytes(), BINARY)
-		self.assertIn(f'testd {VERSION} ({TARGET})', result.stdout)
-		requests = self.requests.read_text()
-		self.assertIn('https://github.com/fixture/testd/releases/latest', requests)
-		self.assertNotIn('api.github.com', requests)
-		self.assertIn(self.archive.name, requests)
-		self.assertIn('SHA256SUMS', requests)
+		self.assertIn(f'testd {self.version} ({TARGET})', result.stdout)
+		requests = self.requests.read_text().splitlines()
+		self.assertEqual(len(requests), 2)
+		base = f'https://github.com/fixture/testd/releases/download/v{self.version}'
+		self.assertTrue(requests[0].endswith(f'{base}/{self.archive.name}'))
+		self.assertTrue(requests[1].endswith(f'{base}/SHA256SUMS'))
 
-	def test_authenticated_lookup_preserves_token_support(self):
-		result = self.run_installer(GITHUB_TOKEN='fixture-token', FIXTURE_LOOKUP='api-success')
+	def test_empty_version_uses_the_pinned_default(self):
+		result = self.run_installer(TESTD_VERSION='')
 		self.assertEqual(result.returncode, 0, result.stderr)
 		self.assertEqual(self.installed.read_bytes(), BINARY)
-		self.assertIn('Authorization: Bearer fixture-token', self.requests.read_text())
-		self.assertNotIn('fixture-token', result.stdout + result.stderr)
+		self.assertIn(f'testd {self.version} ({TARGET})', result.stdout)
 
-	def test_pinned_version_skips_discovery(self):
-		result = self.run_installer(TESTD_VERSION=VERSION, FIXTURE_LOOKUP='forbidden')
+	def test_explicit_version_overrides_the_default(self):
+		result = self.run_installer(TESTD_VERSION=OVERRIDE_VERSION, FIXTURE_VERSION=OVERRIDE_VERSION)
 		self.assertEqual(result.returncode, 0, result.stderr)
 		self.assertEqual(self.installed.read_bytes(), BINARY)
-		self.assertNotIn('/latest', self.requests.read_text())
+		self.assertIn(f'testd {OVERRIDE_VERSION} ({TARGET})', result.stdout)
+		self.assertIn(f'/releases/download/v{OVERRIDE_VERSION}/', self.requests.read_text())
 
-	def test_lookup_failures_report_access_and_version_override(self):
-		for lookup, token in (('forbidden', ''), ('missing', ''), ('network', ''), ('forbidden', 'fixture-token')):
-			with self.subTest(lookup=lookup, authenticated=bool(token)):
-				result = self.run_installer(FIXTURE_LOOKUP=lookup, GITHUB_TOKEN=token)
-				self.assertNotEqual(result.returncode, 0)
-				self.assertIn('check GitHub access', result.stderr)
-				self.assertIn('TESTD_VERSION', result.stderr)
-				self.assertNotIn('could not find a stable release', result.stderr)
-				self.assertFalse(self.installed.exists())
-				self.assertNotIn('/releases/download/', self.requests.read_text())
+	def test_generated_installer_uses_its_release_default(self):
+		output = self.root / 'release'
+		generation = subprocess.run([sys.executable, str(ROOT / 'scripts/release.py'), 'installer',
+			'--version', OVERRIDE_VERSION, '--output', str(output)],
+			capture_output=True, text=True, timeout=15)
+		self.assertEqual(generation.returncode, 0, generation.stderr)
+		result = self.run_installer(installer=output / 'install.sh', FIXTURE_VERSION=OVERRIDE_VERSION)
+		self.assertEqual(result.returncode, 0, result.stderr)
+		self.assertEqual(self.installed.read_bytes(), BINARY)
+		self.assertIn(f'testd {OVERRIDE_VERSION} ({TARGET})', result.stdout)
 
-	def test_unexpected_redirects_do_not_select_a_release(self):
-		for redirect in ('https://github.com/fixture/testd/releases',
-				'https://github.com/fixture/testd/releases/tag/',
-				'https://github.com/fixture/testd/releases/tag/v',
-				'https://github.com/other/testd/releases/tag/v1.0.0'):
-			with self.subTest(redirect=redirect):
-				result = self.run_installer(FIXTURE_REDIRECT=redirect)
+	def test_github_token_does_not_trigger_discovery_or_send_credentials(self):
+		result = self.run_installer(GITHUB_TOKEN='fixture-token')
+		self.assertEqual(result.returncode, 0, result.stderr)
+		self.assertEqual(self.installed.read_bytes(), BINARY)
+		self.assertNotIn('fixture-token', self.requests.read_text() + result.stdout + result.stderr)
+
+	def test_failed_downloads_leave_no_installation(self):
+		for failure, message in (('forbidden', 'download failed:'), ('missing-checksums', 'checksum file unavailable')):
+			with self.subTest(failure=failure):
+				result = self.run_installer(FIXTURE_DOWNLOAD=failure)
 				self.assertNotEqual(result.returncode, 0)
-				self.assertIn('could not read the release tag', result.stderr)
+				self.assertIn(message, result.stderr)
 				self.assertFalse(self.installed.exists())
-				self.assertNotIn('/releases/download/', self.requests.read_text())
 
 	def test_checksum_failure_preserves_an_existing_install(self):
 		self.installed.parent.mkdir()

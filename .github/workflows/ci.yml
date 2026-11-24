@@ -368,6 +368,8 @@ jobs:
         run: >-
           python scripts/release.py homebrew --version "${GITHUB_REF_NAME#v}"
           --artifacts dist --output dist
+      - name: Generate the pinned CLI installer
+        run: python scripts/release.py installer --version "${GITHUB_REF_NAME#v}" --output dist
       - run: python scripts/release.py checksums dist
       - name: Attach free artifacts to a draft public release
         env:

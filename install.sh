@@ -1,11 +1,12 @@
 #!/bin/sh
-# Installs the current testd release. Reads no configuration and needs no account.
-# Env: TESTD_VERSION, TESTD_INSTALL_DIR, TESTD_REPO, TESTD_LIBC, GITHUB_TOKEN.
+# Installs its pinned testd release. Reads no configuration and needs no account.
+# Env: TESTD_VERSION, TESTD_INSTALL_DIR, TESTD_REPO, TESTD_LIBC.
 set -eu
 
 repo=${TESTD_REPO:-stelmost/testd}
 install_dir=${TESTD_INSTALL_DIR:-"$HOME/.local/bin"}
-version=${TESTD_VERSION:-}
+# Promote this default only after the release assets are public.
+version=${TESTD_VERSION:-0.1.0-alpha.1}
 
 fail() {
 	printf 'install.sh: %s\n' "$*" >&2
@@ -35,25 +36,6 @@ Linux:aarch64 | Linux:arm64)
 	fail "unsupported platform $os/$arch; see https://testd.dev/#install"
 	;;
 esac
-
-if [ -z "$version" ]; then
-	lookup_error="release lookup failed for $repo; check GitHub access or set TESTD_VERSION from the release notes"
-	if [ -n "${GITHUB_TOKEN:-}" ]; then
-		api="https://api.github.com/repos/$repo/releases/latest"
-		release=$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" "$api") || fail "$lookup_error"
-		version=$(printf '%s' "$release" | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p')
-	else
-		# The public redirect avoids GitHub's unauthenticated API rate limit.
-		release_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' \
-			"https://github.com/$repo/releases/latest") || fail "$lookup_error"
-		tag_url="https://github.com/$repo/releases/tag/v"
-		case "$release_url" in
-		"$tag_url"*) version=${release_url#"$tag_url"} ;;
-		*) fail "could not read the release tag for $repo; set TESTD_VERSION from the release notes" ;;
-		esac
-	fi
-	[ -n "$version" ] || fail "could not read the release tag for $repo"
-fi
 
 archive="testd-$version-$target.tar.gz"
 base="https://github.com/$repo/releases/download/v$version"

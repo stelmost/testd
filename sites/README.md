@@ -57,6 +57,8 @@ Workers static assets would serve the same tree and also honour `_headers` and `
 
 CI builds and link-checks `dist/` on every run and does not deploy it; publication belongs to the Pages Git integration alone.
 
+The product version label and checksum link use the published version pinned in root `install.sh`. Development Cargo version changes do not advance the public installer. After a release's assets are public, use the [installer promotion procedure](../docs/developers/releasing.md#cli-installer), then commit and publish the canonical installer change.
+
 ## Layout
 
 - `assets/`: canonical brand and social images

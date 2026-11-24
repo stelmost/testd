@@ -78,7 +78,7 @@ On Linux and macOS:
 curl -fsSL https://testd.dev/install.sh | sh
 ```
 
-The installer downloads the latest release, verifies `SHA256SUMS`, picks GNU libc or static musl on Linux (`TESTD_LIBC=gnu|musl` to override), and installs `testd` into `~/.local/bin` (`TESTD_INSTALL_DIR` to override; set `TESTD_VERSION` without the leading `v` to pin a specific version).
+The installer downloads its pinned release, verifies `SHA256SUMS`, picks GNU libc or static musl on Linux (`TESTD_LIBC=gnu|musl` to override), and installs `testd` into `~/.local/bin` (`TESTD_INSTALL_DIR` to override). Set `TESTD_VERSION` without the leading `v` on the `sh` process to choose another release.
 
 On Windows (`x64`), download `testd-<version>-x86_64-pc-windows-msvc.zip` and `SHA256SUMS` from [GitHub Releases](https://github.com/stelmost/testd/releases), verify the checksum, and extract `testd.exe` onto `PATH` (statically linked MSVC runtime; no redistributable needed).
 

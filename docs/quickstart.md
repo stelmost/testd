@@ -60,7 +60,7 @@ Run the installer script:
 curl -fsSL https://testd.dev/install.sh | sh
 ```
 
-The script downloads the latest release, verifies `SHA256SUMS`, and installs `testd` into `~/.local/bin` (override with `TESTD_INSTALL_DIR`). To pin a version, set `TESTD_VERSION` without the leading `v` (for example `TESTD_VERSION='0.1.0-alpha.1'`). On Linux `x86_64`, it picks GNU libc when detected and static musl otherwise; set `TESTD_LIBC=gnu` or `TESTD_LIBC=musl` to choose explicitly.
+The script downloads its pinned release, verifies `SHA256SUMS`, and installs `testd` into `~/.local/bin` (override with `TESTD_INSTALL_DIR`). To choose another release, set `TESTD_VERSION` without the leading `v` on the `sh` process (for example `curl -fsSL https://testd.dev/install.sh | TESTD_VERSION='0.1.0-alpha.1' sh`). On Linux `x86_64`, it picks GNU libc when detected and static musl otherwise; set `TESTD_LIBC=gnu` or `TESTD_LIBC=musl` to choose explicitly.
 
 You can also download the release `.tar.gz` archive manually or install the generated Homebrew formula attached to each release (`brew install --formula ./testd.rb`). Linux `aarch64` has no prebuilt archive yet; build from source there.
 

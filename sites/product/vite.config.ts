@@ -7,17 +7,16 @@ const docsPort = Number(process.env.TESTD_DOCS_PORT ?? 5174);
 const outDir = process.env.TESTD_SITE_OUT_DIR ?? '../../dist';
 
 const assetsRoot = fileURLToPath(new URL('../../assets/', import.meta.url));
-const cargoTomlPath = new URL('../../Cargo.toml', import.meta.url);
+const installerPath = new URL('../../install.sh', import.meta.url);
 
 function readReleaseVersion(): string {
-	const raw = readFileSync(cargoTomlPath, 'utf8');
-	const pkg = raw.split(/^\[package\]$/m)[1] ?? '';
-	const match = pkg.match(/^version\s*=\s*"([^"]+)"/m);
-	if (!match) throw new Error('could not read [package].version from Cargo.toml');
+	const installer = readFileSync(installerPath, 'utf8');
+	const match = installer.match(/^version=\$\{TESTD_VERSION:-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\}$/m);
+	if (!match) throw new Error('could not read the published release version from install.sh');
 	return match[1];
 }
 
-// Replace __TESTD_VERSION__ in HTML with Cargo.toml's [package].version.
+// Advertise the published installer version independently of development package versions.
 function releaseVersion(): Plugin {
 	const version = readReleaseVersion();
 	return {
@@ -50,7 +49,7 @@ function publicAssets(): Plugin {
 		},
 		{
 			fileName: 'install.sh',
-			path: new URL('../../install.sh', import.meta.url),
+			path: installerPath,
 			contentType: 'text/x-shellscript; charset=utf-8',
 		},
 	];
