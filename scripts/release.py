@@ -207,7 +207,7 @@ def main():
 		print('\nTo install this exact CLI release on Linux or macOS:')
 		print('```sh')
 		raw_repository = REPOSITORY.replace('https://github.com/', 'https://raw.githubusercontent.com/')
-		print(f'curl -fsSLo testd-install.sh {raw_repository}/v{args.version}/sites/product/public/install.sh')
+		print(f'curl -fsSLo testd-install.sh {raw_repository}/v{args.version}/install.sh')
 		print(f"TESTD_VERSION='{args.version}' sh ./testd-install.sh")
 		print('```\n')
 		print('The installer detects GNU libc on Linux and otherwise selects musl. '

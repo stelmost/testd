@@ -175,7 +175,7 @@ class ReleaseTests(unittest.TestCase):
 			self.assertIn(package, dependencies)
 
 	@unittest.skipIf(os.name == 'nt', 'not applicable: the site container fixture uses a Unix shell')
-	def test_site_container_mounts_the_relocated_link_checker_read_only(self):
+	def test_site_container_mounts_tests_and_installer_read_only(self):
 		with tempfile.TemporaryDirectory() as temporary:
 			root = pathlib.Path(temporary).resolve()
 			entrypoint = root / 'sites/bin/site.sh'
@@ -197,6 +197,7 @@ class ReleaseTests(unittest.TestCase):
 					result = subprocess.run(['sh', str(entrypoint), 'links'], env=env,
 						capture_output=True, text=True, check=True, timeout=10)
 					self.assertIn(f'{root}/tests:/src/tests:ro{suffix}', result.stdout.splitlines())
+					self.assertIn(f'{root}/install.sh:/src/install.sh:ro{suffix}', result.stdout.splitlines())
 					self.assertIn('/src/sites/bin/entrypoint.sh', result.stdout.splitlines())
 
 	def test_root_typescript_config_checks_the_relocated_link_checker(self):
@@ -292,7 +293,7 @@ class ReleaseTests(unittest.TestCase):
 			self.assertIn(target, text)
 		self.assertIn('TESTD_LIBC=musl', text)
 		self.assertIn('curl -fsSLo testd-install.sh '
-			f'https://raw.githubusercontent.com/stelmost/testd/v{version}/sites/product/public/install.sh', text)
+			f'https://raw.githubusercontent.com/stelmost/testd/v{version}/install.sh', text)
 		self.assertIn(f"TESTD_VERSION='{version}' sh ./testd-install.sh", text)
 		self.assertIn('On Linux, macOS, and Windows, stop testd and run `testd uninstall` before removing the app.', text)
 
@@ -329,7 +330,7 @@ class ReleaseTests(unittest.TestCase):
 				'GITHUB_TOKEN': '', 'TESTD_REPO': 'fixture/testd', 'TESTD_VERSION': version,
 				'TESTD_LIBC': '', 'FIXTURE_LIBC': 'gnu',
 				'FIXTURE_ASSETS': str(assets), 'TESTD_INSTALL_DIR': str(installed.parent), 'TMPDIR': temporary}
-			command = ['sh', str(ROOT / 'sites/product/public/install.sh')]
+			command = ['sh', str(ROOT / 'install.sh')]
 			for detected, override, expected in (('gnu', '', 'gnu'), ('musl', '', 'musl'),
 					('musl', 'gnu', 'gnu'), ('gnu', 'musl', 'musl')):
 				with self.subTest(detected=detected, override=override):
@@ -2249,6 +2250,7 @@ quick_launch_diagnostics fixture
 			('tests/release/all_checks.py', (False, True, True)),
 			('tests/check-links.ts', (False, True, True)),
 			('tests/ci-changes.sh', (False, True, True)),
+			('install.sh', (False, True, True)),
 			('docs/usage.md', (False, False, True)),
 			('.github/workflows/ci.yml', (True, True, True)),
 			('README.md\ndocs/usage.md', (True, False, True)),

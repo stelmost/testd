@@ -21,12 +21,12 @@ rust=(
 	'tests/cli.rs' 'tests/host/**' 'tests/manual/**' 'tests/README.md'
 	'README.md' 'config.example.toml' 'scripts/testd-elevated.ps1'
 )
-release=( '.github/**' 'scripts/**' 'tests/**' 'packaging/**' )
+release=( '.github/**' 'scripts/**' 'tests/**' 'packaging/**' 'install.sh' )
 site=(
 	'.github/**'
 	'sites/**' 'docs/**' 'assets/**'
 	'tests/run.py' 'tests/release/all_checks.py' 'tests/ci-changes.sh' 'tests/check-links.ts'
-	'package.json' 'bun.lock' 'tsconfig.json'
+	'package.json' 'bun.lock' 'tsconfig.json' 'install.sh'
 )
 
 all_changed() {

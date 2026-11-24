@@ -60,6 +60,7 @@ CI builds and link-checks `dist/` on every run and does not deploy it; publicati
 ## Layout
 
 - `assets/`: canonical brand and social images
+- `install.sh`: canonical installer; Vite serves and publishes it at `/install.sh`
 - `sites/product/`: product landing page, styles, deploy files, and its Vite config
 - `docs/`: documentation Markdown
 - `sites/docs/`: VitePress configuration and theme; reads the pages from `docs/` and serves `assets/brand/` as its public directory

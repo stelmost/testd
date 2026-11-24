@@ -6,7 +6,6 @@ const host = process.env.TESTD_SITE_HOST ?? '127.0.0.1';
 const docsPort = Number(process.env.TESTD_DOCS_PORT ?? 5174);
 const outDir = process.env.TESTD_SITE_OUT_DIR ?? '../../dist';
 
-const ogImagePath = fileURLToPath(new URL('../../assets/social/og.png', import.meta.url));
 const assetsRoot = fileURLToPath(new URL('../../assets/', import.meta.url));
 
 // Brand sources sit outside the Vite root. In dev, point the HTML at Vite's
@@ -21,26 +20,41 @@ function devAssets(): Plugin {
 	};
 }
 
-// Serve the canonical social card at a stable URL in dev and emit it at build.
-function ogImageAsset(): Plugin {
-	const image = readFileSync(ogImagePath);
+// Publish canonical files outside the Vite root at stable URLs.
+function publicAssets(): Plugin {
+	const assets = [
+		{
+			fileName: 'og.png',
+			path: new URL('../../assets/social/og.png', import.meta.url),
+			contentType: 'image/png',
+		},
+		{
+			fileName: 'install.sh',
+			path: new URL('../../install.sh', import.meta.url),
+			contentType: 'text/x-shellscript; charset=utf-8',
+		},
+	];
 	return {
-		name: 'testd-og-image',
+		name: 'testd-public-assets',
 		configureServer(server) {
-			server.middlewares.use('/og.png', (_req, res) => {
-				res.setHeader('Content-Type', 'image/png');
-				res.end(image);
-			});
+			for (const asset of assets) {
+				server.middlewares.use(`/${asset.fileName}`, (_req, res) => {
+					res.setHeader('Content-Type', asset.contentType);
+					res.end(readFileSync(asset.path));
+				});
+			}
 		},
 		generateBundle() {
-			this.emitFile({ type: 'asset', fileName: 'og.png', source: image });
+			for (const asset of assets) {
+				this.emitFile({ type: 'asset', fileName: asset.fileName, source: readFileSync(asset.path) });
+			}
 		},
 	};
 }
 
 export default defineConfig({
 	base: '/',
-	plugins: [devAssets(), ogImageAsset()],
+	plugins: [devAssets(), publicAssets()],
 	server: {
 		host,
 		port: 5173,
