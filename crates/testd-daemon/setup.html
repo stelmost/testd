@@ -106,6 +106,9 @@
 				</div>
 				<div class="card-body">
 					<p class="card-desc" id="certificate-detail">Not trusted yet.</p>
+					<p class="card-desc" id="firefox-setup" hidden>Firefox may need a separate certificate import.
+						After setup, the dashboard checks whether Firefox can connect over HTTPS and shows import
+						instructions if needed.</p>
 					<div class="form-actions">
 						<button class="btn btn-primary" id="certificate-action" type="button"
 							onclick="setupCertificate()">Install certificate</button>
@@ -408,6 +411,7 @@
 	}
 
 	document.getElementById('secret-input').addEventListener('input', updateFinish);
+	document.getElementById('firefox-setup').hidden = !/Firefox\//.test(navigator.userAgent);
 
 	loadSecret();
 	refresh();

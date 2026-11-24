@@ -375,7 +375,7 @@ All providers require the plain HTTP routing listener. The provider hostname is 
 - Linux: DNS on UDP 7753; port 443 needs `CAP_NET_BIND_SERVICE` or a high `edge_addr`. Use `packaging/systemd/testd@.service` for the capability, or `packaging/systemd/testd.service` with a high port.
 - macOS: DNS on UDP 7753; launchd template in `packaging/launchd/`. The root is installed in the system keychain through the setup helper.
 - Windows: DNS on UDP 53; config under `%APPDATA%\testd`. NRPT rules route `.test` to the local server. A stale answer may need `ipconfig /flushdns`.
-- Firefox: may use its own trust store; import the root separately if Chromium-based browsers and the system store accept it but Firefox does not.
+- Firefox: may use its own trust store. The dashboard checks an HTTPS connection from Firefox separately from system trust, shows root import instructions if the check fails, and checks again on focus or with **Check again**. DNS or connectivity failures can also leave Firefox trust unconfirmed.
 - Caddy: optional. The built-in edge needs no external front.
 
 ## Troubleshooting by layer

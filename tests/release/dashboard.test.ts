@@ -317,6 +317,109 @@ test('certificate status refreshes on focus and periodically', () => {
 	expect(refreshes).toBe(3);
 });
 
+function firefoxTrust(userAgent = 'Firefox/145.0') {
+	const fields = new Map<string, any>();
+	const field = (id: string) => {
+		if (!fields.has(id)) fields.set(id, {
+			hidden: true, disabled: false, textContent: '', className: '',
+			dataset: { probeUrl: 'https://testd.example:9443/ok.svg' },
+		});
+		return fields.get(id)!;
+	};
+	const images: ProbeImage[] = [];
+	class ProbeImage {
+		src = '';
+		referrerPolicy = '';
+		onload: (() => void) | null = null;
+		onerror: (() => void) | null = null;
+		constructor() { images.push(this); }
+	}
+	const timers = new Map<number, () => void>();
+	let nextTimer = 0;
+	const source = dashboard.slice(dashboard.indexOf('\tlet isCheckingFirefoxTrust = false;'),
+		dashboard.indexOf('\n\tasync function certificateState('));
+	const check = new Function('document', 'navigator', 'Image', 'setTimeout', 'clearTimeout',
+		source + '\nreturn checkFirefoxTrust;')(
+		{ getElementById: field }, { userAgent }, ProbeImage,
+		(callback: () => void, delay: number) => {
+			expect(delay).toBe(5000);
+			timers.set(++nextTimer, callback);
+			return nextTimer;
+		},
+		(timer: number) => timers.delete(timer),
+	);
+	return { check, field, images, timers };
+}
+
+test('Firefox trust succeeds only after the browser loads the HTTPS probe', () => {
+	const ui = firefoxTrust();
+	ui.check();
+	ui.check();
+	expect(ui.images).toHaveLength(1);
+	expect(ui.field('firefox-trust').hidden).toBe(false);
+	expect(ui.field('firefox-trust-check').disabled).toBe(true);
+	expect(ui.field('firefox-trust-badge').textContent).toBe('Checking...');
+	expect(ui.images[0].src).toMatch(/^https:\/\/testd\.example:9443\/ok\.svg\?check=\d+$/);
+	expect(ui.images[0].referrerPolicy).toBe('no-referrer');
+	ui.images[0].onload!();
+	expect(ui.field('firefox-trust-badge').textContent).toBe('Connected');
+	expect(ui.field('firefox-import').hidden).toBe(true);
+	expect(ui.field('firefox-trust-check').disabled).toBe(false);
+	expect(ui.timers.size).toBe(0);
+});
+
+test('a failed Firefox probe shows import guidance and can recover after import', () => {
+	const ui = firefoxTrust();
+	ui.check();
+	ui.images[0].onerror!();
+	expect(ui.field('firefox-trust-badge').textContent).toBe('Not confirmed');
+	expect(ui.field('firefox-trust-detail').textContent).toContain('DNS');
+	expect(ui.field('firefox-import').hidden).toBe(false);
+	expect(ui.field('firefox-trust-check').disabled).toBe(false);
+	ui.check();
+	expect(ui.images).toHaveLength(2);
+	expect(ui.images[1].src).toStartWith('https:');
+	ui.images[1].onload!();
+	expect(ui.field('firefox-trust-badge').textContent).toBe('Connected');
+	expect(ui.field('firefox-import').hidden).toBe(true);
+});
+
+test('a stalled Firefox probe times out without claiming trust or holding the retry button', () => {
+	const ui = firefoxTrust();
+	ui.check();
+	ui.timers.values().next().value!();
+	expect(ui.field('firefox-trust-badge').textContent).toBe('Not confirmed');
+	expect(ui.field('firefox-import').hidden).toBe(false);
+	expect(ui.field('firefox-trust-check').disabled).toBe(false);
+	expect(ui.images[0].onload).toBeNull();
+	expect(ui.images[0].onerror).toBeNull();
+	ui.check();
+	expect(ui.images).toHaveLength(2);
+});
+
+test('other browsers do not receive Firefox import instructions or probes', () => {
+	const ui = firefoxTrust('Chrome/140.0');
+	ui.check();
+	expect(ui.field('firefox-trust').hidden).toBe(true);
+	expect(ui.images).toHaveLength(0);
+	expect(ui.timers.size).toBe(0);
+});
+
+test('system certificate trust refreshes the independent Firefox HTTPS check', () => {
+	const ui = firefoxTrust();
+	let checks = 0;
+	const source = dashboard.slice(dashboard.indexOf('function renderCertificate('),
+		dashboard.indexOf('\n\tlet isCheckingFirefoxTrust'));
+	const render = new Function('document', 'checkFirefoxTrust', `return (${source});`)(
+		{ getElementById: ui.field }, () => { checks++; },
+	);
+	for (const trusted of [true, false]) {
+		render({ trusted });
+		expect(ui.field('certificate-badge').textContent).toBe(trusted ? 'System trusted' : 'System not trusted');
+	}
+	expect(checks).toBe(2);
+});
+
 test('local pages remove fragment credentials and authenticate requests without cross-port cookies', async () => {
 	const setup = await Bun.file(new URL('../../crates/testd-daemon/setup.html', import.meta.url)).text();
 	for (const [page, tokenName, next] of [[dashboard, 'dashboardToken', 'post'], [setup, 'setupToken', 'request']]) {

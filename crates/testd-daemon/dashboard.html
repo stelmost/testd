@@ -270,8 +270,8 @@
 							<h2>Certificate</h2>
 							<span id="certificate-badge" class="pill pill-muted">Checking...</span>
 						</div>
-						<p class="card-desc">The local root is trusted on this machine. A device that fetches
-							<code>/ca.crt</code> from the host can install it once.</p>
+						<p class="card-desc">Install the local root in this machine's system trust store. Other
+							devices can download the root from <code>/ca.crt</code> and install it once.</p>
 					</div>
 				</div>
 				<div class="card-body">
@@ -295,6 +295,19 @@
 							onclick="certificate('install')">Install</button>
 						<button class="btn btn-sm btn-danger" id="certificate-remove" type="button" disabled
 							onclick="certificate('remove')">Remove</button>
+					</div>
+					<div id="firefox-trust" data-probe-url="{https_probe_url}" hidden>
+						<p class="card-desc"><strong>Firefox HTTPS</strong>
+							<span id="firefox-trust-badge" class="pill pill-muted">Checking...</span></p>
+						<p class="card-desc" id="firefox-trust-detail" role="status" aria-live="polite"></p>
+						<p class="card-desc" id="firefox-import" hidden>Firefox can use a separate certificate store.
+							Download the root above, then open Firefox Settings → Privacy &amp; Security → Certificates →
+							View Certificates → Authorities → Import. Select the downloaded root and allow it to identify
+							websites. Return here to check again.</p>
+						<div class="row-actions card-actions">
+							<button class="btn btn-sm" id="firefox-trust-check" type="button"
+								onclick="checkFirefoxTrust()">Check again</button>
+						</div>
 					</div>
 				</div>
 			</section>
@@ -1216,12 +1229,50 @@
 		const trusted = Boolean(status.trusted);
 		const badge = document.getElementById('certificate-badge');
 		badge.className = 'pill ' + (trusted ? 'pill-ok' : 'pill-warn');
-		badge.textContent = trusted ? 'Trusted' : 'Not trusted';
+		badge.textContent = trusted ? 'System trusted' : 'System not trusted';
 		document.getElementById('certificate-subject').textContent = status.subject || '-';
 		document.getElementById('certificate-expiry').textContent = status.not_after || '-';
 		document.getElementById('certificate-fingerprint').textContent = status.fingerprint_sha256 || '-';
 		document.getElementById('certificate-install').disabled = trusted;
 		document.getElementById('certificate-remove').disabled = !trusted;
+		checkFirefoxTrust();
+	}
+
+	let isCheckingFirefoxTrust = false;
+
+	function checkFirefoxTrust() {
+		if (isCheckingFirefoxTrust || !/Firefox\//.test(navigator.userAgent)) return;
+		isCheckingFirefoxTrust = true;
+		const section = document.getElementById('firefox-trust');
+		section.hidden = false;
+		const button = document.getElementById('firefox-trust-check');
+		const badge = document.getElementById('firefox-trust-badge');
+		const detail = document.getElementById('firefox-trust-detail');
+		const instructions = document.getElementById('firefox-import');
+		button.disabled = true;
+		badge.className = 'pill pill-muted';
+		badge.textContent = 'Checking...';
+		detail.textContent = 'Connecting to testd over HTTPS from this Firefox...';
+		// An image checks browser TLS trust without requiring cross-origin API access.
+		const image = new Image();
+		const finish = (state) => {
+			clearTimeout(timer);
+			image.onload = null;
+			image.onerror = null;
+			isCheckingFirefoxTrust = false;
+			button.disabled = false;
+			const isConnected = state === 'connected';
+			badge.className = 'pill ' + (isConnected ? 'pill-ok' : 'pill-warn');
+			badge.textContent = isConnected ? 'Connected' : 'Not confirmed';
+			detail.textContent = isConnected ? 'Firefox connected to testd over HTTPS successfully.'
+				: 'Firefox could not connect over HTTPS. Certificate trust, DNS, or connectivity may need attention.';
+			instructions.hidden = isConnected;
+		};
+		const timer = setTimeout(() => finish('unconfirmed'), 5000);
+		image.onload = () => finish('connected');
+		image.onerror = () => finish('unconfirmed');
+		image.referrerPolicy = 'no-referrer';
+		image.src = section.dataset.probeUrl + '?check=' + Date.now();
 	}
 
 	async function certificateState() {

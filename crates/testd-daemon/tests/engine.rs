@@ -1470,8 +1470,20 @@ async fn the_loopback_dashboard_is_local_and_exposes_local_actions() {
 	assert!(page.contains("Quick launches"), "the local dashboard shows local actions: {page}");
 	assert!(page.contains("Free version"), "the local dashboard carries its edition label: {page}");
 	assert!(page.contains("data-theme-choice=\"dark\""), "the local dashboard has a theme switch: {page}");
-	for placeholder in ["{tld}", "{domains}", "{domain_count}", "{shares}", "{share_count}", "{advisory}", "{version}"]
-	{
+	assert!(
+		page.contains("data-probe-url=\"https://testd.test/ok.svg\""),
+		"Firefox checks the local HTTPS edge: {page}"
+	);
+	for placeholder in [
+		"{tld}",
+		"{https_probe_url}",
+		"{domains}",
+		"{domain_count}",
+		"{shares}",
+		"{share_count}",
+		"{advisory}",
+		"{version}",
+	] {
 		assert!(!page.contains(placeholder), "the dashboard renders {placeholder}: {page}");
 	}
 	assert!(!page.contains("name=\"token\""), "the loopback page does not ask for a token: {page}");

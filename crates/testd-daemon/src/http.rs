@@ -408,6 +408,13 @@ fn render_dashboard(
 
 	crate::assets::load_page(crate::assets::DASHBOARD_HTML)
 		.replace("{tld}", &escape(&ctx.tld))
+		.replace(
+			"{https_probe_url}",
+			&escape(&format!(
+				"{}/ok.svg",
+				testd_core::config::https_url(&format!("testd.{}", ctx.tld), ctx.https_port)
+			)),
+		)
 		.replace("{domains}", &render_domains(claims, granted, ctx.https_port))
 		.replace("{domain_count}", &regs.len().to_string())
 		.replace("{shares}", &render_shares(shares))
