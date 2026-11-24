@@ -8,8 +8,8 @@ import { type DotSink, PITCH, type Rgb, mix } from './dots';
 import { BLUE, LIGHT, WORLD_COLOR, type World, type WorldKind } from './worlds';
 
 /* Layout is in fractions of the canvas width; tune the scene here. */
-const HOST = { x: 0.91, y: 0.52, radius: 0.22 };
-const BROWSER = { x: 0.9, y: 0.13 };
+const HOST = { x: 0.92, y: 0.39, radius: 0.2 };
+const BROWSER = { x: 0.9, y: 0.09 };
 /* One star, up and to the left. The host sees it nearly edge-on, a thin crescent that leaves its far side dark. */
 const HOST_LIGHT: [number, number, number] = [-0.9, 0.3, -0.3];
 const LEAF_LIGHT: [number, number, number] = [0.7, 0.45, 0.55];
@@ -32,27 +32,9 @@ const LEAVES: LeafLayout[] = [
 		name: 'app.example.test',
 		transport: 'loopback',
 		kind: 'moon',
-		x: 0.69,
-		y: 0.16,
-		radius: 0.024,
-		labelSide: 'above',
-	},
-	{
-		runtime: 'vm · wsl',
-		name: 'docs.example.test',
-		kind: 'ice',
-		x: 0.61,
-		y: 0.31,
-		radius: 0.028,
-		labelSide: 'above',
-	},
-	{
-		runtime: 'container',
-		name: 'api.example.test',
-		kind: 'giant',
-		x: 0.64,
-		y: 0.47,
-		radius: 0.036,
+		x: 0.68,
+		y: 0.11,
+		radius: 0.022,
 		labelSide: 'above',
 	},
 	{
@@ -60,9 +42,27 @@ const LEAVES: LeafLayout[] = [
 		name: 'console.example.test',
 		transport: 'TLS 1.3 · paired',
 		kind: 'rocky',
-		x: 0.56,
-		y: 0.56,
+		x: 0.58,
+		y: 0.21,
 		radius: 0.028,
+		labelSide: 'above',
+	},
+	{
+		runtime: 'vm · wsl',
+		name: 'docs.example.test',
+		kind: 'ice',
+		x: 0.59,
+		y: 0.32,
+		radius: 0.025,
+		labelSide: 'above',
+	},
+	{
+		runtime: 'container',
+		name: 'api.example.test',
+		kind: 'giant',
+		x: 0.65,
+		y: 0.42,
+		radius: 0.033,
 		labelSide: 'above',
 	},
 ];
