@@ -76,8 +76,10 @@ The product version label and checksum link use the published version pinned in 
 
 ## Brand assets
 
-`assets/brand/testd-slim.svg` is the slim brand icon used on the product page, in the dashboard and setup headers, and in larger placements. The product site imports the brand files through Vite, and the docs serve `assets/brand/` as their public directory, using `testd-app.png` for both the header logo and the favicon.
+`assets/brand/testd-slim.svg` is the slim brand icon used on the product page (inlined in its header so it follows the text colour), in the dashboard and setup headers, and in larger placements. The product site imports the brand files through Vite, and the docs serve `assets/brand/` as their public directory, using `testd-app.png` for both the header logo and the favicon.
 
 `assets/brand/testd-app.png` is the 1024px fat app icon used below 128px, including the favicon and the docs header. `testd-app-large.png` is the 1024px thin render of `testd-slim.svg` used at 128px and above, so the dock and task switch keep the lighter mark. `testd-tray-mask.png` and `testd-tray-plate-mask.png` are the alpha masks for the tray variants. `scripts/build-icons.py` regenerates `crates/testd-gui/icons/` from those sources; the native tray and packager use that directory. `assets/social/og.png` is the social card, emitted at `/og.png` by the product Vite config.
 
-The product site uses a warm paper-and-coal palette (`#F2EEE5`, `#1C1D1A`, `#DF542F`, `#6B6B61`). The footer presents Elmo St. on its Night ground (`#05070B`) with Light (`#ECF2F9`), St. Elmo blue (`#5CE1FF`), and amber (`#FF7828`) accents, using the Tier II maker's mark in both the footer lockup and the light-ground 404 page. Fonts are self-hosted through Fontsource: Archivo for text and JetBrains Mono for code.
+The product site follows the Elmo St. identity: Night `#05070B` ground and Light `#ECF2F9` text. St. Elmo blue `#5CE1FF` and amber `#FF7828` appear only as lights: in the lease diagram and the studio lockup, never as fills or links. The footer lockup uses the Tier II maker's mark, `assets/brand/elmo-st-tier-2-shipyard.svg`, which the 404 page shares. Fonts are self-hosted through Fontsource: Alegreya for text, and JetBrains Mono for code and labels. The docs theme still uses Archivo.
+
+The hero diagram and the footer limb are drawn on canvas: `sites/product/dots.ts` renders a scene as dithered dots, `lease.ts` draws the diagram and its Ctrl+C toggle, and `limb.ts` draws the planet limb. The page reads fully without them.
