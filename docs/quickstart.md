@@ -35,6 +35,8 @@ Download CLI archives, tray bundles, and Homebrew definitions from [GitHub Relea
 
 On Linux and macOS, use the version-pinned CLI installer command in the chosen release's notes. `TESTD_VERSION` is the tag without its leading `v`. Without it, the installer looks for a stable release and does not install prereleases.
 
+Linux x86_64 CLI archives use `x86_64-unknown-linux-gnu` for GNU libc and `x86_64-unknown-linux-musl` for the static musl build. The installer detects GNU libc and otherwise selects musl; set `TESTD_LIBC=gnu` or `TESTD_LIBC=musl` to select one explicitly. Linux desktop packages use GNU libc. Debian 13 is the native validation baseline; other distributions are best effort.
+
 ## 2. Prepare the host
 
 ```sh

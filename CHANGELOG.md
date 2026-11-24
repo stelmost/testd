@@ -25,6 +25,7 @@ First public alpha. The CLI, daemon, and tray ship as one version; desktop bundl
 - Host opt-ins: `[host] allow_remote_targets` for explicit remote targets, `[host] trust_forwarded_for` for a trusted front proxy, and `[host] edge_enabled = false` to drop only the built-in TLS listener while plain HTTP routing stays up
 - Homebrew formula and architecture-aware cask, launchd and systemd units, and an NSIS installer; building from source needs Rust 1.90
 - Tag-triggered release automation: CLI archives, tray bundles, workspace SBOMs, generated Homebrew definitions, checksums, and a draft GitHub release
+- Distribution-neutral Linux x86_64 CLI archives for GNU libc (`x86_64-unknown-linux-gnu`) and static musl (`x86_64-unknown-linux-musl`); the CLI installer detects libc and supports a `TESTD_LIBC` override
 - Cross-platform release validation for the host, browser, desktop, and artifact suites, including fixture self-tests for the privileged resolver and trust integration
 - Native TLS 1.3 registration with explicit host pairing, independently derived verification codes, and saved per-endpoint trust
 - Owner-authenticated dashboard and setup requests, including event streams, without cross-port cookie credentials

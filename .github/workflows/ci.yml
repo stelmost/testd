@@ -223,18 +223,26 @@ jobs:
           - os: macos-15
             target: aarch64-apple-darwin
             required: true
+            cli_only: false
             formats: app,dmg
           - os: macos-15-intel
             target: x86_64-apple-darwin
             required: false
+            cli_only: false
             formats: app,dmg
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             required: true
+            cli_only: false
             formats: appimage,deb
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+            required: true
+            cli_only: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             required: true
+            cli_only: false
             formats: nsis
     continue-on-error: ${{ !matrix.required }}
     runs-on: ${{ matrix.os }}
@@ -250,7 +258,10 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - uses: ./.github/actions/linux-dependencies
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && !matrix.cli_only
+      - name: Install musl build dependencies
+        if: matrix.cli_only
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -263,19 +274,36 @@ jobs:
           python scripts/release.py verify-version "$version"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
       - id: packager
+        if: ${{ !matrix.cli_only }}
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/cargo-packager*
           key: cargo-packager-0.11.8-${{ runner.os }}-${{ runner.arch }}
-      - if: steps.packager.outputs.cache-hit != 'true'
+      - if: ${{ !matrix.cli_only && steps.packager.outputs.cache-hit != 'true' }}
         run: cargo install cargo-packager --locked --version 0.11.8
       - run: cargo build --release --bin testd --locked --target ${{ matrix.target }}
         env:
           CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          CC_x86_64_unknown_linux_musl: musl-gcc
+      - name: Verify the musl CLI is static and runs
+        if: matrix.cli_only
+        run: |
+          binary=target/${{ matrix.target }}/release/testd
+          readelf --program-headers "$binary" > musl-program-headers.txt
+          readelf --dynamic "$binary" > musl-dynamic.txt
+          if grep -E 'INTERP|\(NEEDED\)' musl-program-headers.txt musl-dynamic.txt; then
+            printf 'The musl CLI must have no dynamic loader or shared-library dependencies\n' >&2
+            exit 1
+          fi
+          "$binary" --version
+          "$binary" --help > /dev/null
       - run: cargo build --release -p testd-gui --locked --target ${{ matrix.target }}
+        if: ${{ !matrix.cli_only }}
         env:
           CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
       - name: Package native tray without a webview runtime
+        if: ${{ !matrix.cli_only }}
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
         run: >-
@@ -287,6 +315,7 @@ jobs:
         run: >-
           python scripts/release.py package --version "${{ steps.version.outputs.version }}"
           --target ${{ matrix.target }} --build-dir target/${{ matrix.target }}/release --output dist
+          ${{ matrix.cli_only && '--cli-only' || '' }}
       # Installer smoke tests require a separately backed-up, interactive VM.
       - uses: actions/upload-artifact@v4
         with:

@@ -18,6 +18,7 @@ TARGETS = {
 	'aarch64-apple-darwin': ('macos', 'aarch64'),
 	'x86_64-apple-darwin': ('macos', 'x64'),
 	'x86_64-unknown-linux-gnu': ('linux', 'x64'),
+	'x86_64-unknown-linux-musl': ('linux', 'x64'),
 	'x86_64-pc-windows-msvc': ('windows', 'x64'),
 }
 
@@ -44,6 +45,8 @@ def check_version(version):
 
 def package(args):
 	check_version(args.version)
+	if args.target.endswith('-musl') and not args.cli_only:
+		raise ValueError('musl releases provide only the CLI; use --cli-only')
 	platform, arch = TARGETS[args.target]
 	binary = args.build_dir / ('testd.exe' if platform == 'windows' else 'testd')
 	if not binary.is_file():
@@ -199,11 +202,15 @@ def main():
 		print('An optional macOS ad-hoc resource seal is bundle-integrity evidence only, '
 			'not trusted signing or Gatekeeper approval.')
 		print('Verify `SHA256SUMS` before installing. Workspace SBOMs accompany the release.')
+		print('Linux x86_64 CLI archives are available for GNU libc (`x86_64-unknown-linux-gnu`) '
+			'and as a static musl build (`x86_64-unknown-linux-musl`). Desktop packages use GNU libc.')
 		print('\nTo install this exact CLI release on Linux or macOS:')
 		print('```sh')
 		print('curl -fsSLo testd-install.sh https://testd.dev/install.sh')
 		print(f"TESTD_VERSION='{args.version}' sh ./testd-install.sh")
 		print('```\n')
+		print('The installer detects GNU libc on Linux and otherwise selects musl. '
+			'Set `TESTD_LIBC=gnu` or `TESTD_LIBC=musl` to override its Linux selection.')
 		print('On Linux, macOS, and Windows, stop testd and run `testd uninstall` before removing the app.')
 	elif args.command == 'package':
 		package(args)

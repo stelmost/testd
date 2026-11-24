@@ -9,11 +9,11 @@ The required first-release targets are exactly:
 | Required OS | Architecture | Automated coverage |
 |---|---|---|
 | Windows 10 22H2 | amd64 | Hosted Server builds/fixtures do not validate Windows 10 |
-| Debian 13 | amd64 | Required userspace CI; native VM signoff is separate |
+| Linux | amd64 | Required Debian 13 userspace CI; native VM signoff is separate |
 | macOS 15 | arm64 | Required `macos-15` CI; native VM signoff is separate |
 | macOS 26 | arm64 | Required `macos-26` CI; native VM signoff is separate |
 
-Everything else, including Intel macOS, is best effort. Physical-hardware-specific checks are deferred.
+Linux uses Debian 13 as its native validation baseline. GNU libc and static musl CLI archives are required; desktop packages use GNU libc. Other Linux distributions and Intel macOS are best effort. Physical-hardware-specific checks are deferred.
 
 Windows 10 22H2 VM signoff remains required. Debian containers share the Ubuntu runner's kernel and do not establish native kernel, resolver/trust, systemd-session, or desktop behavior. Required artifact builds are Windows x64, Linux x64, and macOS arm64 regardless of builder OS; Intel macOS artifacts are optional. Native signoff on both macOS 15 and 26 remains required, using one ARM artifact built on macOS 15 with the same source and artifact hashes on each OS. Missing native macOS 15 access is an access gate, not a hardware-specific deferral. Installation and signing approval remain separate from automated checks.
 

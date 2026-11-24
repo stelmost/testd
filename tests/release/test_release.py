@@ -286,28 +286,33 @@ class ReleaseTests(unittest.TestCase):
 		self.assertIn('not trusted signing or Gatekeeper approval', text)
 		self.assertIn('SHA256SUMS', text)
 		self.assertIn('SBOM', text)
+		for target in ('x86_64-unknown-linux-gnu', 'x86_64-unknown-linux-musl'):
+			self.assertIn(target, text)
+		self.assertIn('TESTD_LIBC=musl', text)
 		self.assertIn('curl -fsSLo testd-install.sh https://testd.dev/install.sh', text)
 		self.assertIn(f"TESTD_VERSION='{version}' sh ./testd-install.sh", text)
 		self.assertIn('On Linux, macOS, and Windows, stop testd and run `testd uninstall` before removing the app.', text)
 
 	@unittest.skipIf(os.name == 'nt', 'not applicable: the website installer is POSIX-only')
-	def test_website_installer_uses_the_pinned_release_and_refuses_a_bad_checksum(self):
+	def test_website_installer_selects_libc_and_refuses_a_bad_checksum(self):
 		with tempfile.TemporaryDirectory() as temporary:
 			root = pathlib.Path(temporary)
 			build = root / 'build'
 			build.mkdir()
 			binary = build / 'testd'
-			binary.write_bytes(b'fixture CLI')
 			assets = root / 'assets'
 			version = workspace_version()
 			with redirect_stdout(io.StringIO()):
-				release.package(SimpleNamespace(version=version, target='x86_64-unknown-linux-gnu',
-					build_dir=build, output=assets, cli_only=True))
+				for libc in ('gnu', 'musl'):
+					binary.write_bytes(f'fixture {libc}'.encode())
+					release.package(SimpleNamespace(version=version, target=f'x86_64-unknown-linux-{libc}',
+						build_dir=build, output=assets, cli_only=True))
 				release.checksums(assets)
 			tools = root / 'tools'
 			tools.mkdir()
 			for name, script in (
 				('uname', 'case "$1" in -s) echo Linux;; -m) echo x86_64;; *) exit 1;; esac'),
+				('getconf', '[ "$1" = GNU_LIBC_VERSION ] && [ "$FIXTURE_LIBC" = gnu ] && echo "glibc 2.36"'),
 				('curl', '[ "$#" = 4 ] && [ "$1" = -fsSL ] && [ "$2" = -o ] || exit 22\n'
 					'file=${4##*/}\n'
 					'[ "$4" = "https://github.com/fixture/testd/releases/download/v$TESTD_VERSION/$file" ] || exit 22\n'
@@ -319,17 +324,30 @@ class ReleaseTests(unittest.TestCase):
 			installed = root / 'installed' / 'testd'
 			env = {**os.environ, 'PATH': str(tools) + os.pathsep + os.environ.get('PATH', ''),
 				'GITHUB_TOKEN': '', 'TESTD_REPO': 'fixture/testd', 'TESTD_VERSION': version,
+				'TESTD_LIBC': '', 'FIXTURE_LIBC': 'gnu',
 				'FIXTURE_ASSETS': str(assets), 'TESTD_INSTALL_DIR': str(installed.parent), 'TMPDIR': temporary}
 			command = ['sh', str(ROOT / 'sites/product/public/install.sh')]
-			result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=15)
-			self.assertEqual(result.returncode, 0, result.stderr)
-			self.assertEqual(installed.read_bytes(), binary.read_bytes())
-			with (assets / f'testd-{version}-x86_64-unknown-linux-gnu.tar.gz').open('ab') as archive:
-				archive.write(b'changed download')
-			result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=15)
+			for detected, override, expected in (('gnu', '', 'gnu'), ('musl', '', 'musl'),
+					('musl', 'gnu', 'gnu'), ('gnu', 'musl', 'musl')):
+				with self.subTest(detected=detected, override=override):
+					result = subprocess.run(command, env={**env, 'FIXTURE_LIBC': detected, 'TESTD_LIBC': override},
+						capture_output=True, text=True, timeout=15)
+					self.assertEqual(result.returncode, 0, result.stderr)
+					self.assertEqual(installed.read_bytes(), f'fixture {expected}'.encode())
+			for libc in ('gnu', 'musl'):
+				with self.subTest(corrupted=libc):
+					with (assets / f'testd-{version}-x86_64-unknown-linux-{libc}.tar.gz').open('ab') as archive:
+						archive.write(b'changed download')
+					result = subprocess.run(command, env={**env, 'TESTD_LIBC': libc},
+						capture_output=True, text=True, timeout=15)
+					self.assertNotEqual(result.returncode, 0)
+					self.assertIn('checksum mismatch', result.stderr)
+					self.assertEqual(installed.read_bytes(), b'fixture musl')
+			result = subprocess.run(command, env={**env, 'TESTD_LIBC': 'invalid'},
+				capture_output=True, text=True, timeout=15)
 			self.assertNotEqual(result.returncode, 0)
-			self.assertIn('checksum mismatch', result.stderr)
-			self.assertEqual(installed.read_bytes(), binary.read_bytes())
+			self.assertIn('TESTD_LIBC must be gnu or musl', result.stderr)
+			self.assertEqual(installed.read_bytes(), b'fixture musl')
 			result = subprocess.run(command, env={**env, 'TESTD_VERSION': ''},
 				capture_output=True, text=True, timeout=15)
 			self.assertNotEqual(result.returncode, 0)
@@ -340,13 +358,24 @@ class ReleaseTests(unittest.TestCase):
 		bundle = workflow.split('\n  bundle:\n', 1)[1].split('\n  sbom:\n', 1)[0]
 		matrix = dict(re.findall(r'(?m)^            target: (.+)\n            required: (true|false)$', bundle))
 		self.assertEqual(matrix, {'aarch64-apple-darwin': 'true', 'x86_64-apple-darwin': 'false',
-			'x86_64-unknown-linux-gnu': 'true', 'x86_64-pc-windows-msvc': 'true'})
+			'x86_64-unknown-linux-gnu': 'true', 'x86_64-unknown-linux-musl': 'true',
+			'x86_64-pc-windows-msvc': 'true'})
 		self.assertIn('\n    continue-on-error: ${{ !matrix.required }}\n', bundle)
 		self.assertNotRegex(bundle, r'(?m)^ {6,}continue-on-error:')
 		self.assertIn('if-no-files-found: error', bundle)
 		self.assertIn('- os: macos-15\n            target: aarch64-apple-darwin', bundle)
 		self.assertEqual(bundle.count('target: aarch64-apple-darwin'), 1)
 		self.assertNotIn('- os: macos-26', bundle)
+		self.assertIn('target: x86_64-unknown-linux-musl\n            required: true\n            cli_only: true', bundle)
+		self.assertIn('sudo apt-get install -y musl-tools', bundle)
+		self.assertIn('CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc', bundle)
+		self.assertIn('readelf --program-headers', bundle)
+		self.assertIn('readelf --dynamic', bundle)
+		self.assertIn("${{ matrix.cli_only && '--cli-only' || '' }}", bundle)
+		for step in ('- id: packager', '- run: cargo build --release -p testd-gui',
+				'- name: Package native tray'):
+			section = bundle.split(step, 1)[1].split('\n      - ', 1)[0]
+			self.assertIn('if: ${{ !matrix.cli_only }}', section)
 
 	def test_ci_minimum_runtime_fixtures_require_both_supported_macos_versions(self):
 		workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
@@ -434,7 +463,7 @@ class ReleaseTests(unittest.TestCase):
 			release.check_version('0.0.0')
 
 	def test_documented_first_release_support_matrix_and_native_gates_match(self):
-		expected = [('Windows 10 22H2', 'amd64'), ('Debian 13', 'amd64'),
+		expected = [('Windows 10 22H2', 'amd64'), ('Linux', 'amd64'),
 			('macOS 15', 'arm64'), ('macOS 26', 'arm64')]
 		for name in ('README.md', 'DEVELOPING.md', 'tests/README.md'):
 			with self.subTest(document=name):
@@ -442,6 +471,7 @@ class ReleaseTests(unittest.TestCase):
 				support = text.split('\n## Support matrix\n', 1)[1].split('\n## ', 1)[0]
 				self.assertEqual(re.findall(r'(?m)^\| (.+?) \| (.+?) \|', support)[1:], expected)
 				self.assertIn('best effort', support)
+				self.assertIn('Debian 13 as its native validation baseline', support)
 				self.assertIn('unsigned alpha', text)
 				self.assertIn('ad-hoc', text)
 				self.assertIn('Physical-hardware-specific checks are deferred', support)
@@ -616,11 +646,13 @@ class ReleaseTests(unittest.TestCase):
 				(build / 'bundle').mkdir(parents=True)
 				binary_name = 'testd.exe' if platform == 'windows' else 'testd'
 				(build / binary_name).write_bytes(b'cli-fixture')
-				extensions = {'macos': ['.dmg'], 'linux': ['.AppImage', '.deb'], 'windows': ['.exe']}[platform]
+				cli_only = target.endswith('-musl')
+				extensions = [] if cli_only else {
+					'macos': ['.dmg'], 'linux': ['.AppImage', '.deb'], 'windows': ['.exe']}[platform]
 				for extension in extensions:
 					(build / f'bundle/native{extension}').write_bytes(extension.encode())
 				args = SimpleNamespace(version=version, target=target, build_dir=build,
-					output=root / 'staged', cli_only=False)
+					output=root / 'staged', cli_only=cli_only)
 				with redirect_stdout(io.StringIO()):
 					release.package(args)
 				base = f'testd-{version}-{target}'
@@ -635,6 +667,15 @@ class ReleaseTests(unittest.TestCase):
 					suffix = '-setup' if platform == 'windows' else ''
 					self.assertEqual((args.output / f'Testd_{version}_{arch}{suffix}{extension}').read_bytes(),
 						extension.encode())
+
+	def test_musl_packaging_refuses_desktop_bundles_before_writing_an_archive(self):
+		with tempfile.TemporaryDirectory() as temporary:
+			output = pathlib.Path(temporary) / 'staged'
+			args = SimpleNamespace(version=workspace_version(), target='x86_64-unknown-linux-musl',
+				build_dir=pathlib.Path(temporary), output=output, cli_only=False)
+			with self.assertRaisesRegex(ValueError, 'use --cli-only'):
+				release.package(args)
+			self.assertFalse(output.exists())
 
 	def test_packager_inherits_version_and_preserves_product_and_per_user_identity(self):
 		manifest = tomllib.loads((ROOT / 'crates/testd-gui/Cargo.toml').read_text())

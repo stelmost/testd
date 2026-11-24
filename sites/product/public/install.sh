@@ -1,6 +1,6 @@
 #!/bin/sh
 # Installs the current testd release. Reads no configuration and needs no account.
-# Env: TESTD_VERSION, TESTD_INSTALL_DIR, TESTD_REPO, GITHUB_TOKEN.
+# Env: TESTD_VERSION, TESTD_INSTALL_DIR, TESTD_REPO, TESTD_LIBC, GITHUB_TOKEN.
 set -eu
 
 repo=${TESTD_REPO:-stelmost/testd}
@@ -18,7 +18,16 @@ arch=$(uname -m)
 case "$os:$arch" in
 Darwin:arm64) target=aarch64-apple-darwin ;;
 Darwin:x86_64) target=x86_64-apple-darwin ;;
-Linux:x86_64) target=x86_64-unknown-linux-gnu ;;
+Linux:x86_64)
+	libc=${TESTD_LIBC:-}
+	if [ -z "$libc" ]; then
+		if getconf GNU_LIBC_VERSION >/dev/null 2>&1; then libc=gnu; else libc=musl; fi
+	fi
+	case "$libc" in
+	gnu | musl) target=x86_64-unknown-linux-$libc ;;
+	*) fail 'TESTD_LIBC must be gnu or musl' ;;
+	esac
+	;;
 Linux:aarch64 | Linux:arm64)
 	fail 'no Linux aarch64 release; build from source with: cargo install --path .'
 	;;

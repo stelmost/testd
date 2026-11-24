@@ -34,11 +34,11 @@ The required first-release targets are exactly:
 | Required OS | Architecture |
 |---|---|
 | Windows 10 22H2 | amd64 |
-| Debian 13 | amd64 |
+| Linux | amd64 |
 | macOS 15 | arm64 |
 | macOS 26 | arm64 |
 
-Everything else, including Intel macOS, is best effort. Physical-hardware-specific checks are deferred.
+Linux uses Debian 13 as its native validation baseline. The x86_64 CLI ships GNU libc and static musl archives; desktop packages use GNU libc. Other Linux distributions and Intel macOS are best effort. Physical-hardware-specific checks are deferred.
 
 CI's Debian 13 container covers userspace, not native kernel, system, or desktop behavior. Hosted Windows Server is not Windows 10 validation; Windows 10 22H2 VM signoff remains required. Automated macOS checks use `macos-15` and `macos-26` arm64. Native signoff on both macOS 15 and 26 remains required, using one ARM artifact built on macOS 15. Missing native macOS 15 access is an access gate, not a hardware-specific deferral; Mac 26 evidence does not substitute for it. Builds do not replace native installation, resolver/trust, browser/tray, or signing approval; see [release validation](DEVELOPING.md#release-validation).
 

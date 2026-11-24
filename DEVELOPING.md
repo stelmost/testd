@@ -7,13 +7,13 @@ The required first-release targets are exactly:
 | Required OS | Architecture | Required artifact target |
 |---|---|---|
 | Windows 10 22H2 | amd64 | `x86_64-pc-windows-msvc` |
-| Debian 13 | amd64 | `x86_64-unknown-linux-gnu` |
+| Linux | amd64 | `x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl` (CLI only) |
 | macOS 15 | arm64 | `aarch64-apple-darwin` |
 | macOS 26 | arm64 | `aarch64-apple-darwin`, shared with macOS 15 |
 
-Everything else, including Intel macOS, is best effort. Physical-hardware-specific checks are deferred.
+Linux uses Debian 13 as its native validation baseline. Other Linux distributions and Intel macOS are best effort. Physical-hardware-specific checks are deferred.
 
-Required automated runtime gates are `macos-15` arm64, `macos-26` arm64, and Debian 13 amd64 userspace. The Debian container is not native kernel, system, or desktop evidence. Hosted Windows Server is not Windows 10 validation; Windows 10 22H2 VM signoff remains required. All three unique artifact targets are required regardless of builder OS; `x86_64-apple-darwin` is optional.
+Required automated runtime gates are `macos-15` arm64, `macos-26` arm64, and Debian 13 amd64 userspace. The Debian container is not native kernel, system, or desktop evidence. Hosted Windows Server is not Windows 10 validation; Windows 10 22H2 VM signoff remains required. All four unique artifact targets are required regardless of builder OS; `x86_64-apple-darwin` is optional.
 
 Native signoff on both macOS 15 and 26 remains required, using one ARM artifact built on macOS 15 and checking identical source/artifact hashes on each OS. Missing native macOS 15 access is an access gate, not a hardware-specific deferral; Mac 26 cannot close it. Native installation, browser/tray, resolver/trust cleanup, and approval of any claimed trusted signing remain separate from automated gates.
 
@@ -261,7 +261,7 @@ If the resolver or user manager is unavailable, prepare a supported clean guest 
 
 ### Prepare the candidate and per-run paths
 
-Download only the matching `bundles-TARGET` artifact from the successful manual CI run. Required targets are `x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu`, and `aarch64-apple-darwin`; `x86_64-apple-darwin` is optional and may be absent. Keep each target's files in its own candidate directory. Manual builds do not provide the release job's `SHA256SUMS`; generate a local manifest from the downloaded bytes before transferring them:
+Download only the matching `bundles-TARGET` artifact from the successful manual CI run. Required targets are `x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl` (CLI only), and `aarch64-apple-darwin`; `x86_64-apple-darwin` is optional and may be absent. Use the GNU Linux artifact for native desktop validation. Keep each target's files in its own candidate directory. Manual builds do not provide the release job's `SHA256SUMS`; generate a local manifest from the downloaded bytes before transferring them:
 
 ```sh
 python3 scripts/release.py checksums /absolute/path/to/new-candidate-directory
@@ -688,6 +688,18 @@ Linux and macOS CLI:
 cargo build --release --bin testd
 ```
 
+Linux x86_64 releases provide both GNU libc and static musl CLI archives. Build the latter with the Rust target and `musl-tools` installed:
+
+```sh
+rustup target add x86_64-unknown-linux-musl
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc CC_x86_64_unknown_linux_musl=musl-gcc \
+  cargo build --release --bin testd --locked --target x86_64-unknown-linux-musl
+python3 scripts/release.py package --version 0.1.0-alpha.1 --target x86_64-unknown-linux-musl \
+  --build-dir target/x86_64-unknown-linux-musl/release --output dist --cli-only
+```
+
+CI verifies that the musl executable has no dynamic loader or shared-library dependencies and runs its version/help commands. Linux desktop packages use the GNU target. The CLI installer detects GNU libc and otherwise selects musl; `TESTD_LIBC=gnu` or `TESTD_LIBC=musl` overrides that selection.
+
 Windows CLI and tray (PowerShell):
 
 ```powershell
@@ -711,7 +723,7 @@ cargo packager --release --packages testd-gui --formats default \
 
 Use the explicit release formats from the CI matrix, and a fresh output directory for each candidate. Package files are placed directly in `target/release/bundle/`; `scripts/release.py` stages their stable public names without collecting nested tool executables.
 
-Artifacts: CLI `.tar.gz` (Linux/macOS) or `.zip` (Windows), `.dmg` containing `.app` (macOS), `.exe` (Windows NSIS), `.AppImage`/`.deb` (Linux). CI requires macOS arm64, Linux x64, and Windows x64 builds; Intel macOS is best effort. Build one ARM artifact on macOS 15 for separate native validation on 15 and 26, not competing ARM bundles from different builders.
+Artifacts: CLI `.tar.gz` (Linux/macOS) or `.zip` (Windows), `.dmg` containing `.app` (macOS), `.exe` (Windows NSIS), `.AppImage`/`.deb` (GNU Linux). CI requires macOS arm64, GNU and musl Linux x64 CLI archives, GNU Linux desktop packages, and Windows x64 builds; Intel macOS is best effort. Build one ARM artifact on macOS 15 for separate native validation on 15 and 26, not competing ARM bundles from different builders.
 
 AppImage bundles the linked GTK libraries and preserves ordinary GTK backend selection, including an explicit `GDK_BACKEND`. Its startup hook saves the host environment for browser and application launches before the bundled runtime changes it. Validate the actual desktop/tray host, host-browser handoff and a normal quick launch without XWayland before claiming support; packaging alone is not native desktop evidence.
 
