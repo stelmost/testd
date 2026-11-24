@@ -419,26 +419,122 @@ p {
 	color: var(--ember-dark);
 }
 
+.hero-install {
+	max-width: 535px;
+	margin-bottom: 20px;
+}
+
+.install-bar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px 14px;
+	margin-bottom: 12px;
+}
+
+.install-label {
+	color: var(--muted);
+	font-family: var(--mono);
+	font-size: 9px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+.install-tabs {
+	display: inline-flex;
+	gap: 3px;
+}
+
+.install-tabs button {
+	padding: 5px 10px;
+	border: 1px solid var(--line);
+	color: var(--muted);
+	background: transparent;
+	font-family: var(--mono);
+	font-size: 9px;
+	cursor: pointer;
+	transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+}
+
+.install-tabs button:hover {
+	color: var(--ink);
+	border-color: var(--ink);
+}
+
+.install-tabs button[aria-selected='true'] {
+	border-color: var(--ink);
+	color: var(--paper);
+	background: var(--ink);
+}
+
+.install-checksums {
+	margin-left: auto;
+	color: var(--muted);
+	font-family: var(--mono);
+	font-size: 9px;
+	letter-spacing: 0.04em;
+	border-bottom: 1px solid var(--line);
+	transition: color 160ms ease, border-color 160ms ease;
+}
+
+.install-checksums:hover {
+	color: var(--ember-dark);
+	border-color: var(--ember);
+}
+
+.install-panel {
+	margin-bottom: 14px;
+}
+
+.install-primary {
+	width: 100%;
+	justify-content: space-between;
+}
+
+.install-alt {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 18px;
+	margin-top: 10px;
+	font-family: var(--mono);
+	font-size: 10px;
+	color: var(--muted);
+}
+
+.install-alt a {
+	border-bottom: 1px solid var(--line);
+	transition: color 160ms ease, border-color 160ms ease;
+}
+
+.install-alt a:hover {
+	color: var(--ember-dark);
+	border-color: var(--ember);
+}
+
 .hero-command {
 	display: flex;
 	align-items: center;
 	max-width: 535px;
-	min-height: 53px;
-	padding-left: 16px;
+	min-height: 48px;
+	padding-left: 14px;
 	border: 1px solid var(--line);
 	background: rgba(248, 245, 238, 0.62);
 }
 
-.prompt {
-	margin-right: 13px;
-	color: var(--ember);
+.command-tag {
+	flex: 0 0 auto;
+	margin-right: 12px;
+	padding: 2px 6px;
+	border: 1px solid var(--line);
+	color: var(--ember-dark);
 	font-family: var(--mono);
-	font-size: 13px;
+	font-size: 9px;
+	letter-spacing: 0.06em;
 }
 
 .hero-command code {
 	overflow: hidden;
-	font-size: 12px;
+	font-size: 11px;
 	white-space: nowrap;
 	text-overflow: ellipsis;
 }
@@ -486,10 +582,20 @@ p {
 	text-transform: uppercase;
 }
 
-.hero-meta span + span::before {
+.hero-meta span + span::before,
+.hero-meta a::before {
 	margin-right: 18px;
 	color: var(--line);
 	content: '/';
+}
+
+.hero-meta a {
+	color: var(--ink);
+	transition: color 160ms ease;
+}
+
+.hero-meta a:hover {
+	color: var(--ember-dark);
 }
 
 .route-card {

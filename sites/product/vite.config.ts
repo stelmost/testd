@@ -7,6 +7,26 @@ const docsPort = Number(process.env.TESTD_DOCS_PORT ?? 5174);
 const outDir = process.env.TESTD_SITE_OUT_DIR ?? '../../dist';
 
 const assetsRoot = fileURLToPath(new URL('../../assets/', import.meta.url));
+const cargoTomlPath = new URL('../../Cargo.toml', import.meta.url);
+
+function readReleaseVersion(): string {
+	const raw = readFileSync(cargoTomlPath, 'utf8');
+	const pkg = raw.split(/^\[package\]$/m)[1] ?? '';
+	const match = pkg.match(/^version\s*=\s*"([^"]+)"/m);
+	if (!match) throw new Error('could not read [package].version from Cargo.toml');
+	return match[1];
+}
+
+// Replace __TESTD_VERSION__ in HTML with Cargo.toml's [package].version.
+function releaseVersion(): Plugin {
+	const version = readReleaseVersion();
+	return {
+		name: 'testd-release-version',
+		transformIndexHtml(html) {
+			return html.replaceAll('__TESTD_VERSION__', version);
+		},
+	};
+}
 
 // Brand sources sit outside the Vite root. In dev, point the HTML at Vite's
 // /@fs URL so the dev server can read them; the build bundles the same paths.
@@ -54,7 +74,7 @@ function publicAssets(): Plugin {
 
 export default defineConfig({
 	base: '/',
-	plugins: [devAssets(), publicAssets()],
+	plugins: [devAssets(), releaseVersion(), publicAssets()],
 	server: {
 		host,
 		port: 5173,

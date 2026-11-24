@@ -62,14 +62,13 @@ See [docs/desktop.md](docs/desktop.md) for guided setup, tray actions, and Linux
 
 ### CLI (`testd`)
 
-On Linux and macOS, download the installer and pin the release version (omitting `TESTD_VERSION` installs only a stable release, not prereleases):
+On Linux and macOS:
 
 ```sh
-curl -fsSLo testd-install.sh https://testd.dev/install.sh
-TESTD_VERSION='0.1.0-alpha.1' sh ./testd-install.sh
+curl -fsSL https://testd.dev/install.sh | sh
 ```
 
-The installer verifies `SHA256SUMS`, picks GNU libc or static musl on Linux (`TESTD_LIBC=gnu|musl` to override), and installs `testd` into `~/.local/bin` (`TESTD_INSTALL_DIR` to override).
+The installer downloads the latest release, verifies `SHA256SUMS`, picks GNU libc or static musl on Linux (`TESTD_LIBC=gnu|musl` to override), and installs `testd` into `~/.local/bin` (`TESTD_INSTALL_DIR` to override; set `TESTD_VERSION` without the leading `v` to pin a specific version).
 
 On Windows (`x64`), download `testd-<version>-x86_64-pc-windows-msvc.zip` and `SHA256SUMS` from [GitHub Releases](https://github.com/stelmost/testd/releases), verify the checksum, and extract `testd.exe` onto `PATH` (statically linked MSVC runtime; no redistributable needed).
 

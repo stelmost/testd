@@ -110,8 +110,16 @@ function setupCopyButtons(): void {
 	});
 }
 
-function setupCodeTabs(): void {
-	document.querySelectorAll<HTMLElement>('.code-tabs').forEach((tablist) => {
+function detectPlatform(): 'macos' | 'linux' | 'windows' | undefined {
+	const ua = `${navigator.platform} ${navigator.userAgent}`.toLowerCase();
+	if (ua.includes('win')) return 'windows';
+	if (ua.includes('mac')) return 'macos';
+	if (ua.includes('linux')) return 'linux';
+	return undefined;
+}
+
+function setupTabs(): void {
+	document.querySelectorAll<HTMLElement>('[role="tablist"]').forEach((tablist) => {
 		const tabs = Array.from(tablist.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
 
 		const activate = (selected: HTMLButtonElement): void => {
@@ -140,6 +148,10 @@ function setupCodeTabs(): void {
 				tabs[nextIndex].focus();
 			});
 		});
+
+		const os = detectPlatform();
+		const osTab = os ? tabs.find((tab) => tab.dataset.osTab === os) : undefined;
+		if (osTab) activate(osTab);
 	});
 }
 
@@ -165,7 +177,7 @@ function setupReveals(): void {
 
 setupNavigation();
 setupCopyButtons();
-setupCodeTabs();
+setupTabs();
 setupReveals();
 
 document.querySelectorAll<HTMLElement>('[data-year]').forEach((element) => {

@@ -52,14 +52,11 @@ Early alpha desktop bundles are unsigned; macOS and Windows may ask you to confi
 
 **Linux and macOS (installer script):**
 
-Download `install.sh` and pin the release version (`TESTD_VERSION` is the tag without the leading `v`; omitting it installs only a stable release, not prereleases):
-
 ```sh
-curl -fsSLo testd-install.sh https://testd.dev/install.sh
-TESTD_VERSION='0.1.0-alpha.1' sh ./testd-install.sh
+curl -fsSL https://testd.dev/install.sh | sh
 ```
 
-The script verifies `SHA256SUMS` and installs `testd` into `~/.local/bin` (override with `TESTD_INSTALL_DIR`). On Linux `x86_64`, it picks GNU libc (`x86_64-unknown-linux-gnu`) when detected and static musl (`x86_64-unknown-linux-musl`) otherwise; set `TESTD_LIBC=gnu` or `TESTD_LIBC=musl` to choose explicitly.
+The script downloads the latest release, verifies `SHA256SUMS`, and installs `testd` into `~/.local/bin` (override with `TESTD_INSTALL_DIR`). To pin a specific version, set `TESTD_VERSION` without the leading `v` (for example `TESTD_VERSION='0.1.0-alpha.1'`). On Linux `x86_64`, it picks GNU libc (`x86_64-unknown-linux-gnu`) when detected and static musl (`x86_64-unknown-linux-musl`) otherwise; set `TESTD_LIBC=gnu` or `TESTD_LIBC=musl` to choose explicitly.
 
 **Windows (`x64`):**
 
