@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitepress';
+import night from './night';
 
 const REPO = 'https://github.com/stelmost/testd';
 const DISCORD = 'https://discord.gg/skEnmNGm9G';
@@ -20,15 +21,18 @@ export default defineConfig({
 	cacheDir: process.env.TESTD_DOCS_CACHE_DIR,
 	cleanUrls: false,
 	lastUpdated: false,
+	// The identity has no light ground, so the docs are dark only and the appearance switch is hidden.
+	appearance: 'force-dark',
+	markdown: { theme: night },
 	titleTemplate: ':title | testd docs',
 	head: [
 		['link', { rel: 'icon', type: 'image/png', href: '/docs/testd-app.png' }],
-		['meta', { name: 'theme-color', content: '#f2eee4' }],
+		['meta', { name: 'theme-color', content: '#05070b' }],
 		['meta', { property: 'og:type', content: 'website' }],
 		['meta', { property: 'og:site_name', content: 'testd docs' }],
 	],
 	themeConfig: {
-		logo: { src: '/testd-app.png', alt: 'testd', width: 24, height: 24 },
+		logo: { src: '/testd-slim.svg', alt: 'testd', width: 28, height: 28 },
 		siteTitle: 'testd docs',
 		nav: [
 			{ text: 'Product', link: SITE },
@@ -118,7 +122,7 @@ export default defineConfig({
 		},
 		footer: {
 			message: 'ISC licensed. No account, no telemetry.',
-			copyright: '© 2026 Lapilli Works',
+			copyright: '© 2026 Elmo St. Ltd.',
 		},
 	},
 	vite: {
