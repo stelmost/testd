@@ -254,7 +254,7 @@ test('one click opens an SSH app when its registered HTTPS URL is ready', async 
 	expect(visited).toEqual(['https://app.example.test:8443']);
 });
 
-test('SSH host-key confirmation exposes trust and cancel actions', () => {
+test('SSH prompts expose separate trust, install, and password actions', () => {
 	const source = inlineFunction(dashboard, 'sshPromptForm', 'parseCommand');
 	const document = {
 		createElement(tag: string) {
@@ -285,6 +285,15 @@ test('SSH host-key confirmation exposes trust and cancel actions', () => {
 	]);
 	const password = render(launch, { id: 'password', kind: 'response', message: 'SSH password:' });
 	expect(password.children[1].type).toBe('password');
+	const installation = render(launch, { id: 'install', kind: 'install', message: 'Install testd on devbox?' });
+	expect(installation.children.map((child: { tag: string }) => child.tag)).toEqual(['p', 'div']);
+	expect(installation.children[1].children[0].textContent).toBe('Install and start');
+	installation.events.get('submit')({ preventDefault() {} });
+	render(launch, { id: 'install', kind: 'install' }).children[1].children[1].events.get('click')();
+	expect(sent.slice(-2)).toEqual([
+		{ id: 'devbox', prompt: 'install', answer: 'yes' },
+		{ id: 'devbox', prompt: 'install', answer: null },
+	]);
 });
 
 test('quick launches display captured output as text', () => {

@@ -217,7 +217,7 @@
 							<div class="field field-wide" id="ssh-command-field" hidden>
 								<label for="ssh-command">Remote command</label>
 								<input class="input" id="ssh-command" placeholder="npm run dev" spellcheck="false" disabled>
-								<small>Requires testd on the SSH host’s PATH.</small>
+								<small>Offers to install or update testd on the SSH host after confirmation.</small>
 							</div>
 							<div class="form-actions">
 								<button class="btn btn-sm" type="reset">Cancel</button>
@@ -835,6 +835,7 @@
 		form.className = 'field ssh-prompt';
 		form.dataset.prompt = prompt.id;
 		const confirmsHost = prompt.kind === 'confirm';
+		const installsHelper = prompt.kind === 'install';
 		const requestsInput = prompt.kind === 'response';
 		const message = document.createElement(requestsInput ? 'label' : 'p');
 		message.textContent = prompt.message;
@@ -855,7 +856,7 @@
 		const send = document.createElement('button');
 		send.className = 'btn btn-sm btn-primary';
 		send.type = 'submit';
-		send.textContent = confirmsHost ? 'Trust and connect' : 'Continue';
+		send.textContent = confirmsHost ? 'Trust and connect' : installsHelper ? 'Install and start' : 'Continue';
 		const cancel = document.createElement('button');
 		cancel.className = 'btn btn-sm';
 		cancel.type = 'button';
@@ -875,7 +876,7 @@
 		};
 		form.addEventListener('submit', (event) => {
 			event.preventDefault();
-			answer(input?.value ?? (confirmsHost ? 'yes' : ''));
+			answer(input?.value ?? (confirmsHost || installsHelper ? 'yes' : ''));
 		});
 		cancel.addEventListener('click', () => answer(null));
 		actions.append(send, cancel);

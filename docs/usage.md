@@ -92,6 +92,10 @@ The dashboard shows:
 
 The loopback listener checks the Host header, and the edge forwards the dashboard name only for clients on this machine. A foreign Host or a non-loopback dashboard peer is refused even when it supplies a credential.
 
+SSH apps can forward an already running app or start a saved command on the SSH host. Starting a command checks `~/.local/bin/testd` and the remote PATH for the same testd version as the local installation. If it is missing or differs, the dashboard asks you to approve installing that version into `~/.local/bin/testd`, then starts the command. Cancelling the prompt leaves the remote installation untouched.
+
+Automatic remote installation supports Linux x86_64 and macOS x86_64 or arm64. It downloads the version-pinned CLI release from GitHub over HTTPS and verifies its `SHA256SUMS` entry before installing. The SSH host needs a POSIX shell, `tar`, `curl` or `wget`, and `sha256sum` or `shasum`. An existing `~/.local/bin/testd` is backed up under `~/.local/share/testd/backups` before replacement. The installed binary is invoked by its full path; editing the remote PATH or running privileged setup is unnecessary. Forwarding an already running app needs only OpenSSH.
+
 `/api/status` lists names, targets, projects, advisories, and shares. API clients read the private control file's `client_addr` and `dashboard_token`, then send `Authorization: Bearer <dashboard_token>`; do not put credentials in command lines or logs. `/ca.crt` is public and returns the root certificate:
 
 ```sh

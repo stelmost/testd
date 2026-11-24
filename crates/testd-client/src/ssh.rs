@@ -10,13 +10,16 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior, timeout, timeout_at};
 
 use testd_core::protocol::{self, MAX_FRAME_BYTES};
 
 use crate::{listeners, process::ProcessTree};
+
+mod bootstrap;
+pub use bootstrap::{HELPER_VERSION, InstallRequest, bootstrap_command};
 
 const VERSION: u16 = 1;
 const IO_TIMEOUT: Duration = Duration::from_secs(3);
@@ -55,6 +58,7 @@ impl App {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type")]
 enum Request {
+	Install,
 	Start { app: App },
 	Ping,
 	Stop,
@@ -63,6 +67,7 @@ enum Request {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type")]
 enum Reply {
+	Install { version: Option<String> },
 	Hello { version: u16 },
 	Ready,
 	Exited { code: Option<i32> },
@@ -109,12 +114,17 @@ pub(crate) struct Session {
 }
 
 impl Session {
-	pub(crate) fn start(child: &mut Child, app: App, deadline: Instant) -> (Self, oneshot::Receiver<()>) {
+	pub(crate) fn start(
+		child: &mut Child,
+		app: App,
+		installation: mpsc::Sender<InstallRequest>,
+		deadline: Instant,
+	) -> (Self, oneshot::Receiver<()>) {
 		let input = child.stdout.take().expect("managed SSH stdout");
 		let output = child.stdin.take().expect("managed SSH stdin");
 		let (stop, stopped) = oneshot::channel();
 		let (ready, readiness) = oneshot::channel();
-		let task = tokio::spawn(host_session(input, output, app, deadline, stopped, ready));
+		let task = tokio::spawn(host_session(input, output, app, installation, deadline, stopped, ready));
 		(Self { stop, task }, readiness)
 	}
 
@@ -132,27 +142,50 @@ async fn host_session(
 	input: impl AsyncRead + Unpin,
 	mut output: impl AsyncWrite + Unpin,
 	app: App,
+	installation: mpsc::Sender<InstallRequest>,
 	deadline: Instant,
 	mut stopped: oneshot::Receiver<()>,
 	ready: oneshot::Sender<()>,
 ) -> Result<End> {
 	let mut inbox = Inbox::new(input);
-	let hello = tokio::select! {
+	tokio::select! {
 		biased;
 		_ = &mut stopped => return Ok(End::Stopped),
-		hello = timeout_at(deadline, inbox.receive()) => hello
-			.context("waiting for testd on the SSH host timed out")?
-			.context("invalid SSH helper greeting")?,
+		result = timeout_at(deadline, prepare_helper(&mut inbox, &mut output, installation)) => {
+			result.context("preparing testd on the SSH host timed out")??;
+		},
 	};
-	match hello {
-		Some(Reply::Hello { version: VERSION }) => {},
-		Some(Reply::Hello { version }) => bail!("SSH host uses unsupported testd protocol version {version}"),
-		_ => bail!("testd did not start on the SSH host; check that a current testd is on its SSH PATH"),
-	}
 	send(&mut output, &Request::Start { app })
 		.await
 		.context("could not start the remote command")?;
 	drive_app(&mut inbox, &mut output, deadline, stopped, ready).await
+}
+
+async fn prepare_helper<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
+	inbox: &mut Inbox<R>,
+	output: &mut W,
+	installation: mpsc::Sender<InstallRequest>,
+) -> Result<()> {
+	let mut hello = inbox.receive().await.context("invalid SSH helper greeting")?;
+	if let Some(Reply::Install { version }) = hello {
+		let (respond, answer) = oneshot::channel();
+		installation
+			.send(InstallRequest { version, respond })
+			.await
+			.context("the SSH installation prompt is unavailable")?;
+		ensure!(answer.await.unwrap_or(false), "remote testd installation was cancelled");
+		send(output, &Request::Install).await?;
+		hello = inbox
+			.receive()
+			.await
+			.context("invalid SSH helper greeting after installation")?;
+	}
+	match hello {
+		Some(Reply::Hello { version: VERSION }) => Ok(()),
+		Some(Reply::Hello { version }) => bail!("SSH host uses unsupported testd protocol version {version}"),
+		Some(Reply::Failed { message }) => bail!("SSH host: {message}"),
+		_ => bail!("testd did not start on the SSH host; check the SSH app logs"),
+	}
 }
 
 async fn drive_app<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
@@ -224,7 +257,7 @@ pub async fn serve(input: impl AsyncRead + Unpin, mut output: impl AsyncWrite + 
 	let app = match start {
 		Some(Request::Start { app }) => app,
 		Some(Request::Stop) | None => return Ok(()),
-		Some(Request::Ping) => bail!("expected a remote start command"),
+		Some(Request::Ping | Request::Install) => bail!("expected a remote start command"),
 	};
 	let result = run_app(app, &mut inbox, &mut output).await;
 	match result {
@@ -281,7 +314,7 @@ async fn watch_app<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
 			request = timeout_at(lease, inbox.receive()) => match request.context("SSH control heartbeat expired")?? {
 				Some(Request::Ping) => lease = Instant::now() + LEASE,
 				Some(Request::Stop) | None => return Ok(End::Stopped),
-				Some(Request::Start { .. }) => bail!("the SSH session already owns an app"),
+				Some(Request::Start { .. } | Request::Install) => bail!("the SSH session already owns an app"),
 			},
 			result = &mut listener, if !announced => {
 				result?;
@@ -341,6 +374,68 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn installation_waits_for_approval_before_starting_the_app() {
+		let (host, leaf) = duplex(4096);
+		let (input, output) = tokio::io::split(host);
+		let (leaf_input, mut leaf_output) = tokio::io::split(leaf);
+		let mut inbox = Inbox::new(leaf_input);
+		let (_stop, stopped) = oneshot::channel();
+		let (ready, _) = oneshot::channel();
+		let (installation, mut requests) = mpsc::channel(1);
+		let host =
+			tokio::spawn(host_session(input, output, app(), installation, Instant::now() + IO_TIMEOUT, stopped, ready));
+		send(&mut leaf_output, &Reply::Install { version: Some("0.0.1".into()) })
+			.await
+			.unwrap();
+		let request = timeout(IO_TIMEOUT, requests.recv()).await.unwrap().unwrap();
+		assert_eq!(request.version.as_deref(), Some("0.0.1"));
+		assert!(timeout(Duration::from_millis(20), inbox.receive::<Request>()).await.is_err());
+		request.respond.send(true).unwrap();
+		assert!(matches!(timeout(IO_TIMEOUT, inbox.receive()).await.unwrap().unwrap(), Some(Request::Install)));
+		send(&mut leaf_output, &Reply::Hello { version: VERSION }).await.unwrap();
+		assert!(matches!(timeout(IO_TIMEOUT, inbox.receive()).await.unwrap().unwrap(), Some(Request::Start { .. })));
+		send(&mut leaf_output, &Reply::Exited { code: Some(0) }).await.unwrap();
+		assert!(matches!(timeout(IO_TIMEOUT, host).await.unwrap().unwrap().unwrap(), End::Exited(Some(0))));
+	}
+
+	#[tokio::test]
+	async fn declining_installation_sends_no_remote_command() {
+		let (host, leaf) = duplex(1024);
+		let (input, output) = tokio::io::split(host);
+		let (leaf_input, mut leaf_output) = tokio::io::split(leaf);
+		let (_stop, stopped) = oneshot::channel();
+		let (ready, _) = oneshot::channel();
+		let (installation, mut requests) = mpsc::channel(1);
+		let host =
+			tokio::spawn(host_session(input, output, app(), installation, Instant::now() + IO_TIMEOUT, stopped, ready));
+		send(&mut leaf_output, &Reply::Install { version: None }).await.unwrap();
+		let request = timeout(IO_TIMEOUT, requests.recv()).await.unwrap().unwrap();
+		assert!(request.version.is_none());
+		request.respond.send(false).unwrap();
+		let error = timeout(IO_TIMEOUT, host).await.unwrap().unwrap().err().unwrap();
+		assert!(error.to_string().contains("cancelled"));
+		assert!(Inbox::new(leaf_input).receive::<Request>().await.unwrap().is_none());
+	}
+
+	#[tokio::test]
+	async fn stopping_while_installation_is_pending_expires_the_confirmation() {
+		let (host, leaf) = duplex(1024);
+		let (input, output) = tokio::io::split(host);
+		let (leaf_input, mut leaf_output) = tokio::io::split(leaf);
+		let (stop, stopped) = oneshot::channel();
+		let (ready, _) = oneshot::channel();
+		let (installation, mut requests) = mpsc::channel(1);
+		let host =
+			tokio::spawn(host_session(input, output, app(), installation, Instant::now() + IO_TIMEOUT, stopped, ready));
+		send(&mut leaf_output, &Reply::Install { version: None }).await.unwrap();
+		let mut request = timeout(IO_TIMEOUT, requests.recv()).await.unwrap().unwrap();
+		stop.send(()).unwrap();
+		assert!(matches!(timeout(IO_TIMEOUT, host).await.unwrap().unwrap().unwrap(), End::Stopped));
+		timeout(IO_TIMEOUT, request.respond.closed()).await.unwrap();
+		assert!(Inbox::new(leaf_input).receive::<Request>().await.unwrap().is_none());
+	}
+
+	#[tokio::test]
 	async fn stop_waits_for_the_remote_app_to_exit() {
 		let (host, leaf) = duplex(4096);
 		let (input, output) = tokio::io::split(host);
@@ -349,7 +444,8 @@ mod tests {
 		let (stop, stopped) = oneshot::channel();
 		let (ready, readiness) = oneshot::channel();
 		let deadline = Instant::now() + IO_TIMEOUT;
-		let mut host = tokio::spawn(host_session(input, output, app(), deadline, stopped, ready));
+		let (installation, _) = mpsc::channel(1);
+		let mut host = tokio::spawn(host_session(input, output, app(), installation, deadline, stopped, ready));
 		send(&mut leaf_output, &Reply::Hello { version: VERSION }).await.unwrap();
 		let Some(Request::Start { app }) = timeout(IO_TIMEOUT, inbox.receive()).await.unwrap().unwrap() else {
 			panic!("expected the saved command");
@@ -379,8 +475,10 @@ mod tests {
 		let (input, output) = tokio::io::split(host);
 		let (stop, stopped) = oneshot::channel();
 		let (ready, _) = oneshot::channel();
+		let (installation, _) = mpsc::channel(1);
 		stop.send(()).unwrap();
-		let result = host_session(input, output, app(), Instant::now() + IO_TIMEOUT, stopped, ready).await;
+		let result =
+			host_session(input, output, app(), installation, Instant::now() + IO_TIMEOUT, stopped, ready).await;
 		assert!(matches!(result.unwrap(), End::Stopped));
 		assert!(Inbox::new(&mut leaf).receive::<Request>().await.unwrap().is_none());
 	}

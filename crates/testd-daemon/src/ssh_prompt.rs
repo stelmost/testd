@@ -7,9 +7,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use testd_client::ssh::{HELPER_VERSION, InstallRequest};
 use testd_core::{config::generate_operator_secret, protocol};
 use tokio::io::AsyncReadExt;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::timeout;
 
 use crate::task::BackgroundTask;
@@ -25,6 +26,7 @@ const YES_NO_RETRY: &str = "Please type 'yes' or 'no':";
 enum Kind {
 	Response,
 	Confirm,
+	Install,
 	Notice,
 }
 
@@ -124,6 +126,56 @@ impl Prompts {
 		pending.reply.send(value).map_err(|_| "this SSH prompt has expired".into())
 	}
 
+	fn request(&self, request: Request) -> std::io::Result<Option<oneshot::Receiver<Option<String>>>> {
+		let id = generate_operator_secret()?;
+		let (reply, received) = oneshot::channel();
+		{
+			let mut state = self.state.lock().expect("SSH prompts poisoned");
+			if state.cancelled {
+				return Ok(None);
+			}
+			let view = state.prompt(id, request);
+			state.pending = Some(Pending { view, reply });
+		}
+		self.changed();
+		Ok(Some(received))
+	}
+
+	fn clear(&self, cancelled: bool) {
+		let mut state = self.state.lock().expect("SSH prompts poisoned");
+		state.pending.take();
+		state.cancelled |= cancelled;
+		self.changed();
+	}
+
+	async fn confirm_install(&self, host: &str, mut request: InstallRequest) {
+		let existing = match request.version {
+			Some(version) => format!("Found testd {version} on {host}."),
+			None => format!("testd is not installed on {host}."),
+		};
+		let message = format!(
+			"{existing} Install testd {HELPER_VERSION} from GitHub into ~/.local/bin/testd on this host? \
+			Any existing file there will be backed up in ~/.local/share/testd/backups."
+		);
+		let prompt = Request { token: String::new(), message, kind: Kind::Install };
+		let approved = match self.request(prompt) {
+			Ok(Some(received)) => {
+				let answer = tokio::select! {
+					answer = timeout(PROMPT_TIMEOUT, received) => answer.ok().and_then(Result::ok).flatten(),
+					_ = request.respond.closed() => None,
+				};
+				self.clear(answer.is_none());
+				answer.as_deref() == Some("yes")
+			},
+			Ok(None) => false,
+			Err(error) => {
+				eprintln!("[testd] [warn] SSH installation prompt: {error}");
+				false
+			},
+		};
+		let _ = request.respond.send(approved);
+	}
+
 	fn changed(&self) {
 		self.revision.send_modify(|revision| *revision = revision.wrapping_add(1));
 	}
@@ -132,6 +184,7 @@ impl Prompts {
 pub(crate) struct Askpass {
 	pub(crate) prompts: Arc<Prompts>,
 	pub(crate) env: Vec<(String, String)>,
+	pub(crate) installation: mpsc::Sender<InstallRequest>,
 	task: BackgroundTask,
 }
 
@@ -146,7 +199,7 @@ impl Drop for Askpass {
 }
 
 impl Askpass {
-	pub(crate) fn start(revision: watch::Sender<u64>) -> anyhow::Result<Self> {
+	pub(crate) fn start(revision: watch::Sender<u64>, host: &str) -> anyhow::Result<Self> {
 		let socket = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
 		socket.set_nonblocking(true)?;
 		let address = socket.local_addr()?;
@@ -166,16 +219,24 @@ impl Askpass {
 		];
 		let prompts = Arc::new(Prompts { state: Mutex::default(), revision });
 		let state = Arc::clone(&prompts);
+		let host = host.to_owned();
+		let (installation, mut requests) = mpsc::channel::<InstallRequest>(1);
 		let task = tokio::spawn(async move {
-			while let Ok((mut stream, _)) = socket.accept().await {
-				if let Err(error) = respond(&state, &token, &mut stream).await
-					&& !matches!(error.kind(), std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset)
-				{
-					eprintln!("[testd] [warn] SSH prompt connection: {error}");
+			loop {
+				tokio::select! {
+					connection = socket.accept() => {
+						let Ok((mut stream, _)) = connection else { break };
+						if let Err(error) = respond(&state, &token, &mut stream).await
+							&& !matches!(error.kind(), std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset)
+						{
+							eprintln!("[testd] [warn] SSH prompt connection: {error}");
+						}
+					},
+					Some(request) = requests.recv() => state.confirm_install(&host, request).await,
 				}
 			}
 		});
-		Ok(Self { prompts, env, task: BackgroundTask(task) })
+		Ok(Self { prompts, env, installation, task: BackgroundTask(task) })
 	}
 }
 
@@ -191,31 +252,15 @@ async fn respond(prompts: &Prompts, token: &str, stream: &mut tokio::net::TcpStr
 		return Ok(());
 	}
 
-	let (reply, received) = oneshot::channel();
-	let id = generate_operator_secret()?;
-	let accepts_prompt = {
-		let mut state = prompts.state.lock().expect("SSH prompts poisoned");
-		if !state.cancelled {
-			let view = state.prompt(id, request);
-			state.pending = Some(Pending { view, reply });
-		}
-		!state.cancelled
-	};
-	if !accepts_prompt {
+	let Some(received) = prompts.request(request)? else {
 		return protocol::send(&mut writer, &Option::<String>::None).await;
-	}
-	prompts.changed();
+	};
 
 	let value = tokio::select! {
 		response = timeout(PROMPT_TIMEOUT, received) => response.ok().and_then(Result::ok).flatten(),
 		_ = reader.read_u8() => None,
 	};
-	{
-		let mut state = prompts.state.lock().expect("SSH prompts poisoned");
-		state.pending.take();
-		state.cancelled |= value.is_none();
-	}
-	prompts.changed();
+	prompts.clear(value.is_none());
 	protocol::send(&mut writer, &value).await
 }
 
@@ -318,9 +363,49 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn installation_prompts_require_an_explicit_yes() {
+		for answer in [Some("yes"), Some("no"), Some(""), None] {
+			let (revision, mut changes) = watch::channel(0);
+			let broker = Askpass::start(revision, "user@devbox").unwrap();
+			let (respond, response) = oneshot::channel();
+			broker
+				.installation
+				.send(InstallRequest { version: Some("0.0.1".into()), respond })
+				.await
+				.unwrap();
+			timeout(Duration::from_secs(2), changes.changed()).await.unwrap().unwrap();
+			let prompt = broker.prompts.view().unwrap();
+			assert!(matches!(prompt.kind, Kind::Install));
+			assert!(prompt.message.contains("0.0.1 on user@devbox"));
+			assert!(prompt.message.contains(HELPER_VERSION));
+			assert!(prompt.message.contains("~/.local/bin/testd"));
+			broker.prompts.answer(&prompt.id, answer.map(str::to_owned)).unwrap();
+			assert_eq!(timeout(Duration::from_secs(2), response).await.unwrap().unwrap(), answer == Some("yes"));
+			assert!(broker.prompts.view().is_none());
+		}
+	}
+
+	#[tokio::test]
+	async fn stopping_the_ssh_session_removes_the_installation_prompt() {
+		let (revision, mut changes) = watch::channel(0);
+		let broker = Askpass::start(revision, "devbox").unwrap();
+		let (respond, response) = oneshot::channel();
+		broker
+			.installation
+			.send(InstallRequest { version: None, respond })
+			.await
+			.unwrap();
+		timeout(Duration::from_secs(2), changes.changed()).await.unwrap().unwrap();
+		assert!(broker.prompts.view().is_some());
+		drop(response);
+		timeout(Duration::from_secs(2), changes.changed()).await.unwrap().unwrap();
+		assert!(broker.prompts.view().is_none());
+	}
+
+	#[tokio::test]
 	async fn prompts_are_scoped_to_the_launch_and_cancelled_prompts_do_not_retry() {
 		let (revision, mut changes) = watch::channel(0);
-		let broker = Askpass::start(revision).unwrap();
+		let broker = Askpass::start(revision, "devbox").unwrap();
 		let (address, token) = broker
 			.env
 			.iter()

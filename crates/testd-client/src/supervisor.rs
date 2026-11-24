@@ -65,7 +65,10 @@ pub enum Readiness {
 	#[default]
 	Tcp,
 	SshHttp,
-	ManagedSsh(ssh::App),
+	ManagedSsh {
+		app: ssh::App,
+		installation: mpsc::Sender<ssh::InstallRequest>,
+	},
 }
 
 /// What to run and what to name it.
@@ -460,7 +463,7 @@ async fn confirm_all(
 
 		let ready = match &spec.readiness {
 			Readiness::Tcp => wait_for_target(&target, spec.probe_timeout).await,
-			Readiness::SshHttp | Readiness::ManagedSsh(_) => {
+			Readiness::SshHttp | Readiness::ManagedSsh { .. } => {
 				wait_for_ssh_http(pid, &target, &entry.domain, spec.probe_timeout).await
 			},
 		};
@@ -629,7 +632,7 @@ fn spawn_child(
 ) -> Result<SpawnedChild> {
 	let mut command = ProcessCommand::new(&spec.program);
 	let stdin = match &spec.readiness {
-		Readiness::ManagedSsh(_) => Stdio::piped(),
+		Readiness::ManagedSsh { .. } => Stdio::piped(),
 		_ => Stdio::null(),
 	};
 	command
@@ -656,7 +659,9 @@ fn spawn_child(
 	let (mut child, process_tree) =
 		ProcessTree::spawn(&mut command).with_context(|| format!("failed to spawn {}", spec.program.display()))?;
 	let ssh = match &spec.readiness {
-		Readiness::ManagedSsh(app) => Some(ssh::Session::start(&mut child, app.clone(), deadline)),
+		Readiness::ManagedSsh { app, installation } => {
+			Some(ssh::Session::start(&mut child, app.clone(), installation.clone(), deadline))
+		},
 		_ => None,
 	};
 	let mut output_readers = Vec::new();

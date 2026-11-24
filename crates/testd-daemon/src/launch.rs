@@ -118,13 +118,14 @@ impl SshForward {
 		}
 		spec.args.extend(["-L".into(), forward, "--".into(), self.host.clone()]);
 		if let Some(app) = app {
-			spec.args.extend(["testd".into(), "ssh-session".into()]);
-			spec.readiness = Readiness::ManagedSsh(app);
+			spec.args.push(ssh::bootstrap_command());
+			spec.readiness = Readiness::ManagedSsh { app, installation: askpass.installation.clone() };
 		} else {
 			spec.readiness = Readiness::SshHttp;
 		}
 		spec.env = askpass.env.clone();
-		spec.probe_timeout = Duration::from_secs(120);
+		/* Allow SSH authentication, installation approval, and the two release downloads. */
+		spec.probe_timeout = Duration::from_secs(if self.command.is_some() { 480 } else { 120 });
 		Ok(spec)
 	}
 }
@@ -369,7 +370,7 @@ impl LaunchBook {
 		if definition.ssh.is_some() {
 			validate_ssh_launch(&mut definition)?;
 			let ssh = definition.ssh.expect("validated SSH launch");
-			let askpass = Askpass::start(self.revision.clone()).map_err(|error| error.to_string())?;
+			let askpass = Askpass::start(self.revision.clone(), &ssh.host).map_err(|error| error.to_string())?;
 			let spec = ssh.spec(&definition.entries[0].domain, &askpass)?;
 			return Ok((spec, Some(askpass)));
 		}
