@@ -31,7 +31,7 @@ Only a validated, credential-free file URI reaches browser-launch libraries. The
 
 No new IPC or URI-registration library is selected merely to shorten wrappers. `interprocess` is a maintained transport option but does not replace testd's authorization, startup queue, or resource ownership. The inspected `sysuri` release overwrites/removes associations without testd's ownership checks. These policies, private-file validation, and setup/daemon lifecycles remain application code.
 
-Native browser selection, sandboxed file access, early dialogs, login, and package upgrade/uninstall behavior still require the [desktop and browser validation](https://github.com/LapilliWorks/testd/blob/master/DEVELOPING.md#release-validation) gates. Library MSRVs and successful type checks are not native acceptance evidence.
+Native browser selection, sandboxed file access, early dialogs, login, and package upgrade/uninstall behavior still require the [desktop and browser validation](https://github.com/stelmost/testd/blob/master/DEVELOPING.md#release-validation) gates. Library MSRVs and successful type checks are not native acceptance evidence.
 
 ## GTK3 procedural macros
 

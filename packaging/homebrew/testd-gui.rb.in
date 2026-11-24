@@ -6,10 +6,10 @@ cask "testd-gui" do
   end
 @INTEL_SUPPORT@
 
-  url "https://github.com/LapilliWorks/testd/releases/download/v#{version}/Testd_#{version}_#{arch}.dmg"
+  url "https://github.com/stelmost/testd/releases/download/v#{version}/Testd_#{version}_#{arch}.dmg"
   name "Testd"
   desc "Tray app for the testd local dev domain manager"
-  homepage "https://github.com/LapilliWorks/testd"
+  homepage "https://github.com/stelmost/testd"
 
   depends_on macos: ">= :ventura"
 

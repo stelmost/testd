@@ -87,7 +87,7 @@ bun run check:links
 
 ## Test
 
-Use hosted CI for the repeatable platform matrix. Use the OS-detecting `tests/run.py` to reproduce a failure locally. Run local commands from the repository root; GitHub commands below explicitly select `LapilliWorks/testd` and also work from another directory.
+Use hosted CI for the repeatable platform matrix. Use the OS-detecting `tests/run.py` to reproduce a failure locally. Run local commands from the repository root; GitHub commands below explicitly select `stelmost/testd` and also work from another directory.
 
 | Run | Scope |
 |---|---|
@@ -104,8 +104,8 @@ No local Rust, Python, Bun, or VM setup is needed for hosted CI. The workflow pr
 Commit and push the revision you want tested before dispatching. `--ref master` uses GitHub's copy of `master`, not local or uncommitted changes; replace `master` with a pushed branch name to test that branch. Do not push a version tag just to run tests: version-tag pushes can write GitHub Release assets.
 
 ```sh
-gh workflow run ci.yml --repo LapilliWorks/testd --ref master
-gh run list --repo LapilliWorks/testd --workflow ci.yml --event workflow_dispatch --limit 5
+gh workflow run ci.yml --repo stelmost/testd --ref master
+gh run list --repo stelmost/testd --workflow ci.yml --event workflow_dispatch --limit 5
 ```
 
 Alternatively, open the repository's **Actions → ci → Run workflow**, select the branch, and start the run. Manual runs include package and SBOM builds only after the test gates pass. GitHub Actions retains their artifacts. The release-writing job stays skipped even when the dispatch ref is a version tag.
@@ -113,9 +113,9 @@ Alternatively, open the repository's **Actions → ci → Run workflow**, select
 Replace `RUN_ID` in the following commands with the numeric ID from the new run. Confirm its source SHA and URL before interpreting results:
 
 ```sh
-gh run view RUN_ID --repo LapilliWorks/testd --json headSha,status,conclusion,url
-gh run watch RUN_ID --repo LapilliWorks/testd --interval 45 --exit-status
-gh run view RUN_ID --repo LapilliWorks/testd --web
+gh run view RUN_ID --repo stelmost/testd --json headSha,status,conclusion,url
+gh run watch RUN_ID --repo stelmost/testd --interval 45 --exit-status
+gh run view RUN_ID --repo stelmost/testd --web
 ```
 
 `watch --exit-status` returns nonzero for an unsuccessful run. A transport error or a watch timeout is not itself a CI failure: inspect `run view` and resume watching the same run. Require `ci-summary-macos-15`, `ci-summary-macos-26`, and `ci-summary-debian-13` to show every applicable selected unprivileged stage passing with the expected GUI scope. For a full manual run, also require the website, macOS 15 and 26 minimum-runtime fixtures, Windows x64/Linux x64/macOS arm64 bundle jobs, and SBOM job to pass. Only one required ARM bundle is built, on macOS 15. Other runtime summaries and Intel bundles are best effort; review their failures and incomplete coverage without relabelling them as passes. An intentionally skipped release-publishing job is not missing test evidence.
@@ -125,9 +125,9 @@ gh run view RUN_ID --repo LapilliWorks/testd --web
 Wait for the whole run to complete before requesting its combined failure log:
 
 ```sh
-gh run view RUN_ID --repo LapilliWorks/testd --log-failed
-gh run rerun RUN_ID --repo LapilliWorks/testd --failed
-gh run watch RUN_ID --repo LapilliWorks/testd --interval 45 --exit-status
+gh run view RUN_ID --repo stelmost/testd --log-failed
+gh run rerun RUN_ID --repo stelmost/testd --failed
+gh run watch RUN_ID --repo stelmost/testd --interval 45 --exit-status
 ```
 
 Use `rerun --failed` for a transient infrastructure failure. A rerun uses the original commit and workflow, not newly pushed fixes. After fixing code, commit and push it, dispatch a new run, and use the new run ID. For a complete repeat of the original run, omit `--failed`.
@@ -137,10 +137,10 @@ Use `rerun --failed` for a transient infrastructure failure. A rerun uses the or
 Use a new, private, persisted destination for each run or rerun attempt. Replace `OUTPUT_DIR` below with that destination; do not overwrite an earlier attempt's evidence. The download commands work in both POSIX shells and PowerShell.
 
 ```sh
-gh run download RUN_ID --repo LapilliWorks/testd --pattern 'ci-summary-*' --dir 'OUTPUT_DIR/summaries'
-gh run download RUN_ID --repo LapilliWorks/testd --pattern 'bundles-*' --dir 'OUTPUT_DIR/bundles'
-gh run download RUN_ID --repo LapilliWorks/testd --name sbom --dir 'OUTPUT_DIR/sbom'
-gh run view RUN_ID --repo LapilliWorks/testd --log > 'OUTPUT_DIR/run.log'
+gh run download RUN_ID --repo stelmost/testd --pattern 'ci-summary-*' --dir 'OUTPUT_DIR/summaries'
+gh run download RUN_ID --repo stelmost/testd --pattern 'bundles-*' --dir 'OUTPUT_DIR/bundles'
+gh run download RUN_ID --repo stelmost/testd --name sbom --dir 'OUTPUT_DIR/sbom'
+gh run view RUN_ID --repo stelmost/testd --log > 'OUTPUT_DIR/run.log'
 ```
 
 Each `ci-summary-*` artifact contains `ci-summary.json`, with source/OS/Python metadata and stage statuses. Package and SBOM artifacts are available from full manual or tag runs, not ordinary push/PR runs. Full runner reports, fixture homes, PKI, browser profiles, and source patches are not uploaded. GitHub retains command output in the job logs; review logs before sharing because fixture output can contain sensitive data. Built artifacts are unsigned and are not installation or signing evidence.
@@ -760,7 +760,7 @@ The formula ships the CLI and daemon; the cask ships the tray app.
 
 ### Tap layout
 
-Homebrew wants a repository named `homebrew-<tap>`. For `brew tap LapilliWorks/testd`:
+Homebrew wants a repository named `homebrew-<tap>`. For `brew tap stelmost/testd`:
 
 ```
 homebrew-testd/

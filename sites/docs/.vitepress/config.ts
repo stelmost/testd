@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitepress';
 
-const REPO = 'https://github.com/LapilliWorks/testd';
+const REPO = 'https://github.com/stelmost/testd';
 const SITE = 'https://testd.dev';
 const outDir = process.env.TESTD_SITE_OUT_DIR
 	? `${process.env.TESTD_SITE_OUT_DIR}/docs`
