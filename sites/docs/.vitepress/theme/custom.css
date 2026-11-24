@@ -28,8 +28,8 @@
 	--vp-c-brand-3: var(--blue);
 	--vp-c-brand-soft: rgb(92 225 255 / 14%);
 
-	--vp-code-color: var(--text);
-	--vp-code-bg: var(--inset);
+	--vp-code-color: var(--code-ink);
+	--vp-code-bg: var(--code-plate);
 	--vp-code-block-color: var(--text);
 	--vp-code-line-highlight-color: var(--raised);
 
@@ -201,10 +201,10 @@ body {
 	text-decoration-thickness: 2px;
 }
 
-/* Inline code shares the prose's face, so a small inset plate marks it instead of a size. */
+/* Inline code shares the prose's face, so a small sand plate marks it instead of a size. */
 .vp-doc :not(pre, h1, h2, h3, h4, h5, h6) > code {
 	padding: 0.08em 0.4em;
-	border: 1px solid var(--vp-c-divider);
+	border: 1px solid var(--code-line);
 	border-radius: 0;
 	font-size: 1em;
 }

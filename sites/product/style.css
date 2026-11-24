@@ -94,12 +94,12 @@ a:hover {
 	outline-offset: 3px;
 }
 
-/* Inline code is the same face as the prose, so it is marked by a small inset plate instead of a size. */
+/* Inline code is the same face as the prose, so it is marked by a small sand plate instead of a size. */
 code {
 	padding: 0.08em 0.4em;
-	border: 1px solid var(--line);
-	background: var(--inset);
-	color: var(--text);
+	border: 1px solid var(--code-line);
+	background: var(--code-plate);
+	color: var(--code-ink);
 	overflow-wrap: anywhere;
 	box-decoration-break: clone;
 }
@@ -109,6 +109,7 @@ pre code,
 	padding: 0;
 	border: 0;
 	background: none;
+	color: inherit;
 }
 
 .container {

@@ -27,5 +27,10 @@
 	--violet: #9c92d8;
 	--sand: #d2b98f;
 
+	/* Inline code is set in the prose's face on a dark ground, so it takes sand ink on a sand-tinted plate. */
+	--code-ink: var(--sand);
+	--code-plate: rgb(210 185 143 / 14%);
+	--code-line: rgb(210 185 143 / 36%);
+
 	--mono: 'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
 }
