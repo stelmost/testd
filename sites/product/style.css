@@ -1,10 +1,11 @@
-@import '@fontsource-variable/alegreya';
 @import '@fontsource-variable/jetbrains-mono';
 
 /*
 	Elmo St. identity on a product page: Night ground, Light words, St. Elmo blue and amber for the
 	lights, widened so a page you read and work from is comfortable. Surfaces step up from the ground
-	in cool tints; three muted hues colour the worlds and the code.
+	in cool tints; three muted hues colour the worlds and the code. Everything is set in one monospace
+	face, as on a shipyard's drawing sheets: hairline rules, tracked capitals for labels, and a short
+	blue tick where a section's rule begins.
 */
 :root {
 	color-scheme: dark;
@@ -32,10 +33,9 @@
 	--violet: #9c92d8;
 	--sand: #d2b98f;
 
-	--serif: 'Alegreya Variable', Alegreya, Georgia, serif;
 	--mono: 'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
 	--gutter: 13rem;
-	--measure: 42rem;
+	--measure: 39rem;
 }
 
 *,
@@ -60,7 +60,7 @@ body {
 	min-height: 100vh;
 	background: var(--ground);
 	color: var(--text);
-	font: 1.1875rem/1.6 var(--serif);
+	font: 0.9375rem/1.7 var(--mono);
 }
 
 ::selection {
@@ -80,7 +80,8 @@ ul {
 
 h1,
 h2 {
-	font-weight: 400;
+	font-weight: 500;
+	letter-spacing: -0.035em;
 }
 
 a {
@@ -99,17 +100,25 @@ a:hover {
 	outline-offset: 3px;
 }
 
-code,
-pre {
-	font-family: var(--mono);
+/* Inline code is the same face as the prose, so it is marked by a small inset plate instead of a size. */
+code {
+	padding: 0.08em 0.4em;
+	border: 1px solid var(--line);
+	background: var(--inset);
+	color: var(--text);
+	overflow-wrap: anywhere;
+	box-decoration-break: clone;
 }
 
-code {
-	font-size: 0.86em;
+pre code,
+.command code {
+	padding: 0;
+	border: 0;
+	background: none;
 }
 
 .container {
-	width: min(72rem, 100% - 3rem);
+	width: min(76rem, 100% - 3rem);
 	margin-inline: auto;
 }
 
@@ -117,19 +126,20 @@ code {
 .plate dt,
 th,
 .tabs [role='tab'] {
-	font: 0.75rem/1.6 var(--mono);
-	letter-spacing: 0.21em;
+	font-size: 0.75rem;
+	line-height: 1.6;
+	letter-spacing: 0.18em;
 	text-transform: uppercase;
 	color: var(--text-3);
 }
 
 .meta {
-	font: 0.8125rem/1.6 var(--mono);
+	font-size: 0.75rem;
 	color: var(--text-3);
 }
 
 .note {
-	font-size: 1rem;
+	font-size: 0.875rem;
 	color: var(--text-2);
 }
 
@@ -177,7 +187,9 @@ th,
 	display: flex;
 	flex-wrap: wrap;
 	gap: 0.4rem 1.75rem;
-	font-size: 1.0625rem;
+	font-size: 0.75rem;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
 }
 
 .site-nav a {
@@ -223,14 +235,13 @@ th,
 
 .hero h1 {
 	margin-bottom: 0.5rem;
-	font-size: clamp(2.5rem, 5.2vw, 3.75rem);
-	line-height: 1.04;
-	letter-spacing: -0.012em;
+	font-size: clamp(1.75rem, 1.2rem + 2vw, 2.5rem);
+	line-height: 1.12;
 }
 
 .lede {
-	font-size: 1.3125rem;
-	line-height: 1.5;
+	font-size: 1.0625rem;
+	line-height: 1.65;
 }
 
 .command {
@@ -242,16 +253,10 @@ th,
 	padding: 0.6rem 0.6rem 0.6rem 1rem;
 	border: 1px solid var(--line);
 	background: var(--inset);
-	font-size: 0.9375rem;
-}
-
-.command code {
-	font-size: 1em;
-	overflow-wrap: anywhere;
+	font-size: 0.875rem;
 }
 
 .command-prompt {
-	font-family: var(--mono);
 	color: var(--text-3);
 }
 
@@ -269,7 +274,10 @@ th,
 	border: 1px solid var(--blue);
 	background: var(--blue);
 	color: var(--ground);
+	font-size: 0.8125rem;
 	font-weight: 600;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
 	text-decoration: none;
 }
 
@@ -286,6 +294,8 @@ th,
 	border: 1px solid var(--line-strong);
 	border-radius: 2px;
 	color: var(--text-2);
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
 }
 
 .chip-alpha {
@@ -309,6 +319,24 @@ html:not(.js) .lease {
 	inset: 0;
 	width: 100%;
 	height: 100%;
+}
+
+/* Crop marks just outside the corners, as on a drawing sheet. */
+.lease-stage::after {
+	content: '';
+	position: absolute;
+	inset: -0.6rem;
+	pointer-events: none;
+	background:
+		linear-gradient(var(--line-strong), var(--line-strong)) top left / 0.9rem 1px,
+		linear-gradient(var(--line-strong), var(--line-strong)) top left / 1px 0.9rem,
+		linear-gradient(var(--line-strong), var(--line-strong)) top right / 0.9rem 1px,
+		linear-gradient(var(--line-strong), var(--line-strong)) top right / 1px 0.9rem,
+		linear-gradient(var(--line-strong), var(--line-strong)) bottom left / 0.9rem 1px,
+		linear-gradient(var(--line-strong), var(--line-strong)) bottom left / 1px 0.9rem,
+		linear-gradient(var(--line-strong), var(--line-strong)) bottom right / 0.9rem 1px,
+		linear-gradient(var(--line-strong), var(--line-strong)) bottom right / 1px 0.9rem;
+	background-repeat: no-repeat;
 }
 
 /* The worlds fade in once drawn; the links then come up over them. */
@@ -401,18 +429,37 @@ html:not(.js) .lease {
 }
 
 .install-band .section {
+	margin-top: 0;
 	padding-top: clamp(3rem, 6vw, 5rem);
+	border-top: 0;
 }
 
-/* Sections and plates */
+.install-band .section::before {
+	content: none;
+}
+
+/* Sections and plates: each opens on a hairline rule that starts with a short blue tick. */
 
 .section {
-	padding-top: clamp(4rem, 9vw, 7rem);
+	position: relative;
+	margin-top: clamp(4rem, 9vw, 7rem);
+	padding-top: 1.75rem;
+	border-top: 1px solid var(--line);
+}
+
+.section::before {
+	content: '';
+	position: absolute;
+	top: -1px;
+	left: 0;
+	width: 3rem;
+	height: 2px;
+	background: var(--blue);
 }
 
 .section h2 {
-	font-size: clamp(1.875rem, 3.2vw, 2.5rem);
-	line-height: 1.1;
+	font-size: clamp(1.5rem, 1.1rem + 1.6vw, 2rem);
+	line-height: 1.2;
 }
 
 .section-lede {
@@ -440,7 +487,7 @@ html:not(.js) .lease {
 }
 
 .plate dt {
-	padding-top: 0.4rem;
+	padding-top: 0.2rem;
 }
 
 .plate dd > * + * {
@@ -533,7 +580,7 @@ html:not(.js) .lease {
 table {
 	width: 100%;
 	border-collapse: collapse;
-	font-size: 1rem;
+	font-size: 0.875rem;
 }
 
 caption {
@@ -734,7 +781,7 @@ td {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 0.4rem 1.5rem;
-	font-size: 1.0625rem;
+	font-size: 0.8125rem;
 }
 
 .footer-links a {
