@@ -69,7 +69,8 @@ async function copyText(text: string): Promise<void> {
 
 function getCommandForButton(button: HTMLButtonElement): string {
 	if (button.hasAttribute('data-copy-active-panel')) {
-		return document.querySelector<HTMLElement>('[data-code-panel]:not([hidden])')?.textContent?.trim() ?? '';
+		const scope = button.closest('.code-block') ?? document;
+		return scope.querySelector<HTMLElement>('[data-code-panel]:not([hidden])')?.textContent?.trim() ?? '';
 	}
 
 	const targetId = button.dataset.copyTarget;

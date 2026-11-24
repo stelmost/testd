@@ -27,28 +27,55 @@ The browser only ever talks to the host. The host terminates HTTPS and forwards 
 
 ## 1. Install testd
 
-You can run your host with the **desktop tray app** (recommended on macOS, Windows, and desktop Linux) or with the **CLI**. Both share the same configuration, CA, and dashboard.
+testd ships as two separate binaries that share the same configuration, CA, and dashboard:
 
-**Option A: Desktop tray app**
+- **Desktop app (GUI):** runs the host daemon from your system tray or menu bar and guides first-run setup in your browser. Best for your **host** machine (macOS, Windows, desktop Linux).
+- **CLI (`testd`):** runs `testd run` in local terminals or remote dev boxes (VMs, containers, WSL, SSH servers), and can also run the host headlessly (`testd host`).
 
-Download the desktop bundle for your platform from [GitHub Releases](https://github.com/stelmost/testd/releases) (`.dmg` or Homebrew cask `testd-gui` on macOS, `.deb` / `.AppImage` on Linux, `.exe` installer on Windows) and verify `SHA256SUMS` before installing. See [Desktop app](desktop.md#install) for platform notes.
+You can install both on your host machine: the desktop app runs the host daemon while `testd` registers projects from your terminal.
 
-**Option B: CLI release**
+### Desktop app (GUI)
 
-Grab CLI archives or Homebrew definitions from [GitHub Releases](https://github.com/stelmost/testd/releases), and verify `SHA256SUMS` before installing.
+Download the package for your platform from [GitHub Releases](https://github.com/stelmost/testd/releases) and verify `SHA256SUMS` before installing:
 
-On Linux and macOS, you can also run the version-pinned CLI installer command shown in the chosen release's notes (`TESTD_VERSION` is the tag without the leading `v`; omitting it installs only a stable release, not prereleases).
+| Platform | Package | Install |
+|---|---|---|
+| macOS (Apple Silicon) | `Testd_<version>_aarch64.dmg` | Open the `.dmg` and drag `Testd.app` into Applications |
+| macOS (Intel, best effort) | `Testd_<version>_x64.dmg` | Open the `.dmg` and drag `Testd.app` into Applications |
+| macOS (Homebrew) | `testd-gui.rb` from the release | `brew install --cask ./testd-gui.rb` |
+| Linux (`x86_64`, GNU libc) | `Testd_<version>_x64.deb` or `.AppImage` | `sudo apt install ./Testd_<version>_x64.deb` or `chmod +x` and run the `.AppImage` |
+| Windows (`x64`) | `Testd_<version>_x64-setup.exe` | Run the per-user installer |
 
-- Linux `x86_64` CLI archives come in `x86_64-unknown-linux-gnu` (GNU libc) and `x86_64-unknown-linux-musl` (static musl). The installer picks GNU libc when detected and musl otherwise; set `TESTD_LIBC=gnu` or `TESTD_LIBC=musl` to choose explicitly.
-- Linux desktop packages use GNU libc. Debian 13 is the native validation baseline; other distributions are best effort.
+Early alpha desktop bundles are unsigned; macOS and Windows may ask you to confirm opening the app. See [Desktop app](desktop.md#install) for platform notes and Linux port 443 permissions.
 
-**Option C: Build from source**
+### CLI (`testd`)
+
+**Linux and macOS (installer script):**
+
+Download `install.sh` and pin the release version (`TESTD_VERSION` is the tag without the leading `v`; omitting it installs only a stable release, not prereleases):
+
+```sh
+curl -fsSLo testd-install.sh https://testd.dev/install.sh
+TESTD_VERSION='0.1.0-alpha.1' sh ./testd-install.sh
+```
+
+The script verifies `SHA256SUMS` and installs `testd` into `~/.local/bin` (override with `TESTD_INSTALL_DIR`). On Linux `x86_64`, it picks GNU libc (`x86_64-unknown-linux-gnu`) when detected and static musl (`x86_64-unknown-linux-musl`) otherwise; set `TESTD_LIBC=gnu` or `TESTD_LIBC=musl` to choose explicitly.
+
+**Windows (`x64`):**
+
+Download `testd-<version>-x86_64-pc-windows-msvc.zip` and `SHA256SUMS` from [GitHub Releases](https://github.com/stelmost/testd/releases), verify the checksum (`certutil -hashfile <zip> SHA256` or `Get-FileHash`), and extract `testd.exe` to a directory on your `PATH`. The Windows CLI links the MSVC runtime statically and needs no separate Visual C++ redistributable.
+
+**Manual archive or Homebrew:**
+
+Release archives (`testd-<version>-<target>.tar.gz` / `.zip`) and the generated Homebrew formula (`testd.rb`, which builds from the release source tarball via `brew install --formula ./testd.rb`) are attached to each [GitHub Release](https://github.com/stelmost/testd/releases). Always verify `SHA256SUMS` before installing.
+
+**From source (Rust 1.90+):**
 
 ```sh
 cargo install --path .
 ```
 
-See [DEVELOPING.md](https://github.com/stelmost/testd/blob/master/DEVELOPING.md#release) for building and packaging details.
+Linux `aarch64` has no prebuilt CLI archive yet; build from source there. See [DEVELOPING.md](https://github.com/stelmost/testd/blob/master/DEVELOPING.md#release) for building and packaging details.
 
 ## 2. Set up the host (once)
 

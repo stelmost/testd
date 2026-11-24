@@ -9,13 +9,17 @@ The testd desktop app runs the host daemon from your system tray or menu bar and
 
 ## Install
 
-Download the package for your platform from [GitHub Releases](https://github.com/stelmost/testd/releases) and verify `SHA256SUMS` before installing:
+Download the desktop package for your platform from [GitHub Releases](https://github.com/stelmost/testd/releases) and verify `SHA256SUMS` before installing:
 
 | Platform | Package | Notes |
 |---|---|---|
-| macOS | `Testd_<version>_<arch>.dmg` or Homebrew cask `testd-gui` | Drag `Testd.app` into Applications. Requires macOS 13 (Ventura) or newer; `aarch64` is the primary target. |
-| Linux | `.deb` or `.AppImage` | Built for `x86_64` GNU libc (Debian 13 baseline; other distributions are best effort). |
-| Windows | `.exe` per-user installer | Installs for the current user without requiring administrator rights until setup configures DNS and root trust. |
+| macOS (Apple Silicon) | `Testd_<version>_aarch64.dmg` | Drag `Testd.app` into Applications. Requires macOS 13 (Ventura) or newer; `aarch64` is the primary target. |
+| macOS (Intel) | `Testd_<version>_x64.dmg` | Drag `Testd.app` into Applications. Best effort. |
+| macOS (Homebrew) | `testd-gui.rb` (attached to each release) | Download `testd-gui.rb` from the release and run `brew install --cask ./testd-gui.rb`. |
+| Linux (`x86_64`) | `Testd_<version>_x64.deb` or `Testd_<version>_x64.AppImage` | Built for `x86_64` GNU libc (Debian 13 baseline; other distributions are best effort). Install the `.deb` with `sudo apt install ./Testd_<version>_x64.deb`, or `chmod +x` and run the `.AppImage`. |
+| Windows (`x64`) | `Testd_<version>_x64-setup.exe` | Per-user installer; does not require administrator rights until setup configures DNS and root trust. |
+
+The desktop app only includes the tray/host binary (`testd-gui`). To register projects from terminals or remote dev boxes with `testd run`, install the [CLI](quickstart.md#cli-testd) as well.
 
 On macOS and Windows, early alpha releases are unsigned; your OS may ask you to confirm opening the app.
 

@@ -45,15 +45,41 @@ CI's Debian 13 container covers userspace, not native kernel, system, or desktop
 
 ## Install
 
-From source:
+testd ships as two binaries that share the same configuration, CA, and dashboard:
+
+- **Desktop app (GUI):** runs the host daemon from your system tray or menu bar with guided first-run setup in your default browser.
+- **CLI (`testd`):** registers projects (`testd run`) from local terminals, containers, VMs, WSL, or remote boxes, and can also run the host headlessly (`testd host`).
+
+### Desktop app (GUI)
+
+Download the package for your platform from [GitHub Releases](https://github.com/stelmost/testd/releases) and verify `SHA256SUMS` before installing:
+
+- **macOS:** `Testd_<version>_aarch64.dmg` (or `x64.dmg` for Intel), or download `testd-gui.rb` from the release and run `brew install --cask ./testd-gui.rb`
+- **Linux (`x86_64`, GNU libc):** `Testd_<version>_x64.deb` (`sudo apt install ./Testd_<version>_x64.deb`) or `Testd_<version>_x64.AppImage`
+- **Windows (`x64`):** `Testd_<version>_x64-setup.exe` (per-user installer)
+
+See [docs/desktop.md](docs/desktop.md) for guided setup, tray actions, and Linux port 443 permissions.
+
+### CLI (`testd`)
+
+On Linux and macOS, download the installer and pin the release version (omitting `TESTD_VERSION` installs only a stable release, not prereleases):
+
+```sh
+curl -fsSLo testd-install.sh https://testd.dev/install.sh
+TESTD_VERSION='0.1.0-alpha.1' sh ./testd-install.sh
+```
+
+The installer verifies `SHA256SUMS`, picks GNU libc or static musl on Linux (`TESTD_LIBC=gnu|musl` to override), and installs `testd` into `~/.local/bin` (`TESTD_INSTALL_DIR` to override).
+
+On Windows (`x64`), download `testd-<version>-x86_64-pc-windows-msvc.zip` and `SHA256SUMS` from [GitHub Releases](https://github.com/stelmost/testd/releases), verify the checksum, and extract `testd.exe` onto `PATH` (statically linked MSVC runtime; no redistributable needed).
+
+You can also install the CLI from a downloaded release archive, via the generated Homebrew formula (`brew install --formula ./testd.rb` from the release), or from source (Rust 1.90+, required on Linux `aarch64`):
 
 ```sh
 cargo install --path .
 ```
 
-Public releases provide CLI archives, tray bundles, `SHA256SUMS`, and generated Homebrew definitions. Verify the checksums before installing. Homebrew templates live in `packaging/homebrew/`; a release generates installable definitions with real digests. The native tray app is a separate, public Rust build and opens its local pages in your default browser. [DEVELOPING.md](DEVELOPING.md) covers building and release validation. There is no in-app updater or commercial-service requirement.
-
-For a prerelease CLI install on Linux or macOS, use the version-pinned command in its [release notes](https://github.com/stelmost/testd/releases).
+There is no in-app updater or commercial-service requirement. [DEVELOPING.md](DEVELOPING.md) covers building and release validation.
 
 This first release is an unsigned alpha: Windows artifacts have no Authenticode signature, and macOS artifacts are not Developer ID signed or notarized. Optional free macOS ad-hoc resource sealing checks bundle integrity only; it is not trusted signing or Gatekeeper approval. Linux provides checksums and SBOMs without additional signing infrastructure. Actual installation approval remains separate.
 
