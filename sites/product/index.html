@@ -127,6 +127,7 @@ testd host           <span class="comment"># run the daemon</span></code></pre>
 									<span class="copy-label">Copy</span>
 								</button>
 							</div>
+							<p><a href="/docs/host.html">Running the host</a></p>
 						</dd>
 					</div>
 					<div class="plate">
@@ -147,6 +148,7 @@ testd host           <span class="comment"># run the daemon</span></code></pre>
 								releases the names. A running leaf that drops reconnects every few seconds and registers again without a
 								new approval, as long as its token and grants still exist.
 							</p>
+							<p><a href="/docs/local.html#lifetimes-and-ownership">Lifetimes and ownership</a></p>
 						</dd>
 					</div>
 					<div class="plate">
@@ -204,6 +206,7 @@ testd run --host 192.168.1.5 :3000</code></pre>
 								dashboard. It can also start and stop the remote command, on Linux and macOS hosts. No port needs to
 								open on your machine.
 							</p>
+							<p><a href="/docs/remote.html">Remote and SSH guide</a></p>
 						</dd>
 					</div>
 					<div class="plate">
@@ -223,9 +226,9 @@ testd share app.example --provider tailscale    <span class="comment"># tailnet 
 										<tr><th scope="col">Provider</th><th scope="col">Reaches</th><th scope="col">Needs</th></tr>
 									</thead>
 									<tbody>
-										<tr><td><code>cloudflared</code></td><td>Public internet</td><td>Nothing: quick tunnel, no account</td></tr>
-										<tr><td><code>ngrok</code></td><td>Public internet</td><td><code>ngrok config add-authtoken</code>, once</td></tr>
-										<tr><td><code>tailscale</code></td><td>Your tailnet</td><td>Tailscale Serve</td></tr>
+										<tr><td><code>cloudflared</code>, the default</td><td>Public internet</td><td><code>cloudflared</code> on <code>PATH</code>; a quick tunnel, no account</td></tr>
+										<tr><td><code>ngrok</code></td><td>Public internet</td><td><code>ngrok</code> on <code>PATH</code>, and <code>ngrok config add-authtoken</code> once</td></tr>
+										<tr><td><code>tailscale</code></td><td>Your tailnet</td><td><code>tailscale</code> on <code>PATH</code>; one share at a time</td></tr>
 									</tbody>
 								</table>
 							</div>
@@ -233,6 +236,7 @@ testd share app.example --provider tailscale    <span class="comment"># tailnet 
 								A public share is a public route to the app. Providers run as spawned processes: no SDK, no account
 								integration.
 							</p>
+							<p><a href="/docs/sharing.html">Sharing and tunnels</a></p>
 						</dd>
 					</div>
 				</dl>
@@ -249,6 +253,7 @@ testd share app.example --provider tailscale    <span class="comment"># tailnet 
 								the <code>.test</code> DNS resolver, the local root certificate, and the operator secret. Launch at
 								login stays off until you tick it.
 							</p>
+							<p><a href="/docs/host.html#desktop-tray-app">Desktop tray app guide</a></p>
 						</dd>
 					</div>
 					<div class="plate">
@@ -279,6 +284,7 @@ testd share app.example --provider tailscale    <span class="comment"># tailnet 
 								<code>3</code> HTTPS edge or trust. <code>--fix</code> repairs what it can, and <code>--json</code> is
 								for scripts.
 							</p>
+							<p><a href="/docs/troubleshooting.html">Troubleshooting</a></p>
 						</dd>
 					</div>
 				</dl>
@@ -404,8 +410,8 @@ testd share app.example --provider tailscale    <span class="comment"># tailnet 
 									Use <code>Testd___TESTD_VERSION___x64.deb</code>, or run
 									<code>Testd___TESTD_VERSION___x64.AppImage</code>. Both are built for x86_64 with GNU libc; Debian 13
 									is the baseline and other distributions are best effort. Binding port 443 needs
-									<code>CAP_NET_BIND_SERVICE</code> on the tray binary: see the
-									<a href="/docs/desktop.html#install">desktop guide</a>.
+									<code>CAP_NET_BIND_SERVICE</code> on the tray binary: see
+									<a href="/docs/system.html#privileged-ports">privileged ports</a>.
 								</p>
 								<div class="code">
 									<pre><code id="apt-linux">sudo apt install ./Testd___TESTD_VERSION___x64.deb</code></pre>
@@ -461,7 +467,8 @@ testd share app.example --provider tailscale    <span class="comment"># tailnet 
 					This is an unsigned alpha. Windows artifacts have no Authenticode signature and macOS artifacts are not
 					Developer ID signed or notarized, so your system may ask you to confirm opening the app. Check
 					<code>SHA256SUMS</code> on every download. Packages are on
-					<a href="https://github.com/stelmost/testd/releases">GitHub Releases</a>.
+					<a href="https://github.com/stelmost/testd/releases">GitHub Releases</a>. The
+					<a href="/docs/quickstart.html">quickstart</a> covers every route, including installing from source.
 				</p>
 
 				<div class="table-wrap">
@@ -501,6 +508,7 @@ testd share app.example --provider tailscale    <span class="comment"># tailnet 
 					<a href="/docs/">Documentation</a>
 					<a href="https://github.com/stelmost/testd/blob/master/CHANGELOG.md">Changelog</a>
 					<a href="/docs/security.html">Security</a>
+					<a href="/docs/#support-and-contact">Support</a>
 					<a href="https://github.com/stelmost/testd">GitHub</a>
 				</nav>
 				<p class="meta">ISC License · © <span data-year>2026</span> Elmo St. Ltd.</p>
