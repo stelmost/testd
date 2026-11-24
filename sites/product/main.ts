@@ -122,6 +122,32 @@ function setupTabs(): void {
 	});
 }
 
+function setupHeroInstall(): void {
+	const os = detectPlatform();
+	if (!os) return;
+
+	const panel = document.getElementById(`os-${os}-panel`);
+	const guiLink = panel?.querySelector<HTMLAnchorElement>('.downloads .button:not(.button-quiet)');
+	const heroDownload = document.querySelector<HTMLAnchorElement>('[data-hero-download]');
+	if (heroDownload && guiLink) {
+		heroDownload.href = guiLink.href;
+		heroDownload.textContent = guiLink.textContent;
+	}
+
+	if (os !== 'windows') return;
+
+	const cliBar = document.querySelector<HTMLElement>('[data-hero-cli]');
+	const cliAlt = document.querySelector<HTMLElement>('[data-hero-cli-alt]');
+	const cliAltLink = document.querySelector<HTMLAnchorElement>('[data-hero-cli-download]');
+	const windowsCliLink = panel?.querySelector<HTMLAnchorElement>('.downloads .button-quiet');
+	if (cliBar) cliBar.hidden = true;
+	if (cliAlt && cliAltLink && windowsCliLink) {
+		cliAltLink.href = windowsCliLink.href;
+		cliAltLink.textContent = windowsCliLink.textContent;
+		cliAlt.hidden = false;
+	}
+}
+
 function setupLightbox(): void {
 	const images = document.querySelectorAll<HTMLImageElement>('img[data-lightbox]');
 	if (images.length === 0) return;
@@ -156,6 +182,7 @@ function setupLightbox(): void {
 document.querySelectorAll<HTMLElement>('[data-shell]').forEach(highlightShell);
 setupCopyButtons();
 setupTabs();
+setupHeroInstall();
 setupLightbox();
 
 const lease = document.querySelector<HTMLElement>('[data-lease]');

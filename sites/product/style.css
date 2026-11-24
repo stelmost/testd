@@ -301,6 +301,26 @@ th,
 	letter-spacing: 0.14em;
 }
 
+.hero-install {
+	display: grid;
+	gap: 0.85rem;
+	padding-top: 0.5rem;
+}
+
+.hero-install .actions {
+	padding-top: 0;
+}
+
+.command-install {
+	margin-top: 0;
+	padding: 0.5rem 0.5rem 0.5rem 1rem;
+	border: 1px solid var(--line);
+}
+
+.command-install[hidden] {
+	display: none;
+}
+
 .actions {
 	display: flex;
 	flex-wrap: wrap;
