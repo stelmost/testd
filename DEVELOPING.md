@@ -717,7 +717,7 @@ AppImage bundles the linked GTK libraries and preserves ordinary GTK backend sel
 
 Windows ships only NSIS, configured in `crates/testd-gui/Cargo.toml` to install per user into `%LOCALAPPDATA%\Testd` without installer elevation. Resolver and trust changes retain their separate native authorization prompts. No MSI or machine-wide deployment is claimed. Preserve the actual installer/shortcut/URL-handler identity when validating upgrades; a matching visible product name alone is not evidence.
 
-Removing the app does not remove the machine trust root or the DNS route. On Linux and macOS, run `testd uninstall` before removing the app; ownership-checked cleanup refuses changed or unowned integration. Add `--purge` only to delete local configuration after system cleanup succeeds. macOS cleanup requires the logged-in desktop session and native authorization. Windows CLI uninstall remains blocked pending native ownership validation.
+Removing the app does not remove the machine trust root or the DNS route. On Linux, macOS, and Windows, run `testd uninstall` before removing the app; ownership-checked cleanup refuses changed or unowned integration. Add `--purge` only to delete local configuration after system cleanup succeeds. macOS cleanup requires the logged-in desktop session and native authorization. Windows cleanup requests native administrator authorization through UAC.
 
 ### Sign
 

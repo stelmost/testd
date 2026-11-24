@@ -4,7 +4,7 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 
 ## [Unreleased]
 
-## [0.1.0-alpha.1]
+## [0.1.0-alpha.1] - 2026-11-24
 
 First public alpha. The CLI, daemon, and tray ship as one version; desktop bundles are unsigned for distribution and installed by hand.
 
@@ -50,6 +50,7 @@ First public alpha. The CLI, daemon, and tray ship as one version; desktop bundl
 - Private state is replaced atomically; failed quick-launch edits preserve live definitions, and unreadable launch files stop startup rather than being overwritten
 - Windows credentials, control data, and PKI keys use protected owner-scoped ACLs from creation; owner-rights entries are accepted only for verified owners, while unsafe existing files and unverifiable parents are refused before use
 - Windows CLI uninstall checks the entire installation's recorded resolver and trust state before removing it; purge retains local data if ownership or cleanup cannot be verified
+- Windows release executables link the MSVC runtime statically, so the CLI ZIP needs no separate Visual C++ redistributable
 - Windows elevation uses the system PowerShell and verifies a single in-memory helper-source snapshot before execution without exceeding the native command-line limit; helper and certificate staging files close before the elevated process reads them
 - macOS certificate actions preserve other installations' roots, and Windows resolver setup refuses conflicting unowned rules
 - Failed startup releases background listeners; setup rejects concurrent finishes, retains earlier recovery backups, and accepts another attempt after a start failure
