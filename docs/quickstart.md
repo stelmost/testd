@@ -5,128 +5,153 @@ description: 'From a clean machine to a working HTTPS name: install, first host,
 
 # Quickstart
 
-This is the shortest path from a clean machine to a working HTTPS name. It assumes the host is the machine with the browser; the project can run on the same machine or on a remote dev box.
+This guide takes you from a clean machine to opening `https://app.example.test` in your browser.
+
+Your **host** is the machine with the browser. Your project can run on that same machine, or on another machine (a VM, container, WSL distro, or remote dev box).
 
 ```text
 browser
-  │ DNS: app.example.test → the host
+  │  DNS: app.example.test → host
   ▼
-host machine
-  ├─ DNS for *.test
+host machine (testd host)
+  ├─ local DNS for *.test
   ├─ HTTPS edge on :443
-  └─ reverse proxy → app target
+  └─ reverse proxy → your app
                          ▲
-                         │ TLS registration connection
-leaf (VM, container, WSL, remote box)
-  └─ testd run, bearer token
+                         │  one outbound connection
+leaf (local machine, VM, container, WSL, or remote box)
+  └─ testd run
 ```
 
-The browser never connects to the leaf. It resolves the name to the host, the host terminates browser TLS, and the host reaches remote applications through a mutually authenticated leaf TLS forwarder. The final leaf-to-app hop stays local HTTP. The leaf keeps one outbound registration connection open; that connection owns the names and forwarders.
+The browser only ever talks to the host. The host terminates HTTPS and forwards traffic to the app. For remote leaves, traffic between the host and the leaf uses mutual TLS, while the last hop from the leaf to your dev server stays plain local HTTP.
 
-## 1. Install
+## 1. Install testd
 
-From the repository:
+**Option A: Download a release**
+
+Grab CLI archives, desktop tray bundles, or Homebrew definitions from [GitHub Releases](https://github.com/stelmost/testd/releases), and verify `SHA256SUMS` before installing.
+
+On Linux and macOS, you can also run the version-pinned CLI installer command shown in the chosen release's notes (`TESTD_VERSION` is the tag without the leading `v`; omitting it installs only a stable release, not prereleases).
+
+- Linux `x86_64` CLI archives come in `x86_64-unknown-linux-gnu` (GNU libc) and `x86_64-unknown-linux-musl` (static musl). The installer picks GNU libc when detected and musl otherwise; set `TESTD_LIBC=gnu` or `TESTD_LIBC=musl` to choose explicitly.
+- Linux desktop packages use GNU libc. Debian 13 is the native validation baseline; other distributions are best effort.
+- The native tray app is a separate Rust build; its setup flow and dashboard open in your default browser.
+
+**Option B: Build from source**
 
 ```sh
 cargo install --path .
 ```
 
-Download CLI archives, tray bundles, and Homebrew definitions from [GitHub Releases](https://github.com/stelmost/testd/releases). Verify `SHA256SUMS` before installing. The native tray app is a separate Rust build; setup and the dashboard open in the default browser. See [DEVELOPING.md](https://github.com/stelmost/testd/blob/master/DEVELOPING.md#release) for building and packaging.
+See [DEVELOPING.md](https://github.com/stelmost/testd/blob/master/DEVELOPING.md#release) for building and packaging details.
 
-On Linux and macOS, use the version-pinned CLI installer command in the chosen release's notes. `TESTD_VERSION` is the tag without its leading `v`. Without it, the installer looks for a stable release and does not install prereleases.
+## 2. Set up the host (once)
 
-Linux x86_64 CLI archives use `x86_64-unknown-linux-gnu` for GNU libc and `x86_64-unknown-linux-musl` for the static musl build. The installer detects GNU libc and otherwise selects musl; set `TESTD_LIBC=gnu` or `TESTD_LIBC=musl` to select one explicitly. Linux desktop packages use GNU libc. Debian 13 is the native validation baseline; other distributions are best effort.
-
-## 2. Prepare the host
+Run these two commands on the machine with your browser:
 
 ```sh
 testd init
 testd doctor --fix
 ```
 
-`init` is idempotent. It:
+`testd init` is safe to run again at any time. It:
 
-1. Writes `~/.config/testd/config.toml` with mode `0600`.
-2. Creates a local root CA and host intermediate under `~/.config/testd/pki/`.
-3. Writes the operator secret to `[host] secret`.
-4. Detects an external Caddy install and offers to import the managed Caddyfile.
-5. Installs the root certificate into the system trust store when stdin is a terminal or `--yes` is passed.
+1. Creates `~/.config/testd/config.toml` (mode `0600`, or `%APPDATA%\testd\config.toml` on Windows).
+2. Generates a local root CA and host intermediate certificate under `~/.config/testd/pki/`.
+3. Writes an operator secret to `[host] secret`.
+4. Detects an existing Caddy installation and offers to wire up the managed Caddyfile.
+5. Installs the root certificate into your system trust store when running interactively (or with `--yes`).
 
-It leaves the OS resolver alone by default, until the first registration from another machine. Run `testd doctor --fix` now to configure the `.test` resolver and root trust immediately. These steps need administrator privileges.
+By default, `testd init` waits to configure the OS `.test` DNS resolver until the first remote client connects. Running `testd doctor --fix` sets up both the `.test` resolver and root certificate trust right away (this requires administrator privileges).
 
-## 3. Start the host
+## 3. Start the host daemon
 
 ```sh
 testd host
 ```
 
-The daemon owns the listeners:
+Leave this running in a terminal (or run the desktop tray app / system service). The daemon opens these local listeners:
 
-| Listener | Default | Purpose |
+| Listener | Default | What it does |
 |---|---|---|
-| TCP | `127.0.0.1:7737` | Leaf intake; the dashboard answers on `127.0.0.1:7737` |
-| TCP | `127.0.0.1:443` | HTTPS edge for registered names, when `edge_enabled` is true |
-| TCP | `127.0.0.1:7740` | Plain HTTP routing for an external front |
-| UDP | `127.0.0.1:7753` | DNS for `.test` on Linux and macOS |
-| UDP | `127.0.0.1:53` | DNS for `.test` on Windows |
+| TCP | `127.0.0.1:7737` | Leaf intake and the local dashboard |
+| TCP | `127.0.0.1:443` | Built-in HTTPS edge for `*.test` names (when `edge_enabled` is true) |
+| TCP | `127.0.0.1:7740` | Plain HTTP routing (for tunnels and external fronts like Caddy) |
+| UDP | `127.0.0.1:7753` | Local `.test` DNS on Linux and macOS |
+| UDP | `127.0.0.1:53` | Local `.test` DNS on Windows |
 
-A second daemon fails fast on the instance lock. `testd dashboard` prints the dashboard URL.
+Only one daemon can run at a time; a second instance exits immediately on the instance lock. Run `testd dashboard` in another terminal to print the authenticated dashboard URL.
 
-On Linux, binding port 443 needs `CAP_NET_BIND_SERVICE`. Use the root-managed `packaging/systemd/testd@.service`, grant the capability to the executable yourself, or set a high edge port and include it in browser URLs. See [Advanced usage](advanced.md#privileged-ports).
+**Linux port 443 note:** Binding port 443 on Linux needs `CAP_NET_BIND_SERVICE`. You can use the root-managed `packaging/systemd/testd@.service`, grant the capability to the `testd` binary yourself, or pick a high port like `127.0.0.1:8443` and include it in browser URLs. See [Privileged ports](advanced.md#privileged-ports).
 
-## 4. Register a name
+## 4. Register your first name
 
-In the project directory:
+In your project directory, point testd at the port your dev server listens on:
 
 ```sh
 testd run app.example:3000
 ```
 
-Other forms:
+You can also let testd infer the name from the folder, wrap your dev command, or register multiple services at once:
 
 ```sh
-testd run :3000                              # name inferred from the directory
-testd run app.example:3000 -- npm run dev    # name lives as long as the process
+testd run :3000                              # uses the current folder name
+testd run app.example:3000 -- npm run dev    # name lives as long as the dev server
 testd run frontend:3000 api:8080 -- npm run dev
 ```
 
-Open `https://app.example.test`. The name is given without the TLD; the host appends `.test`. Keep the command running: Ctrl+C, a child exit, or a lost connection removes the name.
+Now open `https://app.example.test` in your browser. Notice you leave `.test` off in the command; the host appends it automatically. Keep `testd run` running: pressing Ctrl+C, exiting the wrapped command, or losing the connection removes the name.
 
-Use `<service>.<project>` names such as `app.example`, not single-label names such as `app`. The two-label form gives cookies the same scope they would have on `app.example.com` and `api.example.com`. `testd` warns when it sees a single-label name.
+**Tip on naming:** Prefer two-label names like `app.example` instead of single-label names like `app`. Two labels give browsers a real registrable domain so cookies behave like `app.example.com` and `api.example.com`. `testd` warns when you use a single-label name.
 
-## 5. Check the result
+## 5. Verify everything is green
 
 ```sh
 testd doctor
 ```
 
-Exit code `0` means ready. `1` means missing configuration or state, `2` means the resolver is not configured, and `3` means the edge or certificate trust is not ready. `testd doctor --json` is stable for scripts. `testd doctor --fix` repairs the resolver, Caddyfile import, and root trust.
+`doctor` checks configuration, DNS resolution, PKI, root trust, and the HTTPS edge:
 
-## Remote project in one minute
+- `0`: Everything is ready.
+- `1`: Missing or invalid configuration or state.
+- `2`: DNS resolver route or name resolution problem.
+- `3`: PKI, certificate trust, or HTTPS edge problem.
 
-The host intake defaults to loopback. Configure a reachable `[host] listen_addr` and restrict access; see [Advanced usage](advanced.md#remote-development).
+Add `--json` for scripts, or `--fix` to repair the resolver, Caddyfile import, and root trust.
 
-On the other machine, point at the host:
+## Connecting a remote dev box
+
+You have two ways to reach a dev server on another machine:
+
+- **Over SSH (easiest):** Open the dashboard, go to **SSH apps**, enter your SSH host alias, remote port, and local `.test` name, then click **Open**. No network ports need to be opened on your host. See [SSH apps](advanced.md#ssh-apps).
+- **Direct LAN / VM / WSL leaf:** Point a remote `testd` directly at your host over TLS 1.3.
+
+For a direct remote leaf:
+
+1. On the host, set `[host] listen_addr` in `config.toml` to an address the remote machine can reach (by default it only listens on `127.0.0.1`), and restrict port `7737` with your firewall.
+2. On the remote machine, pair once with the host, then run:
 
 ```sh
 testd pair <host-lan-ip>
 testd run --host <host-lan-ip> :3000
 ```
 
-First compare the pairing code against the host's Access card or `testd requests`. Approve pairing on the host and enter the host's code on the leaf; this saves host trust without issuing a credential. Then `run` asks separately for the names its credential should cover. On the host, approve it:
+During `testd pair`, both sides display a verification code. Check that they match in the host's dashboard **Access** card or via `testd requests`, approve pairing on the host, and enter the host's code on the leaf. Pairing saves host trust only; it does not grant publishing access yet.
+
+Next, `testd run` asks for permission to publish its names. Approve that request on the host:
 
 ```sh
 testd requests
 testd approve <id>
 ```
 
-The token is saved on the leaf and reused. The app can listen on the leaf's `127.0.0.1`; the leaf forwards requests to it locally.
+The leaf saves its issued token and reuses it on future runs. Your app can keep listening on `127.0.0.1` on the remote machine; the leaf forwards traffic to it over local HTTP after authenticating the host over mutual TLS.
 
-Remote credentials are sent only after verifying the paired host over TLS 1.3. Application requests use mutual TLS to the leaf. The host must be able to reach the leaf's dynamically allocated TLS ports; pairing does not create a route through NAT. Do not expose port 7737 to the internet. See [Security](security.md).
+The host does need a direct route to the leaf's dynamically allocated TLS ports (pairing does not traverse NAT). Never expose port `7737` to the public internet. See [Remote development](advanced.md#remote-development) and [Security](security.md).
 
-## Where next
+## Where to go next
 
-- [Daily usage](usage.md): names, dashboard, sharing, access requests, troubleshooting
-- [Advanced usage](advanced.md): remote leaves, profiles, quick launches, tunnels, external fronts, system service
-- [Reference](reference.md): commands, options, configuration, files, endpoints, limits
+- [Daily usage](usage.md): naming rules, the dashboard, SSH apps, sharing with tunnels, access requests, and troubleshooting
+- [Advanced usage](advanced.md): remote leaves, profiles, quick launches, tunnels, external fronts, and system services
+- [Reference](reference.md): every command, option, config key, file, HTTP endpoint, and limit
 - [Security](security.md): trust boundaries, credentials, exposure, and hardening

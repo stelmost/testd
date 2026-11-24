@@ -5,100 +5,127 @@ description: 'Names, targets, lifetimes, the dashboard, sharing, access requests
 
 # Daily usage
 
+Once your host daemon is running, day-to-day work comes down to registering names, managing them in the dashboard, and optionally sharing a name over a tunnel.
+
 ## Register a name
+
+The most common command is:
 
 ```sh
 testd run app.example:3000
 ```
 
-The general entry forms are:
+Here are all the ways to specify what to register:
 
-| Entry | Meaning |
+| Entry | What it registers |
 |---|---|
-| `:3000` | Name from the current directory; target the leaf's address and port 3000 |
-| `app.example:3000` | Explicit name; target the leaf's address and port 3000 |
-| `10.0.0.5:app.example:3000` | Explicit name and target host |
-| `app.example.test:3000` | A trailing `.test` is stripped |
+| `:3000` | Uses the current directory name; targets port `3000` on this machine |
+| `app.example:3000` | Registers `app.example.test`; targets port `3000` on this machine |
+| `10.0.0.5:app.example:3000` | Registers `app.example.test`; targets `10.0.0.5:3000` explicitly |
+| `app.example.test:3000` | Same as `app.example:3000` (a trailing `.test` is stripped) |
 
-One connection can publish several names:
+You can publish multiple services in one command:
 
 ```sh
 testd run frontend:3000 api:8080
 ```
 
-They share one connection, one token, and one grant list.
+All entries in one `testd run` share a single connection, token, and grant list.
 
-To tie the registration to a process:
+To tie the names to your dev server process, add `--` followed by the command:
 
 ```sh
 testd run app.example:3000 -- npm run dev
 ```
 
-The names appear when the process is running, and go away when it exits or Ctrl+C interrupts it. `testd run` exits with the child's status.
+The names stay live while the command runs and disappear as soon as it exits or you press Ctrl+C. `testd run` exits with your command's exit code.
 
-A bare port is completed with the address the leaf connected from. That is `127.0.0.1` on the host and the dev machine's address on a remote leaf. Use an explicit `host:name:port` or `host:port` when the inferred address is wrong.
+**How bare ports are resolved:**
 
-The app must listen on an address the host can reach. A dev server bound only to `127.0.0.1` on a remote machine is not reachable from the host.
+- On a **local** run, `:3000` targets `127.0.0.1:3000`.
+- On a **paired remote leaf**, `:3000` targets `127.0.0.1:3000` on the leaf itself (the leaf forwards traffic from the host over mutual TLS to its own loopback).
+- If you pass an explicit target host on a local-only registration, the host must be able to reach that address directly.
 
 ## Names and targets
 
-Names are `<service>.<project>`, without the TLD. The host appends `.test`. The daemon stores and shows the bare name, for example `app.example`; browsers use `app.example.test`.
+Write names as `<service>.<project>` without the `.test` suffix. The daemon stores and displays the bare name (for example `app.example`), and browsers open `https://app.example.test`.
 
-Use two labels or more. `app.example.test` and `api.example.test` share a registrable domain, so cookies behave like they do on `app.example.com` and `api.example.com`. A single-label `app.test` is cross-site with every other project, and `testd` prints a warning when you use one. The name `testd.test` is reserved for the dashboard, which the edge serves to this machine only.
+**Why two labels matter:** `app.example.test` and `api.example.test` share a registrable domain, so cookies and SameSite rules behave just like `app.example.com` and `api.example.com`. A single-label name like `app.test` is treated as cross-site with every other project, so `testd` prints a warning when you use one.
 
-Labels may contain ASCII letters, digits, and hyphens, and may not start or end with a hyphen. Each label is at most 63 bytes, and the full name at most 253 bytes. Targets are a bare port, `host:port`, `ip:port`, or `[ipv6]:port`; port 0 and malformed names are rejected.
+A few rules to keep in mind:
 
-The resolver answers registered names with the host's address, not the app target's. The edge speaks HTTP/1.1 and handles WebSocket upgrades, so HMR connections work. The app receives the original `Host` header plus `X-Forwarded-For` and `X-Forwarded-Proto`. For paired remote leaves, the host-to-leaf hop uses mutual TLS and the leaf reaches its local app over HTTP. Local-only direct registrations still use HTTP.
+- Labels may contain ASCII letters, digits, and hyphens, and cannot start or end with a hyphen.
+- Each label can be up to 63 bytes, and the full name up to 253 bytes.
+- `testd.test` is reserved for the local dashboard (reachable only from this machine).
+- Targets can be a bare port, `host:port`, `ip:port`, or `[ipv6]:port` (port `0` is rejected).
+
+**What your app receives:** DNS always points registered names at the host, not directly at the app. The built-in edge speaks HTTP/1.1 and supports WebSocket upgrades (so HMR works out of the box), forwarding the original `Host` header along with `X-Forwarded-For` and `X-Forwarded-Proto`.
 
 ## How long a name lives
 
-A registration is a lease on the TCP connection that created it. Stop the command, kill the process, or lose the network, and the host releases that connection's names. The leaf reconnects every few seconds and registers the same names again. Reconnecting needs no new approval as long as the token and its grant still exist.
+Think of the TCP connection as the lease:
 
-Operator actions differ:
+- Press Ctrl+C, stop the wrapped process, or lose the network, and the host releases those names automatically.
+- If the network drops, a running leaf reconnects every few seconds and re-registers its names without needing approval again (as long as its token and grants still exist).
 
-| Action | Effect |
+Different actions in the dashboard and CLI affect tokens, grants, and live names differently:
+
+| Action | What happens |
 |---|---|
-| Stop | Ends the leaf connection; the token and grants stay; the next run registers the same names immediately |
-| Delete | Removes the grant for one name and stops it; the leaf keeps its other names and asks for that name again on the next use |
-| Revoke token | Deletes the token, closes every connection using it, and releases all of its names; the leaf forgets the credential |
+| **Stop** (dashboard) | Ends the leaf connection now, but keeps its token and grants. The next run works immediately without re-approval. |
+| **Delete** (dashboard) | Stops that one name and removes it from the token's grant list. Other names on the leaf keep running; publishing that name again will ask for approval. |
+| **Revoke token** (dashboard or `testd tokens --revoke <id>`) | Deletes the token, closes every connection using it, releases all of its names, and tells the leaf to forget its saved credential. |
 
-Stop and Delete are dashboard actions. Revoke is `testd tokens --revoke <id>` or the dashboard's token card.
-
-To take names owned by another connection, use `--force`:
+If another connection already owns a name and you intentionally want to take it over, pass `--force`:
 
 ```sh
 testd run --force app.example:3000
 ```
 
-Use it only when you intend to take over the name. Without it, a duplicate name fails with the owner's connection id.
+Without `--force`, a duplicate name fails and reports the current owner's connection id.
 
 ## The dashboard
+
+To open the dashboard from the CLI (in the same user account that owns the daemon):
 
 ```sh
 testd dashboard
 ```
 
-Run it in the daemon owner's account. The link includes a per-run bootstrap credential in its fragment; the dashboard removes it from history and authenticates requests from origin-scoped session storage. Restarting the daemon invalidates the session. A bare `http://127.0.0.1:7737/` or `https://testd.test/` page does not grant administration or reveal live state. Every mutation also needs the `X-Testd-Request: 1` header.
+If you use the desktop tray app, you can also open it directly from the tray menu.
 
-The dashboard shows:
+The printed URL carries a one-run bootstrap token in its URL fragment. As soon as the page loads, it strips the token from your browser history and stores it in origin-scoped session storage. Restarting the daemon invalidates the session, and visiting bare `http://127.0.0.1:7737/` or `https://testd.test/` without a valid session does not expose live state or admin controls. Every mutating request also requires the `X-Testd-Request: 1` header.
 
-- Live names, with Stop and, for issued grants, Delete
-- Active shares, with a stop button
-- Access requests, with approve and deny
-- Issued tokens, with a revoke button
-- Quick launches for local commands, with start, stop, and logs
-- SSH apps, with open, stop, and SSH prompts
-- Certificate trust state, fingerprint, and expiry, with install and remove actions
+Inside the dashboard you will find:
 
-The loopback listener checks the Host header, and the edge forwards the dashboard name only for clients on this machine. A foreign Host or a non-loopback dashboard peer is refused even when it supplies a credential.
+- **Live names**: currently registered names, with **Stop** and (for issued grants) **Delete**
+- **Shares**: active tunnel URLs, with a **Stop** button
+- **Access**: pending pairing and name-grant requests, with **Approve** and **Deny**
+- **Tokens**: issued leaf tokens, with **Revoke**
+- **Quick launches**: saved local commands you can start, stop, and inspect logs for
+- **SSH apps**: saved remote apps over SSH, with **Open**, **Stop**, and interactive SSH prompts
+- **Certificate**: system trust status, SHA-256 fingerprint, expiry, install/remove controls, and a separate Firefox trust check when opened in Firefox
 
-SSH apps can forward an already running app or start a saved command on the SSH host. Starting a command checks `~/.local/bin/testd` and the remote PATH for the same testd version as the local installation. If it is missing or differs, the dashboard asks you to approve installing that version into `~/.local/bin/testd`, then starts the command. Cancelling the prompt leaves the remote installation untouched.
+The dashboard only responds on loopback (and `https://testd.test/` is forwarded by the edge for local clients only). Foreign `Host` headers and non-loopback peers are rejected even with a valid credential.
 
-SSH apps that start commands target Linux and macOS remote hosts. Windows is supported as the local client; starting commands and automatic installation on native Windows SSH hosts are unsupported.
+### SSH apps in the dashboard
 
-Automatic remote installation supports Linux x86_64 and macOS x86_64 or arm64. It downloads the version-pinned CLI release from GitHub over HTTPS and verifies its `SHA256SUMS` entry before installing. The SSH host needs a POSIX shell, `tar`, `curl` or `wget`, and `sha256sum` or `shasum`. An existing `~/.local/bin/testd` is backed up under `~/.local/share/testd/backups` before replacement. The installed binary is invoked by its full path; editing the remote PATH or running privileged setup is unnecessary. Forwarding an already running app needs only OpenSSH.
+**SSH apps** let you open a remote dev server as a local `https://<name>.test` URL using your normal OpenSSH setup (`~/.ssh/config`, keys, passphrases, 2FA prompts):
 
-`/api/status` lists names, targets, projects, advisories, and shares. API clients read the private control file's `client_addr` and `dashboard_token`, then send `Authorization: Bearer <dashboard_token>`; do not put credentials in command lines or logs. `/ca.crt` is public and returns the root certificate:
+- **Forward an existing app:** Enter the SSH host alias, remote port, and local name, then click **Open**. Needs only OpenSSH on the remote host.
+- **Start a remote command:** Have testd start and stop the dev server on the remote machine over the same SSH connection. Before starting, testd checks `~/.local/bin/testd` and the remote `PATH` for a matching testd version. If it is missing or different, the dashboard prompts you to approve installing that version into `~/.local/bin/testd` (cancelling leaves the remote host untouched).
+
+A few details about starting remote commands and automatic install:
+
+- Remote command execution targets **Linux and macOS** SSH hosts. Windows works as the local client, but starting commands and auto-installing on native Windows SSH hosts are not supported.
+- Automatic installation supports Linux `x86_64` and macOS `x86_64` / `arm64`. It downloads the matching version-pinned CLI release from GitHub over HTTPS, verifies its `SHA256SUMS` entry, and backs up any existing `~/.local/bin/testd` under `~/.local/share/testd/backups`.
+- The remote host needs a POSIX shell, `tar`, `curl` or `wget`, and `sha256sum` or `shasum`. No root privileges or remote `PATH` edits are needed because testd invokes the installed binary by its full path.
+
+### API access and root certificate download
+
+For scripts talking to `/api/status` or other dashboard endpoints, read `client_addr` and `dashboard_token` from the owner-private `control.json` and send `Authorization: Bearer <dashboard_token>` (keep credentials out of command lines and logs).
+
+The public root certificate is always available without authentication at `/ca.crt`:
 
 ```sh
 curl http://127.0.0.1:7737/ca.crt -o testd-root.crt
@@ -106,28 +133,30 @@ curl http://127.0.0.1:7737/ca.crt -o testd-root.crt
 
 ## Check and repair
 
+Run `testd doctor` any time something looks off:
+
 ```sh
 testd doctor
 testd doctor --json
 testd doctor --fix
 ```
 
-`doctor` checks configuration, the operator secret, the resolver route, name resolution, optional Caddy wiring, and the edge. PKI validity is required for registration TLS even with the built-in edge disabled. The built-in browser edge additionally requires OS root trust; an external front owns its own browser trust. The exit codes are stable:
+`doctor` checks your config, operator secret, OS resolver route, actual `.test` DNS resolution, optional Caddy integration, PKI validity, and the HTTPS edge. (PKI is always required for registration TLS even when the built-in browser edge is disabled; OS root trust is required only when the built-in edge is enabled.)
 
-| Code | Meaning |
+| Exit code | Meaning |
 |---|---|
-| `0` | Ready |
+| `0` | Everything is ready |
 | `1` | Missing or invalid configuration or state |
-| `2` | Resolver route or name resolution is wrong |
-| `3` | Certificate trust, PKI, or the HTTPS edge is not ready |
+| `2` | Resolver route or `.test` DNS resolution is broken |
+| `3` | PKI, certificate trust, or the HTTPS edge is not ready |
 
-`--fix` applies privileged repairs: configure the OS resolver, write a missing operator secret, add the Caddyfile import, reload Caddy, and install or reinstall the root.
+`testd doctor --fix` applies privileged repairs: configures the OS resolver, writes a missing operator secret, adds the Caddyfile import and reloads Caddy if configured, and installs or reinstalls the root certificate.
 
-While the daemon runs, it re-checks the resolver every 10 seconds and root trust every 60 seconds, with an immediate check after a repair. On a desktop session, a failure is posted as a notification whose activation runs the repair. Without a notification service, the same notices are logged as `[notice]`.
+While the daemon runs, it automatically re-checks the resolver every 10 seconds and root trust every 60 seconds (plus immediately after any repair). On a desktop session, failures pop up as notifications you can click to trigger the repair; in headless mode, they are logged as `[notice]`.
 
 ## Share a name
 
-Names resolve only on the host. To reach one from a phone, a webhook, or a colleague, use a tunnel:
+`.test` names only resolve on your host machine. When you need to test on a phone, receive a webhook, or show a colleague, share a live name through a tunnel:
 
 ```sh
 testd share app.example
@@ -136,30 +165,26 @@ testd share --list
 testd share --stop app.example
 ```
 
-| Provider | Exposure | Requires |
+| Provider | Who can reach it | What you need installed |
 |---|---|---|
-| `cloudflared` | Public internet | `cloudflared` on `PATH`; no account for a quick tunnel |
-| `ngrok` | Public internet | `ngrok` on `PATH`; run `ngrok config add-authtoken` once |
+| `cloudflared` (default) | Public internet | `cloudflared` on `PATH` (no account needed for quick tunnels) |
+| `ngrok` | Public internet | `ngrok` on `PATH` (run `ngrok config add-authtoken` once) |
 | `tailscale` | Your tailnet | `tailscale` on `PATH` |
 
-All providers require the daemon's plain HTTP routing listener, even when an external front handles TLS.
+All providers route through the daemon's plain HTTP listener (`http_addr`), even when an external front handles TLS.
 
-The daemon owns the tunnel, not the CLI process, so closing the terminal does not close the share. A share ends when its owning connection or target changes, including a reconnect to the same target; share it again after reconnecting. Repeating an unchanged registration on the same connection keeps the share. A failed change also keeps it only when the original claim is restored without an intervening successful change. The dashboard's Shares card and the tray menu provide the same controls.
+The daemon owns the tunnel process, so closing your terminal will not drop the share. A share stays up until you stop it, or until the name's owning connection or target changes (reconnecting to the same target also ends the share, so share again afterward; repeating an unchanged registration on the same connection keeps it). You can also start and stop shares from the dashboard's **Shares** card and the tray menu.
 
-A public share is a public route to the app. A tailnet share is only as private as the tailnet.
+Remember: a public share (`cloudflared` or `ngrok`) exposes your local app to anyone with the URL, and a Tailscale share is as private as your tailnet.
 
 ## Access requests and tokens
 
-The host intake defaults to loopback. For a remote leaf, configure a reachable `[host] listen_addr` and restrict access. Pair by comparing the independently displayed codes on the host and leaf, approving on the host, and entering the host's code on the leaf. Pairing establishes host trust; publishing still needs a separate grant. The application must be local to the leaf, and the host must reach the leaf's dynamically allocated TLS listeners. See [Advanced usage](advanced.md#remote-development).
+Remote leaves connect over TLS 1.3 and need two separate approvals the first time:
 
-A leaf with no credential for the selected profile asks for access, naming the names it wants:
+1. **Pairing** (`testd pair <host>`): establishes trust in the host's identity using matching verification codes on both sides. Pairing does not grant permission to publish names.
+2. **Publishing grant** (`testd run --host <host> ...`): asks the host for permission to publish specific names.
 
-```sh
-testd pair 192.168.1.5
-testd run --host 192.168.1.5 :3000
-```
-
-On the host:
+On the host, inspect and decide pending requests with:
 
 ```sh
 testd requests
@@ -167,55 +192,55 @@ testd approve <id>
 testd deny <id>
 ```
 
-`requests` lists the request id, leaf label, requested names, source address, and age. The label comes from the leaf and carries the project its names cover, for example `user@host:example`. A request waits up to two minutes. A denied or expired request ends that leaf attempt; run it again to ask again. The dashboard's Access card and the tray notification provide the same decisions.
+You can also approve or deny from the dashboard's **Access** card or desktop tray notifications. Requests include the leaf label (for example `user@host:example`), requested names, source address, and age, and expire after two minutes. If a request is denied or expires, just run the leaf command again to send a fresh request.
 
-A token covers exact names. If a leaf publishes a name outside its grant, the host queues a request for that one name and keeps the registration waiting. Approving adds the name to the existing token without touching its other names.
+Tokens are scoped to exact names. If an already-approved leaf later tries to publish a new name, the host queues a request for just that one name and holds the registration until you decide. Approving adds the new name to the existing token without disturbing its other names.
 
-List and revoke tokens:
+Manage issued tokens with:
 
 ```sh
 testd tokens
 testd tokens --revoke <id>
 ```
 
-A token can be used by more than one connection; those connections share its grants. The list shows the token id, label (`user@host:project`), granted names, issue age, and last use. Secrets are never printed. Revoking closes every connection using that token, releases its names, and makes the leaf forget its stored credential. Run the leaf again to request access.
+Token secrets are never printed. Multiple connections can reuse the same token and share its grants. Revoking a token closes every connection using it, releases its names, and makes the leaf discard its saved credential.
 
-For unattended clients, the operator secret can be presented as `TESTD_TOKEN`:
+For unattended automation where interactive approval is not possible, you can pass the host's operator secret via `TESTD_TOKEN`:
 
 ```sh
 export TESTD_TOKEN=<operator secret>
 ```
 
-This admits registrations without approval and is not individually revocable. Prefer an issued token for CI. See [Advanced usage](advanced.md#credentials-and-profiles).
+Because the operator secret grants access to any valid name and cannot be revoked per client, prefer an issued token for CI whenever possible. See [Credentials and profiles](advanced.md#credentials-and-profiles).
 
 ## Common workflows
 
-| Task | Command or action |
+| Goal | What to run or click |
 |---|---|
-| Run the app on another port | `testd run app.example:4000` |
-| Add an API next to the UI | `testd run frontend:3000 api:8080 -- npm run dev` |
-| Restart the dev server | Restart the command; the name returns when the process is back |
-| Keep a name after a child exits | Run `testd run ...` without `--`, or use a dashboard Quick launch |
+| Move an app to another port | `testd run app.example:4000` |
+| Run frontend and API together | `testd run frontend:3000 api:8080 -- npm run dev` |
+| Restart a dev server | Restart the command; the name comes back automatically |
+| Keep a name even if a server restarts | Run `testd run ...` without `--`, or use a dashboard **Quick launch** |
 | Take over a stale or duplicate name | `testd run --force ...` |
-| Temporarily stop a name | Dashboard Stop, then run again |
-| Remove one name's access | Dashboard Delete on that name |
-| Change the project's cookie domain | Use `<service>.<project>`, not a single label |
-| Use a high HTTPS port | Set `[host] edge_addr` and include the port in the URL |
+| Pause a name temporarily | Dashboard **Stop** (next run registers without re-approval) |
+| Remove permission for one name | Dashboard **Delete** on that name |
+| Match production cookie scoping | Use `<service>.<project>` instead of a single label |
+| Avoid port 443 | Set `[host] edge_addr` to a high port (for example `127.0.0.1:8443`) and include `:8443` in URLs |
 
 ## Troubleshooting
 
-| Symptom | Likely cause and fix |
+| Problem | Likely cause and fix |
 |---|---|
-| Browser certificate warning | Root is not trusted; run `testd doctor --fix`. Firefox may need a separate trust import |
-| Name does not resolve | Resolver is not configured, or the daemon is not running; run `testd doctor` |
-| 404 from the edge | No live claim: the leaf stopped, the name was stopped, or its grant was deleted |
-| 502 from the edge | The host cannot reach the target: wrong address, app bound only to loopback, or a firewall |
-| Duplicate name | Another connection owns it; use `--force` only for an intentional takeover |
-| Authentication failed | Stale credential after a host reset or a revoked token; remove `~/.config/testd/credentials/<profile>` and run again |
-| Access request expired | The operator did not approve within two minutes; run the leaf again |
-| `port 53 already in use` on Windows | Another service owns the DNS port; stop it, or use Linux or macOS where testd uses 7753 |
-| `nothing is serving HTTPS` | Start `testd host`; check `edge_addr`; ports below 1024 need a capability or a privileged launch |
-| `no daemon is running` | Start `testd host` or the tray; the dashboard, shares, requests, and tokens live in the daemon |
-| Share has no URL | The provider is missing, not authenticated, or failed to report a URL; check the daemon log |
+| Browser shows a certificate warning | Root CA is not trusted yet; run `testd doctor --fix`. In Firefox, open the dashboard to check Firefox trust and import the root if prompted. |
+| `.test` name does not resolve | OS resolver is not configured or `testd host` is not running; run `testd doctor`. |
+| `404` from the edge | No live registration for that name: the leaf stopped, you clicked **Stop**, or its grant was deleted. |
+| `502` from the edge | The host cannot reach the target: wrong port/address, remote server bound only to loopback without a paired leaf, or a firewall blocking it. |
+| Duplicate name error | Another connection already owns the name; pass `--force` only if you want to take it over. |
+| Authentication failed | Stale credential after revoking a token or resetting the host; delete `~/.config/testd/credentials/<profile>` and run again. |
+| Access request expired | Nobody approved it within two minutes; run `testd run` again. |
+| `port 53 already in use` on Windows | Another local DNS service owns UDP port 53; stop it so testd can bind `.test` DNS. |
+| `nothing is serving HTTPS` | Start `testd host` and check `edge_addr`; on Linux, port 443 needs `CAP_NET_BIND_SERVICE` or a high port. |
+| `no daemon is running` | Start `testd host` or the desktop tray app; the dashboard, shares, requests, and tokens live in the daemon. |
+| Share has no URL | Tunnel provider is missing, not authenticated (`ngrok`), or failed to report a URL; check the daemon logs. |
 
-More platform and configuration detail is in the [Reference](reference.md).
+For full flag lists, config keys, and platform specifics, see the [Reference](reference.md).

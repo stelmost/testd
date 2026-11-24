@@ -5,15 +5,31 @@ description: 'Remote development, profiles, grants, quick launches, tunnels, ext
 
 # Advanced usage
 
+This guide covers everything beyond basic local naming: SSH apps, direct remote leaves, profiles, quick launches, tunnels, external reverse proxies, privileged ports, desktop integration, PKI, and clean removal.
+
 ## SSH apps
 
-Complete the local setup on the machine with your browser. In the dashboard’s **SSH apps**, enter the host alias you use with `ssh` (for example `devbox`), the remote app port, and a local name. Save the app and select **Open**. testd uses your OpenSSH configuration and shows any SSH prompt in the dashboard. It opens the local HTTPS URL once the HTTP app on the remote machine’s loopback responds. Select **Stop** to close the tunnel and release the name. [Quickstart](quickstart.md)
+SSH apps are the easiest way to reach a dev server on a remote machine without exposing port `7737` on your host.
 
-Choose **Start a remote command** to have testd own the app process. Install the current `testd` on the SSH host’s noninteractive PATH and enter the command, its project directory if needed, and the port it listens on at remote `127.0.0.1`. **Open** starts the command and forwards its port on one SSH connection. **Stop** withdraws the local name and waits for the SSH leaf to stop the command and its children. The leaf also stops them if the SSH session closes or stops receiving heartbeats.
+1. Finish the local host setup on the machine with your browser (see [Quickstart](quickstart.md)).
+2. Open the dashboard and go to **SSH apps**.
+3. Enter the SSH host alias you normally pass to `ssh` (for example `devbox`), the remote port your app listens on, and the local `.test` name you want.
+4. Save the app and click **Open**.
 
-### SSH forwarding
+testd uses your existing OpenSSH configuration and surfaces any interactive SSH prompts (passphrases, host-key checks, 2FA) directly in the dashboard. Once the HTTP app on the remote machine's loopback responds, testd opens the local HTTPS URL. Click **Stop** to close the tunnel and release the name.
 
-You can also use the command line. This example forwards an app listening on `127.0.0.1:3000` on `devbox`. Its SSH server must allow local TCP forwarding. The command uses non-interactive SSH authentication.
+### Starting a remote command over SSH
+
+If you want testd to start and stop the remote dev server for you, select **Start a remote command** when creating the SSH app, and enter the command, optional project directory, and the port it listens on at remote `127.0.0.1`.
+
+- **Open** connects over one SSH session, starts the command, and forwards its port.
+- **Stop** removes the local `.test` name and waits for the SSH leaf to stop the remote command and its child processes.
+- If the SSH session drops or stops receiving heartbeats, the remote leaf cleans up the command and its children automatically.
+- If the matching version of `testd` is not found in `~/.local/bin/testd` or on the remote `PATH`, the dashboard asks for confirmation before downloading and verifying it into `~/.local/bin/testd`. (Remote command execution targets Linux and macOS SSH hosts; Windows is supported as the local client.)
+
+### SSH forwarding from the command line
+
+You can also wire up SSH port forwarding yourself with `testd run`. The remote SSH server must allow local TCP forwarding:
 
 ```sh
 testd run --host 127.0.0.1 app.example:18080 -- \
@@ -22,66 +38,84 @@ testd run --host 127.0.0.1 app.example:18080 -- \
     -L 127.0.0.1:18080:127.0.0.1:3000 devbox
 ```
 
-Open `https://app.example.test` once SSH connects. testd serves HTTPS locally and sends app traffic through the SSH forward. If `18080` is in use, choose a free local port and use it in both places.
+Once SSH connects, open `https://app.example.test`. If local port `18080` is busy, pick any free port and use it in both places. When the `ssh` process exits, testd removes the name.
 
-testd removes the name when the foreground SSH process exits. For an interactive login, run the `ssh` part in a separate terminal without `-o BatchMode=yes`. Once it connects, run `testd run --host 127.0.0.1 app.example:18080` in another terminal. Stop both when you finish.
+Need an interactive SSH login (password or 2FA)? Run the `ssh` command in one terminal without `-o BatchMode=yes`, and once connected run `testd run --host 127.0.0.1 app.example:18080` in a second terminal. Stop both when you are done.
 
 ## Remote development
 
-The host intake defaults to loopback. To accept remote leaves, set `[host] listen_addr` to a reachable address. A specific non-loopback intake bind also starts a loopback listener on the same port for the dashboard and local launches. A `0.0.0.0:7737` bind includes loopback but exposes the intake on every IPv4 interface; if used, restrict port 7737 with a firewall.
+Use a direct remote leaf when your code runs in a VM, container, WSL distro, or LAN box that can reach your host directly.
 
-Pair the host before registering from a leaf:
+### 1. Open the host intake listener
+
+By default, `[host] listen_addr` binds `127.0.0.1:7737` (loopback only). To accept remote leaves, set it in `config.toml` to a reachable IP address (for example `192.168.1.5:7737`).
+
+- Binding a specific non-loopback address automatically keeps a loopback listener on the same port for the dashboard and local launches.
+- Binding `0.0.0.0:7737` listens on every IPv4 interface; if you use it, restrict port `7737` with a firewall. Never expose port `7737` to the public internet.
+
+### 2. Pair the leaf with the host (once per host endpoint)
+
+On the remote machine:
 
 ```sh
 testd pair 192.168.1.5
 ```
 
-The leaf and host independently derive a 128-bit verification code from their TLS session. Read the host's code in its dashboard Access card or `testd requests`, compare it with the leaf, approve the pairing request on the host, and enter the host's code on the leaf. Do not confirm an echoed code received from an unverified network message. Pairing requests expire after two minutes.
+Both the leaf and the host independently derive a 128-bit verification code from their TLS 1.3 session:
 
-The leaf saves the host CA in `trusted-hosts/<endpoint-hash>.crt`, scoped to that endpoint and to testd, not installed into the OS trust store. Ordinary transport certificate renewal preserves this pin. A changed host identity fails before authentication; explicitly run `testd pair` again only after verifying the change. Re-pairing preserves the previous public pin as a fingerprinted `.previous.crt` file. Pair every endpoint selected through a node profile or `--hosts`.
+1. Check the host's code in the dashboard **Access** card or with `testd requests`.
+2. Verify it matches the code shown on the leaf (never trust a code sent over an unverified channel).
+3. Approve the pairing request on the host, then enter the host's code on the leaf.
 
-Network registration uses TLS 1.3, even when `TESTD_TOKEN` supplies a credential. It never falls back to plaintext. A remote leaf with no credential for the selected profile separately asks for publishing access. On the host:
+Pairing requests expire after two minutes. Once approved, the leaf saves the host CA in `trusted-hosts/<endpoint-hash>.crt` (scoped to that endpoint and to testd, never added to the OS trust store).
+
+- Routine transport certificate renewals keep working with the existing pin.
+- If the host identity changes, testd fails before sending any credential. Verify the change, then run `testd pair` again; the old public pin is preserved as a fingerprinted `.previous.crt` file.
+- If you use multiple host addresses in a node profile or `--hosts`, pair each one.
+
+### 3. Request a publishing token
+
+Network registration always uses TLS 1.3 (even when `TESTD_TOKEN` is set) and never falls back to plaintext. The first time you run `testd run` from a paired leaf without a token for the selected profile, it asks the host for publishing permission. Approve it on the host:
 
 ```sh
 testd requests
 testd approve <id>
 ```
 
-The leaf saves the issued token in `~/.config/testd/credentials/<profile>` and reuses it. Later runs do not ask again unless the token is revoked or the host state is reset.
+The leaf saves the token to `~/.config/testd/credentials/<profile>` and reuses it on future runs. If the host is rebuilt or `tokens.json` is lost, the stored token will be rejected; delete the file and run again:
 
-A bare application port is reached through the leaf's loopback interface. An explicit target must resolve to an address on the leaf itself; run the leaf beside the application rather than adding an unencrypted third-machine hop. Existing local-only registrations can still name direct targets.
+```sh
+rm ~/.config/testd/credentials/<profile>
+```
 
-A remote leaf may only target its own address by default. To allow a different target, set:
+### How traffic flows to a remote leaf
+
+For a paired leaf, traffic from the host to the leaf uses **mutual TLS 1.3**, and the final hop from the leaf forwarder to your dev server uses plain local HTTP:
+
+- Leaf forwarding keys live in memory only for that registration connection.
+- Your dev server can keep listening on `127.0.0.1` on the leaf.
+- The leaf opens one dynamically allocated TLS port per published entry on the interface it used to reach the host (up to 64 endpoints per connection). The host needs a return route and firewall permission to reach those ports; pairing does not traverse NAT.
+- Dropping the registration or withdrawing a grant immediately closes the affected forwarders and open streams.
+
+By default, a remote leaf may only forward to addresses on the leaf itself (preventing a remote leaf from turning a `.test` name into a proxy into your host's loopback or LAN). You can relax the host-side target-address check with:
 
 ```toml
 [host]
 allow_remote_targets = true
 ```
 
-This turns an issued name into a possible proxy into the host's loopback or another network. Enable it only for leaves you would already trust with that reach.
-
-For a secure leaf, application requests use mutual TLS from the host to the leaf forwarder, then HTTP to the local application. Leaf signing keys exist only in memory for that registration connection. The host authenticates the leaf's advertised CA through the encrypted registration; the leaf accepts application connections only with a client certificate from its paired host CA. Host root and intermediate private keys never leave the host.
-
-The leaf binds one dynamically allocated TLS listener per published entry on the interface used to reach the host. The host needs a return route and firewall permission to those listeners. Dev servers can listen on loopback; a successful registration does not establish NAT traversal. Each connection supports up to 64 application endpoints. Losing the registration or withdrawing a grant closes the affected forwarders, including open streams.
-
-Unpaired numeric loopback and `localhost` endpoints retain the local-only protocol, with a second check that the actual peer is loopback. Pairing a loopback endpoint explicitly selects TLS. A source-rewriting SSH forward changes apparent addresses and is not a drop-in remote-development topology. Never expose port 7737 to the public internet.
-
-If the host is rebuilt or `tokens.json` is lost, the leaf's stored credential is rejected. Remove the credential file and run again:
-
-```sh
-rm ~/.config/testd/credentials/<profile>
-```
+Only enable this for leaves you already trust with that network reach. Note that unpaired numeric loopback and `localhost` endpoints keep the local-only protocol (verified against the actual peer address); pairing a loopback endpoint explicitly enables TLS. Source-rewriting SSH port forwards are not a drop-in remote-leaf topology.
 
 ## Credentials and profiles
 
-Two independent profiles answer two different questions:
+testd uses two separate profile concepts so you can mix and match hosts and permissions cleanly:
 
-| Profile | Question | Stored in |
+| Profile | What it chooses | Where it lives |
 |---|---|---|
-| Node profile | Which host addresses to connect to | `~/.config/testd/leaf.toml` |
-| Token profile | Which credential file to present | `~/.config/testd/credentials/<profile>` |
+| **Node profile** | Which host address(es) to connect to | `~/.config/testd/leaf.toml` |
+| **Token profile** | Which credential file to present | `~/.config/testd/credentials/<profile>` |
 
-Example node profile:
+### Node profiles (`leaf.toml`)
 
 ```toml
 default_profile = 'home'
@@ -90,202 +124,207 @@ default_profile = 'home'
 hosts = ['192.168.1.5:7737', '192.168.1.6:7737']
 ```
 
-Select it with `--node-profile home` or `TESTD_PROFILE=home`. A one-off address wins over the profile:
+Pick a node profile with `--node-profile home` or `TESTD_PROFILE=home`, or override it for a single run:
 
 ```sh
 testd run --host 192.168.1.5 :3000
 testd run --hosts 192.168.1.5:7737,192.168.1.6:7737 :3000
 ```
 
-Selection order:
+Multiple addresses are useful when one host is reachable over more than one interface. (A token issued by one host does not authenticate against a different host.)
 
-1. Host addresses: CLI or environment, then the selected node profile, then the host's own loopback listener. A CLI `--host` or `--hosts` entry without a port gets `:7737`; environment and `leaf.toml` addresses must include a port.
-2. Token profile: `TESTD_TOKEN_PROFILE`, then the CLI option, then `token_profile` in `.testd.toml`, then `default`.
-3. Credential: `TESTD_TOKEN`, then the credential file for the token profile, then the host config's operator secret when the default profile is selected and every node address is loopback.
+### Project token profiles (`.testd.toml`)
 
-The operator secret fallback exists so a local run on the host works without an approval. It is never sent to another machine automatically. If you put it in `TESTD_TOKEN` on a leaf, you are deliberately copying it there.
-
-Use a project file to give one project its own token profile:
+Give a project its own token profile by placing a `.testd.toml` file in the project root:
 
 ```toml
-# .testd.toml
+# .testd.toml (safe to commit; contains no secrets)
 token_profile = 'myproject'
 ```
 
-The file contains no secret and is safe to commit. Separate token profiles give separate grants and separate revocation. If every project uses `default`, they all share one token and one grant list.
+Separate token profiles mean separate grants and independent revocation. If every project uses `default`, they all share one token and one grant list.
 
-Several addresses are useful when they reach the same host. A token issued by one host does not authenticate against a different host. Use the operator secret across hosts only when you accept that tradeoff.
+### Precedence rules
 
-For CI, obtain a token once interactively, then store `~/.config/testd/credentials/<profile>` in the CI secret store. The operator secret is broader and cannot be revoked individually. Do not commit either.
+1. **Host addresses:** `--host` / `--hosts` (or `TESTD_HOST` / `TESTD_HOSTS`) → selected node profile → host's own loopback listener. CLI `--host` and `--hosts` entries without a port default to `:7737`; env vars and `leaf.toml` entries must include a port.
+2. **Token profile:** `TESTD_TOKEN_PROFILE` → `--token-profile` → `token_profile` in `.testd.toml` → `default`.
+3. **Credential:** `TESTD_TOKEN` → `~/.config/testd/credentials/<profile>` → the host config's operator secret (only when the `default` token profile is active and every target host address is loopback).
+
+The loopback operator-secret fallback is why local runs work without an approval prompt. It is never sent to another machine automatically.
+
+For CI, obtain a scoped token interactively once and store `~/.config/testd/credentials/<profile>` in your CI secret store rather than sharing the broader operator secret. Never commit credentials.
 
 ## Grants and lifecycle
 
-A token is durable permission. A grant is the token's list of exact names. A claim is a live registration on a connection. The connection is the lease. A token is the key, its grants are the doors it may open, and a claim is a door currently held open.
+A simple mental model:
 
-| Event | Token | Grant | Claim | Leaf |
+- **Token** = the key (durable permission stored on host and leaf).
+- **Grant** = the exact list of names that key is allowed to publish.
+- **Claim** = a live registration currently held open by an active TCP connection.
+
+| Event | Token | Grant | Claim | What the leaf does |
 |---|---|---|---|---|
-| Ctrl+C or process exit | Kept | Kept | Released | Exits |
-| Dashboard Stop | Kept | Kept | Released | Stops; next run registers again |
-| Dashboard Delete on a name | Kept | That name removed | Released | Stops that name; asks again next time |
-| Token revoke | Deleted | All names gone | Released | Connection closes, credential forgotten |
+| Ctrl+C or wrapped command exits | Kept | Kept | Released | Exits |
+| Dashboard **Stop** | Kept | Kept | Released | Stops; next run registers immediately |
+| Dashboard **Delete** on a name | Kept | That name removed | Released | Stops that name; asks again next time |
+| **Revoke** token | Deleted | All names gone | Released | Closes connection and forgets credential |
 | Network drop | Kept | Kept | Released when noticed | Reconnects and re-registers |
-| Host reset | Gone | Gone | Gone | Stored credential rejected; remove it and run again |
+| Host reset | Gone | Gone | Gone | Credential rejected; delete file and run again |
 
-A name outside a token's grant does not fail the registration outright. The host queues a request for that one name and holds the registration until the operator decides. Approving adds the name to the existing token. Deleting one name removes only that name. If a revoked token was supplied through `TESTD_TOKEN`, unset or replace the variable before running again; the leaf cannot clear it for you.
+If a leaf with a valid token tries to publish a name not yet in its grant list, the host does not reject it outright: it queues a request for just that new name and waits for your decision. Approving adds the name to the existing token. If a revoked token came from `TESTD_TOKEN`, unset or replace the environment variable before running again.
 
-Quick launches and the operator secret are not issued grants. Names published that way have no per-leaf grant to delete, so the dashboard offers only Stop for them.
+Names published by quick launches or with the operator secret have no per-leaf grant to delete, so the dashboard offers only **Stop** for them.
 
 ## Quick launches
 
-A quick launch is a saved local command started from the dashboard or tray. The dashboard serves process controls on loopback. The tray lists saved launches with Start and Stop actions.
+A quick launch is a saved local command that you start and stop from the dashboard or desktop tray.
 
-A launch definition has a label, a command, an optional working directory, an optional environment, and one or more name entries. The dashboard asks for the full project directory so commands run there rather than in the tray's or daemon's starting directory. For each entry:
+Each definition includes a label, command, optional working directory (give the full project path so commands do not run in the daemon's starting directory), optional environment variables, and one or more name entries:
 
-- An empty target, or `auto`, detects the child's listening port.
-- A port or `host:port` overrides detection.
-- The name moves through `configured`, `probing`, and `confirmed`; it is registered only after the target accepts.
+- Leaving a target empty (or setting `auto`) automatically detects the port your child process listens on.
+- Providing a port or `host:port` skips auto-detection.
+- Each entry progresses from `configured` → `probing` → `confirmed`, and the `.test` name is registered only once the target accepts connections.
 
-Running state is not persisted. Definitions live in `~/.config/testd/launches.json`; logs are capped in memory. Stop ends the process group. Quitting the app stops every launch.
+Definitions are saved in `~/.config/testd/launches.json`. Running state is not persisted across restarts, and logs are kept in memory (up to 500 lines). Clicking **Stop** ends the process group, and quitting the app stops all running launches.
 
 ## Tunnels in depth
 
-`testd share` asks the running daemon to start a provider. The provider is spawned from `PATH`, never linked or called through an SDK.
+`testd share` asks the running daemon to spawn a tunnel provider binary from `PATH` (no vendor SDKs or linked libraries):
 
-| Provider | Exposure | URL source |
-|---|---|---|
-| `cloudflared` | Public internet | Provider output |
-| `ngrok` | Public internet | Provider output |
-| `tailscale` | Tailnet | `tailscale status --json` |
+| Provider | Exposure | Where the URL comes from | Notes |
+|---|---|---|---|
+| `cloudflared` | Public internet | Provider output | Quick tunnel; no account needed |
+| `ngrok` | Public internet | Provider output | Run `ngrok config add-authtoken` once |
+| `tailscale` | Tailnet | `tailscale status --json` | One Tailscale share at a time |
 
-`cloudflared` uses a quick tunnel and needs no account. `ngrok` needs `ngrok config add-authtoken` once.
-
-Every provider targets the daemon's plain HTTP routing listener, which runs with or without built-in TLS. The provider hostname is a claim-bound alias. The edge preserves the incoming `Host` and uses the existing forwarded-header trust setting for the scheme. For secure claims, the edge authenticates the leaf over TLS; providers do not receive host signing keys.
-
-Share aliases are not restored on restart. A provider process can survive a daemon crash, and `tailscale serve --bg` persists its configuration. On startup, `testd` warns about matching Tailscale edge routes but leaves them untouched; a matching target does not prove ownership. Existing `:443` configuration blocks a new Tailscale share, even when it points at the same edge. Inspect provider state after a crash; an empty share list is not proof of cleanup.
-
-Overrides:
+Override defaults with environment variables:
 
 | Variable | Meaning |
 |---|---|
 | `TESTD_TUNNEL_PROVIDER` | Default provider when `--provider` is omitted |
-| `TESTD_TUNNEL` | Path to a provider binary outside `PATH` |
+| `TESTD_TUNNEL` | Explicit path to a provider binary outside `PATH` |
 
-One share per registered name. A share ends when its owner or target changes, including a reconnect to the same target. Repeating the same owner's unchanged registration keeps it. A failed change keeps the share only when the original claim is restored without an intervening successful change. Stopping a share leaves the name registered; removing the name closes the share. Tailscale serve permits one share at a time. If provider cleanup cannot be verified, testd reports the error and refuses a replacement while cleanup remains unverified; an unverified Tailscale cleanup blocks other Tailscale shares too. Inspect provider state before restarting; a restart does not prove cleanup.
+How routing and lifecycle work:
 
-A public provider makes the app reachable by anyone with the URL. The provider terminates TLS, so the browser trusts the provider's certificate, not the testd root. Share only what you intend to expose.
+- Every provider points at the daemon's plain HTTP listener (`http_addr`), which runs whether or not built-in TLS is enabled.
+- The provider hostname becomes a claim-bound alias. The edge preserves the incoming `Host` header, uses `trust_forwarded_for` for the scheme, and still authenticates secure leaves over mutual TLS (providers never receive host signing keys).
+- Only one share is allowed per registered name. Stopping a share leaves the `.test` name live; removing the name closes the share.
+- Changing a name's owner or target (including reconnecting to the same target) ends the share. Repeating an unchanged registration on the same connection keeps it.
+- Share aliases are not restored after a daemon restart. After a crash, a provider process or `tailscale serve --bg` config may still be active; inspect provider state manually rather than assuming an empty share list means everything stopped.
+- On startup, testd warns about matching Tailscale routes without deleting them, and refuses to overwrite an existing `:443` Tailscale serve rule. If provider cleanup cannot be verified, testd reports the error and blocks replacement until resolved.
+
+Because the provider terminates TLS, visitors trust the provider's certificate rather than the testd root. Share only what you intend to expose.
 
 ## External front
 
-The built-in edge is the default and needs no Caddy. An external front is optional for operators who already run one.
-
-Relevant host settings:
+The built-in HTTPS edge works out of the box and does not require Caddy or nginx. If you already run an external reverse proxy on port `443`, you can wire testd behind it:
 
 ```toml
 [host]
-# The HTTPS edge. Move it off 443 when another process owns that port.
+# Move the built-in HTTPS edge off 443, or disable it with edge_enabled = false.
 edge_addr = '127.0.0.1:8443'
-# Plain HTTP routing for an external front.
+# Plain HTTP routing listener used by external fronts (always runs).
 http_addr = '127.0.0.1:7740'
-# Only enable when a configured front sets X-Forwarded-For.
+# Only enable when a front you control sets and strips X-Forwarded-For.
 trust_forwarded_for = false
 ```
 
-The plain listener always runs. `edge_enabled` controls only the built-in TLS listener. Set `edge_enabled = false` when an external front owns 443; keep it true and move `edge_addr` if both the built-in edge and the front run. If the front runs in a container or another network namespace, bind `http_addr` to an address it can reach.
-
-`testd init` detects a Caddy install and offers to add an import to the global Caddyfile. `testd export-caddyfile` writes the managed Caddyfile and prints the import line. `testd doctor` checks the import and reloads Caddy when a global config is configured; `--fix` adds a missing import.
-
-The generated Caddyfile terminates TLS with Caddy's internal CA and proxies to `http_addr`. Browsers trust that CA, not the testd root. With `edge_enabled = false`, `doctor` still checks the PKI needed for registration TLS, but does not require the testd browser root to be installed; it requires the external front's certificate to be trusted by the system. `trust_forwarded_for` must stay off unless a front you control sets the header; otherwise a client can spoof its source address. On the plain listener the dashboard name is served only with this on and a loopback first hop.
+- Set `edge_enabled = false` when an external front owns port `443`, or keep `edge_enabled = true` and move `edge_addr` to another port to run both side by side.
+- If your external front runs in a container or another network namespace, bind `http_addr` to an address it can reach.
+- For Caddy users: `testd init` detects Caddy and offers to add the import line to your global Caddyfile. You can also run `testd export-caddyfile` to generate the managed Caddyfile and print the `import` line, and `testd doctor --fix` to verify the import and reload Caddy.
+- With `edge_enabled = false`, browsers trust your external front's CA (such as Caddy's internal CA) rather than the testd root. `testd doctor` still checks testd's PKI because remote registration TLS needs it.
+- Keep `trust_forwarded_for = false` unless a front you control sets `X-Forwarded-For`; otherwise clients can spoof their source IP. On the plain listener, `testd.test` is only served when `trust_forwarded_for = true` and the first forwarded hop is loopback.
 
 ## DNS resolution
 
-The resolver is a built-in DNS server on loopback. On Linux, setup uses a compatible existing global route without adopting it and reports conflicting global settings or per-link routes instead of changing them.
+testd runs a built-in DNS server on loopback (`127.0.0.1:7753` on Linux/macOS, `127.0.0.1:53` on Windows). On Linux, setup reuses a compatible existing global `.test` route without adopting it, and reports conflicting global settings or per-link routes rather than overwriting them.
 
 ## Privileged ports
 
-On Linux, binding 443 needs `CAP_NET_BIND_SERVICE`, root, or a high port.
-
-- System service: `packaging/systemd/testd@.service` runs as a named user with only that capability.
-- Foreground executable: `sudo setcap 'cap_net_bind_service=+ep' "$(readlink -f "$(command -v testd)")"`. Re-apply after replacing the binary.
-- High port: set `[host] edge_addr = '127.0.0.1:8443'` and open `https://app.example.test:8443`.
-- User service: `packaging/systemd/testd.service` sets `NoNewPrivileges=yes`, so it cannot acquire a file capability. Use a high port there.
-
-On macOS, testd asks the logged-in user's launchd GUI session for the exact loopback socket when a low-port bind is denied. The daemon and tray keep running as the current user; the temporary socket-transfer job is unloaded before startup completes. This preserves `127.0.0.1:443` without a wildcard listener or privileged daemon. A logged-in desktop session is required for this fallback; a high port remains available for headless environments. The persistent service template is in `packaging/launchd/`. Windows needs no capability for the default configuration beyond the usual firewall prompt.
+- **Linux:** Binding port `443` requires `CAP_NET_BIND_SERVICE`, root, or a high port:
+  - System service (recommended): `packaging/systemd/testd@.service` runs as your user with only `CAP_NET_BIND_SERVICE`.
+  - Foreground CLI: `sudo setcap 'cap_net_bind_service=+ep' "$(readlink -f "$(command -v testd)")"` (re-run after replacing the binary).
+  - High port: set `[host] edge_addr = '127.0.0.1:8443'` and open `https://app.example.test:8443`.
+  - User service: `packaging/systemd/testd.service` sets `NoNewPrivileges=yes`, so it cannot use file capabilities; pair it with a high port.
+- **macOS:** If binding `127.0.0.1:443` is denied, testd asks the logged-in user's `launchd` GUI session for that exact loopback socket, then unloads the temporary socket-transfer job before startup finishes. Both the daemon and tray stay unprivileged. A logged-in desktop session is required for this fallback; headless environments can use a high port or the launchd template in `packaging/launchd/`.
+- **Windows:** No extra capability is needed beyond approving the normal firewall prompt.
 
 ## Desktop app and OS integration
 
-The tray app is a separate native Rust build. On first start it opens setup in the default browser on an ephemeral loopback port: resolver, root certificate, and operator secret. The page generates a pronounceable secret into an editable field, so an existing secret can replace it. Setup talks HTTP, shares the dashboard's stylesheet, and navigates its tab to the dashboard after the daemon starts. Closing the tab leaves the tray running; **Continue setup** reopens the page and **Exit** stops the app. Browser launching uses an owner-private handoff file rather than passing administrative credentials in process arguments.
+The desktop tray app is a separate native Rust build. On first start, it opens a browser-based setup page on an ephemeral loopback port to configure the DNS resolver, root certificate, and operator secret (pre-filled with a generated pronounceable secret you can edit or replace). Once setup finishes and the daemon starts, the same tab navigates to the dashboard. Closing the tab leaves the tray running; use **Continue setup** to reopen it or **Exit** to stop the app.
 
-The tray:
+The tray app:
 
-- Runs the daemon and opens the dashboard in a window
-- Leaves launch at login off until you tick **Launch at login**
-- Shows pending access requests as notifications and changes its icon while one waits
-- Lists saved quick launches with start and stop actions
-- Provides share controls
+- Starts the daemon and opens the dashboard using an owner-private HTML handoff file (never passing admin credentials in process arguments)
+- Keeps **Launch at login** off until you opt in (unticking it or removing the OS login item keeps it off)
+- Shows pending access requests as desktop notifications and changes its tray icon while a request is waiting
+- Lists saved quick launches with **Start** and **Stop** actions and provides share controls
 
-Unticking **Launch at login** or removing the login item outside the tray keeps it disabled until you explicitly enable it again. Removing the app with the OS uninstaller does not remove the DNS route or the trusted root. On Linux, run `testd uninstall` first; macOS and Windows uninstall remain blocked until system ownership can be verified.
-
-Notifications and OS URL-scheme launches share one action grammar:
+Notifications and OS URL-scheme links share one action format:
 
 ```text
 testd://fix/resolver
 testd://fix/certificate
 ```
 
-`testd url <url>` forwards the action to a running daemon. If the daemon is gone, it performs the repair itself, using a native authorization dialog when there is no terminal. Release builds register the `testd` scheme on Windows and Linux at startup and through the bundle on macOS. Dev builds skip registration unless `TESTD_REGISTER_SCHEME=1` is set.
+`testd url <url>` forwards the action to the running daemon, or runs the repair itself (using a native authorization dialog when there is no terminal). Release builds register the `testd://` scheme automatically (at startup on Windows/Linux, via the app bundle on macOS); dev builds skip it unless `TESTD_REGISTER_SCHEME=1` is set.
+
+Removing the desktop app with the OS uninstaller does not remove the `.test` DNS route or trusted root certificate. Run `testd uninstall` first to clean up system integration.
 
 ## Certificates and PKI
 
-- The root CA lives 10 years and is the trust anchor installed in the system store.
-- The host intermediate lives one year and renews near expiry on startup or certificate minting, without changing root trust.
-- Leaf certificates live 24 hours and are minted on demand for a name.
-- The previous intermediate certificate and key are kept under `pki/backups/`.
+testd manages a three-tier local PKI under `~/.config/testd/pki/`:
 
-`testd doctor` reports expiry. `testd doctor --fix` repairs the PKI when the root key is available. If `root.key` was moved offline, restore it before the intermediate expires.
+- **Root CA** (`root.crt` / `root.key`): 10-year lifetime; installed once in your system trust store.
+- **Host intermediate** (`node.crt` / `node.key`): 1-year lifetime; renews automatically near expiry on startup or certificate minting without changing root trust. Previous intermediates are backed up in `pki/backups/`.
+- **Leaf certificates**: 24-hour lifetime; minted on demand in memory for each live name.
 
-The dashboard's Certificate card shows trust state, SHA-256 fingerprint, and expiry, and installs or removes system trust. Fetch the root from either dashboard URL:
+`testd doctor` reports upcoming expiry and `testd doctor --fix` repairs the PKI if `root.key` is present. (If you moved `root.key` offline, bring it back before the intermediate expires.)
+
+The dashboard's **Certificate** card shows trust status, SHA-256 fingerprint, expiry, and install/remove buttons (plus a separate Firefox trust check when viewed in Firefox). Anyone on the host can download the public root certificate with:
 
 ```sh
 curl http://127.0.0.1:7737/ca.crt -o testd-root.crt
 ```
 
-The root key stays on the host and is never copied to a dev environment. If it is compromised, rebuild the PKI, reinstall trust on every browser machine, and restart the host.
+Keep `pki/root.key` strictly on the host. If it is ever exposed, rebuild the PKI, reinstall trust on every browser machine, and restart the host.
 
 ## Automation
 
-A non-interactive run needs a credential that does not wait for approval:
+For non-interactive scripts or CI, supply a credential so `testd run` does not pause for approval:
 
 ```sh
 export TESTD_TOKEN="$(cat /run/secrets/testd-token)"
 testd run --host 192.168.1.5 --token-profile ci app.example:3000 -- ./server
 ```
 
-The token is an issued token from the CI profile or the operator secret. Prefer the issued token because it is scoped and revocable. A credential file also works when the environment cannot carry the variable.
+Prefer an issued token (scoped and revocable) over the operator secret. A credential file under `~/.config/testd/credentials/<profile>` also works if you want to avoid putting the token in an environment variable (which is visible to same-user process inspection on most OSes).
 
-`testd run` exits with the child's status; a registration failure stops the child and exits non-zero. `testd doctor --json` provides stable exit codes and check objects for scripts.
-
-Do not put secrets in `.testd.toml`, command lines, or logs. `TESTD_TOKEN` is visible to the same user's process inspection on most systems.
+`testd run` exits with the child process's exit code (and stops the child if registration fails). Use `testd doctor --json` for structured health checks in scripts.
 
 ## Design notes
 
-- One host is the authority. DNS, TLS, the registry, and approvals live on the browser machine. There is no central service, account system, cross-host mesh, or public DNS dependency.
-- The connection is the lease. A claim lives exactly as long as the TCP connection that created it, so a crash or lost network releases the name without a cleanup job.
-- The token is durable permission. Re-approving a leaf on every run would be annoying, so tokens and grants persist across reconnects and can be revoked later.
-- Grants are per name. A token covers exact names, not a project wildcard or everything a machine can reach.
-- Network registration is NDJSON over pinned TLS 1.3; application forwarding to a secure leaf uses mutual TLS. Local-only registrations retain the loopback protocol.
-- The CA is local. A root installed once per browser machine plus short-lived leaf certificates gives private HTTPS without per-project certificate files.
+Why testd is built the way it is:
+
+- **One host is the authority:** DNS, TLS, tokens, and approvals live on the browser machine. No central server, accounts, mesh, or public DNS.
+- **The connection is the lease:** A claim exists only while its TCP connection is open, so crashes and network drops clean up automatically.
+- **Tokens are durable, grants are exact:** You approve a leaf once per name instead of on every run, and can revoke individual names or whole tokens later.
+- **Encrypted over the network:** Remote registration uses NDJSON over pinned TLS 1.3; remote app forwarding uses mutual TLS. Local-only registrations keep a simple loopback protocol.
+- **Local CA, short-lived leaves:** Trust one local root once, and get automatic HTTPS for every project without per-project cert files.
 
 ## Clean up
 
 Stop the daemon first, then remove system integration:
 
 ```sh
-testd uninstall
-testd uninstall --purge
+testd uninstall          # removes owned DNS resolver route and root trust; keeps local config/data
+testd uninstall --purge  # also deletes the config directory after system cleanup succeeds
 ```
 
-On Linux, macOS, and Windows, `uninstall` removes owned resolver and trust integration and retains local data. `--purge` also deletes the configuration directory, including its default PKI and tokens, but only after system cleanup succeeds. A custom PKI outside that directory is not deleted. Unowned or changed system state is left untouched and conflicts are reported. If the local root certificate is missing, trust removal and purge are incomplete; restore the certificate before retrying.
+Key safety guarantees across Linux, macOS, and Windows:
 
-Windows removal requires the private installation ID and unchanged administrator-owned NRPT and root-store records. It checks the current targets and every record owned by the same installation, including previous roots, before cleanup starts. Compatible pre-existing integration is never adopted. Records left incomplete by interrupted setup are preserved for review rather than treated as permission to delete live resources; failed removals retain their record for retry. Ownership-record backups remain in `%ProgramData%/testd/ownership/history`.
-
-Uninstall does not remove the executable or desktop app.
+- **Ownership verified first:** `uninstall` only removes resolver rules and root certificates that belong to this installation and have not been modified externally. Unowned or changed system state is left untouched and reported as a conflict.
+- **Missing root certificate:** If `pki/root.crt` is missing, trust removal and `--purge` will not complete; restore the certificate first.
+- **Custom PKI paths:** `--purge` deletes the config directory (including the default PKI and tokens), but does not delete a custom `pki_dir` outside it.
+- **Windows ownership records:** Windows verifies the private installation ID and administrator-owned NRPT and root-store records before removing anything, leaving backups in `%ProgramData%/testd/ownership/history`.
+- **Binaries stay put:** `testd uninstall` cleans up system integration and optional config data; it does not delete the `testd` binary or desktop app.

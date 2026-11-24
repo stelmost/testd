@@ -5,22 +5,24 @@ description: 'Everything for running testd: quickstart, daily usage, advanced se
 
 # testd documentation
 
-testd gives a project running in a container, VM, WSL distro, or remote box a stable HTTPS name on the machine with the browser. The host owns the naming authority, the local CA, and the reverse proxy; the dev environment only registers a name over one TCP connection.
+testd gives your dev projects real, stable HTTPS addresses like `https://app.example.test` on the machine where your browser runs, whether the project runs locally, in a container, a VM, WSL, or on a remote box over SSH or your LAN.
 
-Start with the [quickstart](quickstart.md) if you have not run a name yet.
+You do not need to edit `/etc/hosts`, manage per-project certificates, or run a separate reverse proxy. The browser machine runs `testd host`; each dev environment connects to it and registers the names it needs.
 
-## Start here
+New to testd? Start with the [Quickstart](quickstart.md).
+
+## Pick where to start
 
 <div class="doc-grid">
 	<a class="doc-card" href="./quickstart.html">
 		<span class="doc-card__index">01</span>
 		<strong>Quickstart</strong>
-		<span>Install, prepare the host, start the daemon, and open the first name.</span>
+		<span>Install testd, prepare your host, start the daemon, and open your first HTTPS name.</span>
 	</a>
 	<a class="doc-card" href="./usage.html">
 		<span class="doc-card__index">02</span>
 		<strong>Daily usage</strong>
-		<span>Names, targets, lifetimes, the dashboard, sharing, access requests, and troubleshooting.</span>
+		<span>Registering names, the dashboard, SSH apps, sharing with tunnels, access requests, and fixes.</span>
 	</a>
 	<a class="doc-card" href="./advanced.html">
 		<span class="doc-card__index">03</span>
@@ -40,14 +42,19 @@ Start with the [quickstart](quickstart.md) if you have not run a name yet.
 	<a class="doc-card" href="./dependency-policy.html">
 		<span class="doc-card__index">06</span>
 		<strong>Dependency policy</strong>
-		<span>The advisory exceptions and MSRV constraints that the dependency gate accepts.</span>
+		<span>Desktop library choices, advisory exceptions, and MSRV constraints.</span>
 	</a>
 </div>
 
-## The model in one paragraph
+## How testd works in 30 seconds
 
-The host is the authority. It runs DNS for `.test`, terminates TLS with a local CA, stores the operator secret and issued tokens, and proxies each live name to the dev environment. A leaf keeps one outbound TCP connection open and registers names on it; the connection is the lease, so a crash or lost network releases the name without a cleanup job. A token is durable permission, and its grants are the exact names it may publish.
+There are two sides:
+
+- **Host** (the machine with your browser): runs `testd host`. It answers `.test` DNS queries locally, terminates HTTPS using a local certificate authority, stores issued tokens, and proxies traffic to each live app.
+- **Leaf** (where your code runs: this machine, a VM, container, WSL, or remote box): runs `testd run` and keeps one outbound connection open to the host. While that connection is open, the name is live. When it closes, the name disappears automatically.
+
+If you connect to a remote machine over SSH, you can also skip setting up a network listener altogether and use **SSH apps** right from the dashboard.
 
 ## Source and releases
 
-The source, changelog, and release archives live at <https://github.com/stelmost/testd>. The product site is at <https://testd.dev>. testd is ISC licensed and has no account, telemetry, public DNS, or ACME dependency.
+The source code, changelog, and release archives live at <https://github.com/stelmost/testd>. The product site is at <https://testd.dev>. testd is ISC licensed and has no account, telemetry, public DNS, or ACME dependency.

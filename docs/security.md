@@ -5,9 +5,17 @@ description: 'Trust boundaries, credentials, exposure, and hardening.'
 
 # Security
 
-testd is a development tool. It gives names and HTTPS to machines you control, and it assumes the host is the trust authority. It is not a production ingress controller, a public DNS service, or a multi-tenant platform.
+testd is a local development tool designed for machines you control, with your browser machine acting as the trust authority. It is not a production ingress controller, a public DNS server, or a multi-tenant platform.
 
-This page covers the operational security model. Vulnerability reporting is in [SECURITY.md](https://github.com/stelmost/testd/blob/master/SECURITY.md).
+This page explains how testd protects your machine, credentials, and network traffic, and what to do if something is exposed. For vulnerability reporting, see [SECURITY.md](https://github.com/stelmost/testd/blob/master/SECURITY.md).
+
+## Security model at a glance
+
+- **Host-owned trust:** The root CA private key never leaves the host machine. Leaf certificates are short-lived (24 hours) and minted on demand.
+- **Explicit network pairing:** Remote leaves never send tokens over plaintext or untrusted TLS; they verify a 128-bit TLS-bound code with the host first.
+- **Scoped, revocable grants:** Issued tokens can only publish the exact names you approved and can be revoked individually.
+- **Authenticated local admin:** Reaching loopback alone does not grant dashboard access; every daemon run uses its own bearer token plus CSRF header checks.
+- **No hidden exposure:** Local `.test` DNS only listens on loopback, and tunnels (`testd share`) are started explicitly by you.
 
 ## Trust boundaries
 

@@ -5,6 +5,8 @@ description: 'Commands, configuration keys, files, endpoints, limits, and platfo
 
 # Reference
 
+This page is the lookup guide for every CLI command, flag, environment variable, config key, file path, HTTP endpoint, operational limit, and platform detail in testd. For step-by-step guides, see the [Quickstart](quickstart.md) and [Daily usage](usage.md).
+
 ## Concepts
 
 | Term | Meaning |
@@ -344,6 +346,7 @@ A cross-site form cannot set that header, and a cross-origin fetch cannot pass t
 | `POST` | `/api/local/launches/save` | Create or update a definition |
 | `POST` | `/api/local/launches/delete` | Delete a definition |
 | `POST` | `/api/local/launches/start` | Start a definition |
+| `POST` | `/api/local/launches/ssh/answer` | Submit an answer to an active SSH prompt |
 | `POST` | `/api/local/launches/stop` | Stop a running definition |
 | `POST` | `/api/local/launches/rebind` | Change one running entry's target |
 | `GET` | `/api/local/requests` | Pending access requests |
@@ -390,7 +393,7 @@ All providers require the plain HTTP routing listener. The provider hostname is 
 | Root trusted | `doctor` check `certificate`, with the built-in edge enabled |
 | Edge listening and trusted | `doctor` check `edge` |
 | Optional Caddy wiring | `doctor` checks `caddy`, `caddyfile`, `reload` |
-| Live names and targets | `curl http://127.0.0.1:7737/api/status` |
+| Live names and targets | `curl -H "Authorization: Bearer <dashboard_token>" http://127.0.0.1:7737/api/status` |
 | Pending requests | `testd requests` |
 | Issued tokens | `testd tokens` |
 | Shares and URLs | `testd share --list` |
