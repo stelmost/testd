@@ -290,32 +290,17 @@ class ReleaseTests(unittest.TestCase):
 		condition = next(line.strip() for line in release_job.splitlines() if line.strip().startswith('if:'))
 		self.assertEqual(condition, "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
 
-	def test_release_notes_cover_finalized_alpha_security_and_unsigned_policy(self):
+	def test_release_notes_select_current_changes_and_include_distribution_policy(self):
 		version = workspace_version()
 		with patch.object(sys, 'argv', ['release.py', 'release-notes', version]), \
 				redirect_stdout(io.StringIO()) as output:
 			release.main()
 		text = output.getvalue()
-		heading = next(line for line in (ROOT / 'CHANGELOG.md').read_text().splitlines()
-			if line.startswith(f'## [{version}]'))
-		self.assertIn(heading, text)
-		implemented_notes = (
-			'Native TLS 1.3 registration with explicit host pairing',
-			'Owner-authenticated dashboard and setup requests',
-			'Mutually authenticated host-to-leaf application forwarding',
-			'mutual TLS (mTLS)',
-			'daemon restart invalidates dashboard sessions',
-			'Tailscale refuses to overwrite or adopt existing or ambiguous `:443` handlers',
-			'Native Rust tray app (Tao and tray-icon/muda)',
-		)
-		for note in implemented_notes:
-			self.assertIn(note, text)
-		for removed_section in ('### Changed', '### Fixed', '### Removed'):
-			self.assertNotIn(removed_section, text)
+		changelog = (ROOT / 'CHANGELOG.md').read_text()
+		section = changelog.split(f'## [{version}]', 1)[1].split('\n## [', 1)[0]
+		self.assertTrue(text.startswith(f'## [{version}]' + section))
+		self.assertEqual(text.count('\n## ['), 0)
 		self.assertNotIn('## [Unreleased]', text)
-		self.assertNotIn('Remote registration is plain TCP', text)
-		self.assertNotIn('per-run control token', text)
-		self.assertNotIn('root CA installation never stages a certificate in a user-writable temp file', text)
 		self.assertIn('Windows artifacts are unsigned', text)
 		self.assertIn('macOS is not Developer ID signed or notarized', text)
 		self.assertIn('optional macOS ad-hoc resource seal', text)
@@ -329,6 +314,26 @@ class ReleaseTests(unittest.TestCase):
 			f'https://github.com/stelmost/testd/releases/download/v{version}/install.sh', text)
 		self.assertIn('\nsh ./testd-install.sh\n', text)
 		self.assertIn('On Linux, macOS, and Windows, stop testd and run `testd uninstall` before removing the app.', text)
+
+	def test_first_alpha_changelog_preserves_finalized_security_claims(self):
+		changelog = (ROOT / 'CHANGELOG.md').read_text()
+		text = changelog.split('## [0.1.0-alpha.1]', 1)[1].split('\n## [', 1)[0]
+		implemented_notes = (
+			'Native TLS 1.3 registration with explicit host pairing',
+			'Owner-authenticated dashboard and setup requests',
+			'Mutually authenticated host-to-leaf application forwarding',
+			'mutual TLS (mTLS)',
+			'daemon restart invalidates dashboard sessions',
+			'Tailscale refuses to overwrite or adopt existing or ambiguous `:443` handlers',
+			'Native Rust tray app (Tao and tray-icon/muda)',
+		)
+		for note in implemented_notes:
+			self.assertIn(note, text)
+		for removed_section in ('### Changed', '### Fixed', '### Removed'):
+			self.assertNotIn(removed_section, text)
+		self.assertNotIn('Remote registration is plain TCP', text)
+		self.assertNotIn('per-run control token', text)
+		self.assertNotIn('root CA installation never stages a certificate in a user-writable temp file', text)
 
 	def test_release_installer_is_pinned_without_promoting_the_website(self):
 		original = (ROOT / 'install.sh').read_bytes()
