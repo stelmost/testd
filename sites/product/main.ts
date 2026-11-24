@@ -1,4 +1,6 @@
 import './style.css';
+import { mountLease } from './lease';
+import { mountLimb } from './limb';
 
 document.documentElement.classList.add('js');
 
@@ -12,37 +14,6 @@ function showToast(message: string): void {
 	toast.textContent = message;
 	toast.classList.add('visible');
 	toastTimer = window.setTimeout(() => toast.classList.remove('visible'), 2400);
-}
-
-function setupNavigation(): void {
-	const toggle = document.querySelector<HTMLButtonElement>('[data-nav-toggle]');
-	const nav = document.querySelector<HTMLElement>('[data-nav]');
-	if (!toggle || !nav) return;
-
-	const close = (): void => {
-		toggle.setAttribute('aria-expanded', 'false');
-		toggle.setAttribute('aria-label', 'Open navigation');
-		nav.classList.remove('open');
-	};
-
-	toggle.addEventListener('click', () => {
-		const isOpen = toggle.getAttribute('aria-expanded') === 'true';
-		toggle.setAttribute('aria-expanded', String(!isOpen));
-		toggle.setAttribute('aria-label', isOpen ? 'Open navigation' : 'Close navigation');
-		nav.classList.toggle('open', !isOpen);
-	});
-
-	nav.querySelectorAll('a').forEach((link) => link.addEventListener('click', close));
-	document.addEventListener('keydown', (event) => {
-		if (event.key === 'Escape' && nav.classList.contains('open')) {
-			close();
-			toggle.focus();
-		}
-	});
-
-	window.matchMedia('(min-width: 721px)').addEventListener('change', (event) => {
-		if (event.matches) close();
-	});
 }
 
 function copyWithFallback(text: string): boolean {
@@ -68,11 +39,6 @@ async function copyText(text: string): Promise<void> {
 }
 
 function getCommandForButton(button: HTMLButtonElement): string {
-	if (button.hasAttribute('data-copy-active-panel')) {
-		const scope = button.closest('.code-block') ?? document;
-		return scope.querySelector<HTMLElement>('[data-code-panel]:not([hidden])')?.textContent?.trim() ?? '';
-	}
-
 	const targetId = button.dataset.copyTarget;
 	return (targetId ? document.getElementById(targetId)?.textContent : '')?.trim() ?? '';
 }
@@ -105,7 +71,7 @@ async function handleCopy(button: HTMLButtonElement): Promise<void> {
 }
 
 function setupCopyButtons(): void {
-	document.querySelectorAll<HTMLButtonElement>('[data-copy-target], [data-copy-active-panel]').forEach((button) => {
+	document.querySelectorAll<HTMLButtonElement>('[data-copy-target]').forEach((button) => {
 		button.addEventListener('click', () => void handleCopy(button));
 	});
 }
@@ -155,62 +121,14 @@ function setupTabs(): void {
 	});
 }
 
-function setupReveals(): void {
-	const elements = document.querySelectorAll<HTMLElement>('.reveal');
-	if (!('IntersectionObserver' in window) || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-		elements.forEach((element) => element.classList.add('is-visible'));
-		return;
-	}
-
-	const observer = new IntersectionObserver(
-		(entries) => {
-			entries.forEach((entry) => {
-				if (!entry.isIntersecting) return;
-				entry.target.classList.add('is-visible');
-				observer.unobserve(entry.target);
-			});
-		},
-		{ threshold: 0.08, rootMargin: '0px 0px -35px' },
-	);
-	elements.forEach((element) => observer.observe(element));
-}
-
-function setupLightbox(): void {
-	const images = document.querySelectorAll<HTMLImageElement>('img[data-lightbox]');
-	if (images.length === 0) return;
-
-	const dialog = document.createElement('dialog');
-	dialog.className = 'image-lightbox';
-	dialog.setAttribute('aria-label', 'Enlarged screenshot');
-	const preview = document.createElement('img');
-	dialog.append(preview);
-	dialog.addEventListener('click', () => dialog.close());
-	document.body.append(dialog);
-
-	const open = (img: HTMLImageElement): void => {
-		preview.src = img.currentSrc || img.src;
-		preview.alt = img.alt;
-		dialog.showModal();
-	};
-
-	images.forEach((img) => {
-		img.tabIndex = 0;
-		img.setAttribute('role', 'button');
-		img.setAttribute('aria-label', `Enlarge: ${img.alt}`);
-		img.addEventListener('click', () => open(img));
-		img.addEventListener('keydown', (event) => {
-			if (event.key !== 'Enter' && event.key !== ' ') return;
-			event.preventDefault();
-			open(img);
-		});
-	});
-}
-
-setupNavigation();
 setupCopyButtons();
 setupTabs();
-setupReveals();
-setupLightbox();
+
+const lease = document.querySelector<HTMLElement>('[data-lease]');
+if (lease) mountLease(lease);
+
+const limb = document.querySelector<HTMLCanvasElement>('[data-limb]');
+if (limb) mountLimb(limb);
 
 document.querySelectorAll<HTMLElement>('[data-year]').forEach((element) => {
 	element.textContent = String(new Date().getFullYear());
