@@ -8,10 +8,10 @@ import { type DotSink, PITCH, type Rgb, mix } from './dots';
 import { BLUE, LIGHT, WORLD_COLOR, type World, type WorldKind } from './worlds';
 
 /* Layout is in fractions of the canvas width; tune the scene here. */
-const HOST = { x: 0.24, y: 0.66, radius: 0.3 };
-const BROWSER = { x: 0.2, y: 0.16 };
-/* One star, up and to the right. The host sees it nearly edge-on, a thin crescent that leaves its far side dark. */
-const HOST_LIGHT: [number, number, number] = [0.9, 0.3, -0.3];
+const HOST = { x: 0.91, y: 0.52, radius: 0.22 };
+const BROWSER = { x: 0.9, y: 0.13 };
+/* One star, up and to the left. The host sees it nearly edge-on, a thin crescent that leaves its far side dark. */
+const HOST_LIGHT: [number, number, number] = [-0.9, 0.3, -0.3];
 const LEAF_LIGHT: [number, number, number] = [0.7, 0.45, 0.55];
 
 interface LeafLayout {
@@ -32,27 +32,27 @@ const LEAVES: LeafLayout[] = [
 		name: 'app.example.test',
 		transport: 'loopback',
 		kind: 'moon',
-		x: 0.56,
-		y: 0.22,
-		radius: 0.036,
+		x: 0.69,
+		y: 0.16,
+		radius: 0.024,
 		labelSide: 'above',
 	},
 	{
 		runtime: 'vm · wsl',
 		name: 'docs.example.test',
 		kind: 'ice',
-		x: 0.76,
-		y: 0.12,
-		radius: 0.045,
-		labelSide: 'right',
+		x: 0.61,
+		y: 0.31,
+		radius: 0.028,
+		labelSide: 'above',
 	},
 	{
 		runtime: 'container',
 		name: 'api.example.test',
 		kind: 'giant',
-		x: 0.8,
-		y: 0.37,
-		radius: 0.058,
+		x: 0.64,
+		y: 0.47,
+		radius: 0.036,
 		labelSide: 'above',
 	},
 	{
@@ -60,9 +60,9 @@ const LEAVES: LeafLayout[] = [
 		name: 'console.example.test',
 		transport: 'TLS 1.3 · paired',
 		kind: 'rocky',
-		x: 0.93,
-		y: 0.57,
-		radius: 0.045,
+		x: 0.56,
+		y: 0.56,
+		radius: 0.028,
 		labelSide: 'above',
 	},
 ];
@@ -307,15 +307,15 @@ export function sceneLabels(scene: Scene, states: LinkState[], wide: boolean): L
 
 	// The host's far side is dark, so its label sits there without crossing a link.
 	const night = host.y - host.radius * 0.42;
-	add('testd host', width * 0.035, night, 'left', 'strong');
+	add('testd host', width * 0.965, night, 'right', 'strong');
 	if (wide) {
-		add('*.test DNS', width * 0.035, night + line, 'left', 'dim');
-		add('HTTPS edge · proxy', width * 0.035, night + line * 2, 'left', 'dim');
+		add('*.test DNS', width * 0.965, night + line, 'right', 'dim');
+		add('HTTPS edge · proxy', width * 0.965, night + line * 2, 'right', 'dim');
 	}
 
 	const craftText = wide ? ['browser', 'https://app.example.test'] : ['browser'];
 	craftText.forEach((text, row) => {
-		add(text, browser.x + width * 0.026, browser.y + line * (row - 0.3), 'left', 'dim');
+		add(text, browser.x - width * 0.026, browser.y + line * (row - 0.3), 'right', 'dim');
 	});
 
 	scene.leaves.forEach((leaf, index) => {
