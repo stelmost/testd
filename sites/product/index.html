@@ -69,20 +69,23 @@
 				</div>
 
 				<figure class="lease" data-lease>
-					<canvas
-						class="lease-canvas"
-						data-lease-canvas
+					<div
+						class="lease-stage"
+						data-lease-stage
 						role="img"
-						aria-label="Diagram: a browser reaches the testd host over HTTPS. Four dev environments, this machine, a container, a VM or WSL, and a remote box, each hold one connection open to the host."
-					></canvas>
+						aria-label="Diagram: the machine with your browser, the testd host, drawn as a planet with a browser craft in orbit. Four other worlds, this machine, a container, a VM or WSL, and a remote box, are each joined to it by one testd link."
+					>
+						<canvas class="lease-world" data-lease-world aria-hidden="true"></canvas>
+						<canvas class="lease-links" data-lease-links aria-hidden="true"></canvas>
+					</div>
 					<figcaption>
 						<p
 							class="lease-status"
 							data-lease-status
 							aria-live="polite"
-							data-pressed-text="Ctrl+C closed the remote box’s connection. console.example.test is released at once; the other three names stay live."
+							data-pressed-text="Ctrl+C closed the remote box’s link. console.example.test is released at once; the other three names stay live."
 						>
-							Four dev environments, one connection each. A name stays live while its connection is open.
+							Four worlds, one testd link each. A name stays live while its link is open.
 						</p>
 						<button
 							class="lease-toggle"

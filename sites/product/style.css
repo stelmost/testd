@@ -252,10 +252,33 @@ html:not(.js) .lease {
 	display: none;
 }
 
-.lease-canvas {
-	display: block;
+.lease-stage {
+	position: relative;
+	aspect-ratio: 16 / 10;
+}
+
+.lease-stage canvas {
+	position: absolute;
+	inset: 0;
 	width: 100%;
-	aspect-ratio: 16 / 9;
+	height: 100%;
+}
+
+/* The worlds fade in once drawn; the links then come up over them. */
+.lease-world {
+	opacity: 0;
+	transition: opacity 1.2s ease;
+}
+
+.lease.is-ready .lease-world {
+	opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.lease-world {
+		opacity: 1;
+		transition: none;
+	}
 }
 
 .lease figcaption {
@@ -511,7 +534,7 @@ td {
 	position: relative;
 	isolation: isolate;
 	margin-top: clamp(5rem, 10vw, 8rem);
-	padding-block: clamp(6rem, 12vw, 9rem) 3rem;
+	padding-block: clamp(7rem, 14vw, 11rem) 3rem;
 }
 
 .limb {

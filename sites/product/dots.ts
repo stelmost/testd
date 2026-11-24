@@ -1,101 +1,110 @@
 /*
-	Dot-matrix renderer shared by the lease diagram and the footer limb.
-	A scene is drawn into a small offscreen canvas, one pixel per dot cell; each cell is then
-	thresholded against a Bayer matrix and painted as a round dot on the visible canvas.
+	Dots: the one drawing primitive. A scene is sampled on a fine grid and every sample becomes a
+	dot whose size follows its tone, like a halftone. All sizes are device pixels, so the pitch is
+	the same on every screen. `DotBuffer` is DOM-free so scenes can also be rendered headlessly.
 */
 
-export const CELL = 4;
+/** Device pixels between dot centres. */
+export const PITCH = 3;
 
-export const LIGHT = '#ecf2f9';
-export const BLUE = '#5ce1ff';
-export const AMBER = '#ff7828';
+/** The largest dot radius: leaves a gap between neighbours even at full tone. */
+export const MAX_RADIUS = PITCH * 0.42;
 
-const TAU = Math.PI * 2;
-const LIGHT_DOT_ALPHA = 0.62;
-const GAIN = 1.5;
-const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map((level) => (level + 0.5) / 16);
+/** Samples dimmer than this leave the ground empty. */
+export const MIN_TONE = 0.08;
 
-type Tint = 'light' | 'blue' | 'amber';
+export type Rgb = readonly [number, number, number];
 
-function tintOf(red: number, blue: number): Tint {
-	if (red > 200 && blue < 140) return 'amber';
-	if (blue > 200 && red < 160) return 'blue';
-	return 'light';
+export interface DotSink {
+	dot(x: number, y: number, radius: number, color: Rgb, alpha: number): void;
+	glow(x: number, y: number, radius: number, color: Rgb, alpha: number): void;
 }
 
-export class DotGrid {
-	readonly source: CanvasRenderingContext2D;
-	readonly display: CanvasRenderingContext2D;
-	cols = 0;
-	rows = 0;
-	private width = 0;
-	private height = 0;
+export function hex(value: string): Rgb {
+	const bits = Number.parseInt(value.replace('#', ''), 16);
+	return [(bits >> 16) & 255, (bits >> 8) & 255, bits & 255];
+}
 
-	constructor(private readonly canvas: HTMLCanvasElement) {
-		const offscreen = document.createElement('canvas');
-		this.source = offscreen.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D;
-		this.display = canvas.getContext('2d') as CanvasRenderingContext2D;
+export function mix(from: Rgb, to: Rgb, amount: number): Rgb {
+	const t = Math.min(Math.max(amount, 0), 1);
+	return [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, from[2] + (to[2] - from[2]) * t];
+}
+
+export function smoothstep(low: number, high: number, value: number): number {
+	const t = Math.min(Math.max((value - low) / (high - low), 0), 1);
+	return t * t * (3 - 2 * t);
+}
+
+/** Place the dot for a sample of the given tone (0..1), or nothing when it is too dim to show. */
+export function toneDot(sink: DotSink, x: number, y: number, tone: number, color: Rgb, alpha = 1): void {
+	if (tone < MIN_TONE) return;
+	sink.dot(x, y, MAX_RADIUS * Math.sqrt(Math.min(tone, 1)), color, alpha);
+}
+
+/** Dots stamped into RGBA pixels with sub-pixel coverage, so even tiny dots stay soft. */
+export class DotBuffer implements DotSink {
+	readonly data: Uint8ClampedArray<ArrayBuffer>;
+
+	constructor(
+		readonly width: number,
+		readonly height: number,
+	) {
+		this.data = new Uint8ClampedArray(width * height * 4);
 	}
 
-	/** Match both canvases to the element's CSS size. Returns false while the element has no size. */
-	resize(): boolean {
-		const { width, height } = this.canvas.getBoundingClientRect();
-		if (!width || !height) return false;
-
-		const ratio = window.devicePixelRatio || 1;
-		this.width = width;
-		this.height = height;
-		this.canvas.width = Math.round(width * ratio);
-		this.canvas.height = Math.round(height * ratio);
-		this.display.setTransform(ratio, 0, 0, ratio, 0, 0);
-		this.cols = Math.floor(width / CELL);
-		this.rows = Math.floor(height / CELL);
-		this.source.canvas.width = this.cols;
-		this.source.canvas.height = this.rows;
-		return true;
-	}
-
-	clear(): void {
-		this.source.clearRect(0, 0, this.cols, this.rows);
-	}
-
-	/** Threshold the offscreen scene and paint it as dots. Labels may be drawn on `display` afterwards. */
-	paint(): void {
-		const { cols, rows, display } = this;
-		const pixels = this.source.getImageData(0, 0, cols, rows).data;
-		const paths: Record<Tint, Path2D> = { light: new Path2D(), blue: new Path2D(), amber: new Path2D() };
-
-		for (let row = 0; row < rows; row++) {
-			for (let col = 0; col < cols; col++) {
-				const offset = (row * cols + col) * 4;
-				const alpha = pixels[offset + 3] / 255;
-				if (alpha * GAIN <= BAYER[((row & 3) << 2) | (col & 3)]) continue;
-
-				const radius = CELL * (0.2 + 0.2 * Math.min(alpha, 1));
-				const x = (col + 0.5) * CELL;
-				const y = (row + 0.5) * CELL;
-				const path = paths[tintOf(pixels[offset], pixels[offset + 2])];
-				path.moveTo(x + radius, y);
-				path.arc(x, y, radius, 0, TAU);
+	dot(x: number, y: number, radius: number, color: Rgb, alpha: number): void {
+		const reach = Math.ceil(radius + 1);
+		const firstCol = Math.max(0, Math.floor(x) - reach);
+		const lastCol = Math.min(this.width - 1, Math.floor(x) + reach);
+		const firstRow = Math.max(0, Math.floor(y) - reach);
+		const lastRow = Math.min(this.height - 1, Math.floor(y) + reach);
+		// A dot smaller than a pixel dims instead of shrinking, as a real small dot would.
+		const area = Math.min(1, Math.PI * radius * radius);
+		for (let row = firstRow; row <= lastRow; row++) {
+			for (let col = firstCol; col <= lastCol; col++) {
+				const distance = Math.hypot(col + 0.5 - x, row + 0.5 - y);
+				const coverage = Math.min(Math.max(radius + 0.5 - distance, 0), 1) * area * alpha;
+				this.blend((row * this.width + col) * 4, color, coverage);
 			}
 		}
-
-		display.clearRect(0, 0, this.width, this.height);
-		display.globalAlpha = LIGHT_DOT_ALPHA;
-		display.fillStyle = LIGHT;
-		display.fill(paths.light);
-		display.globalAlpha = 1;
-		this.fillGlowing(paths.blue, BLUE);
-		this.fillGlowing(paths.amber, AMBER);
 	}
 
-	// The helm core and the corona node are the only elements that glow.
-	private fillGlowing(path: Path2D, color: string): void {
-		const { display } = this;
-		display.shadowColor = color;
-		display.shadowBlur = 10;
-		display.fillStyle = color;
-		display.fill(path);
-		display.shadowBlur = 0;
+	glow(x: number, y: number, radius: number, color: Rgb, alpha: number): void {
+		for (let ring = 6; ring >= 1; ring--) {
+			const fraction = ring / 6;
+			this.dot(x, y, radius * fraction, color, (alpha * (1 - fraction) ** 2) / 2);
+		}
+	}
+
+	// Keep the stronger of the existing and incoming coverage; dots rarely overlap at this pitch.
+	private blend(offset: number, color: Rgb, coverage: number): void {
+		const existing = this.data[offset + 3] / 255;
+		if (coverage <= existing) return;
+		this.data[offset] = color[0];
+		this.data[offset + 1] = color[1];
+		this.data[offset + 2] = color[2];
+		this.data[offset + 3] = coverage * 255;
+	}
+}
+
+/** Dots drawn as arcs on a canvas: for the few hundred dots that change every frame. */
+export class CanvasSink implements DotSink {
+	constructor(private readonly context: CanvasRenderingContext2D) {}
+
+	dot(x: number, y: number, radius: number, color: Rgb, alpha: number): void {
+		const { context } = this;
+		context.fillStyle = `rgb(${color[0]} ${color[1]} ${color[2]} / ${alpha})`;
+		context.beginPath();
+		context.arc(x, y, radius, 0, Math.PI * 2);
+		context.fill();
+	}
+
+	glow(x: number, y: number, radius: number, color: Rgb, alpha: number): void {
+		const { context } = this;
+		const gradient = context.createRadialGradient(x, y, 0, x, y, radius);
+		gradient.addColorStop(0, `rgb(${color[0]} ${color[1]} ${color[2]} / ${alpha})`);
+		gradient.addColorStop(1, `rgb(${color[0]} ${color[1]} ${color[2]} / 0)`);
+		context.fillStyle = gradient;
+		context.fillRect(x - radius, y - radius, radius * 2, radius * 2);
 	}
 }
