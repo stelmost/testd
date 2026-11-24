@@ -538,6 +538,14 @@ html:not(.js) .lease {
 	color: var(--text-2);
 }
 
+.premise .command {
+	margin-top: 1.25rem;
+}
+
+.premise .note {
+	margin-top: 0.65rem;
+}
+
 .skips {
 	padding: 0;
 	list-style: none;
