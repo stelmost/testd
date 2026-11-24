@@ -256,7 +256,7 @@ On Linux, `testd uninstall` removes only owned resolver and trust integration an
 
 Windows setup records newly created NRPT rules and machine-root trust under administrator-only `%ProgramData%/testd/ownership`. Removal requires this installation's private ID and unchanged recorded state. Compatible pre-existing state is reused without adoption; legacy or changed state is preserved and reported. Ownership-record backups remain administrator-only after cleanup.
 
-On macOS, uninstall uses installation-owned resolver and certificate receipts and refuses changed or unowned state. Run cleanup from the logged-in desktop session and approve the native trust-removal authorization. Windows uninstall remains blocked until its ownership safeguards are validated natively. This command does not remove the executable or desktop app. Removing the app with the OS uninstaller does not remove the certificate or DNS route.
+On macOS, uninstall uses installation-owned resolver and certificate receipts and refuses changed or unowned state. Run cleanup from the logged-in desktop session and approve the native trust-removal authorization. On Windows, `testd uninstall` uses the ownership records described above to clean up NRPT and machine-root trust. After cleanup, remove the executable or desktop app separately.
 
 ## URL actions
 
