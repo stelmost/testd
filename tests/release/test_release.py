@@ -411,7 +411,7 @@ class ReleaseTests(unittest.TestCase):
 
 	def test_windows_dashboard_curl_sends_a_validated_credential_only_to_stdin(self):
 		fixture = load('dashboard_curl', ROOT / 'tests/host/dashboard-curl.py')
-		arguments = ['--noproxy=*', '-H', 'X-Fixture: "quoted"']
+		arguments = ['--noproxy', '*', '-H', 'X-Fixture: "quoted"']
 		with tempfile.TemporaryDirectory() as temporary:
 			control = pathlib.Path(temporary) / 'control.json'
 			control.write_text(json.dumps({'dashboard_token': 'fixture-token'}), encoding='utf-8')
@@ -3883,13 +3883,13 @@ class PowerShellScriptTests(unittest.TestCase):
 							"$probe = 'X-Fixture: ' + [char]92 + '\"quoted\" path' + [char]92;"
 							f'$body = {state.powershell_quote(body)};'
 							f"$page = Invoke-DashboardCurl -Arguments @('--silent', '--fail', '--max-time', '3', "
-							f"'--noproxy=*', '-H', $probe, '{url}');"
+							f"'--noproxy', '*', '-H', $probe, '{url}');"
 							"if ($LASTEXITCODE -ne 0) { throw 'GET failed' }; [Console]::WriteLine($page);"
 							f"$posted = Invoke-DashboardCurl -Arguments @('--silent', '--fail', '--max-time', '3', "
-							f"'--noproxy=*', '--data-binary', ('@' + $body), '{url}upload');"
+							f"'--noproxy', '*', '--data-binary', ('@' + $body), '{url}upload');"
 							"if ($LASTEXITCODE -ne 0) { throw 'POST failed' }; [Console]::WriteLine($posted);"
 							f"Invoke-DashboardCurl -Arguments @('--silent', '--fail', '--max-time', '3', "
-							f"'--noproxy=*', '{url}denied');"
+							f"'--noproxy', '*', '{url}denied');"
 							"if ($LASTEXITCODE -ne 22) { throw 'curl failure was not propagated' };"
 							"if ($OutputEncoding.GetPreamble().Length -ne 3) { throw 'caller encoding changed' };"
 							"if ([Console]::InputEncoding.CodePage -ne $inputCodepage) { throw 'console input changed' }"

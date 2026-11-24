@@ -81,7 +81,7 @@ function Stop-FixtureProcess($Process) {
 
 function Curl-Get([string]$HostName, [string]$Path = '/') {
 	$url = "https://${HostName}:$EdgePort$Path"
-	$arguments = @('--silent', '--show-error', '--fail', '--max-time', '10', '--noproxy=*',
+	$arguments = @('--silent', '--show-error', '--fail', '--max-time', '10', '--noproxy', '*',
 		'--cacert', (Join-Path $Pki 'root.crt'), '--ssl-no-revoke',
 		'--resolve', "${HostName}:${EdgePort}:127.0.0.1", $url)
 	if ($HostName -eq "testd.$Tld") {
@@ -128,7 +128,7 @@ function Invoke-DashboardCurl([string[]]$Arguments) {
 
 function Dashboard-Get([string]$Path = '/') {
 	Invoke-DashboardCurl -Arguments @('--silent', '--show-error', '--fail', '--max-time', '10',
-		'--noproxy=*', "http://127.0.0.1:7737$Path")
+		'--noproxy', '*', "http://127.0.0.1:7737$Path")
 }
 
 function Dashboard-Post([string]$Path, [string]$Body = '') {
@@ -138,14 +138,14 @@ function Dashboard-Post([string]$Path, [string]$Body = '') {
 		try {
 			[IO.File]::WriteAllText($bodyFile, $Body, [Text.UTF8Encoding]::new($false))
 			Invoke-DashboardCurl -Arguments @('--silent', '--show-error', '--fail', '--max-time', '20',
-				'--noproxy=*', '-H', 'X-Testd-Request: 1', '-H', 'Content-Type: application/json',
+				'--noproxy', '*', '-H', 'X-Testd-Request: 1', '-H', 'Content-Type: application/json',
 				'--data-binary', "@$bodyFile", "http://127.0.0.1:7737$Path")
 		} finally {
 			Remove-Item -LiteralPath $bodyFile -Force -ErrorAction SilentlyContinue
 		}
 	} else {
 		Invoke-DashboardCurl -Arguments @('--silent', '--show-error', '--fail', '--max-time', '20',
-			'--noproxy=*', '-H', 'X-Testd-Request: 1', '-X', 'POST', "http://127.0.0.1:7737$Path")
+			'--noproxy', '*', '-H', 'X-Testd-Request: 1', '-X', 'POST', "http://127.0.0.1:7737$Path")
 	}
 }
 
