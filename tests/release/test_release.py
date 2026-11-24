@@ -289,7 +289,8 @@ class ReleaseTests(unittest.TestCase):
 		for target in ('x86_64-unknown-linux-gnu', 'x86_64-unknown-linux-musl'):
 			self.assertIn(target, text)
 		self.assertIn('TESTD_LIBC=musl', text)
-		self.assertIn('curl -fsSLo testd-install.sh https://testd.dev/install.sh', text)
+		self.assertIn('curl -fsSLo testd-install.sh '
+			f'https://raw.githubusercontent.com/stelmost/testd/v{version}/sites/product/public/install.sh', text)
 		self.assertIn(f"TESTD_VERSION='{version}' sh ./testd-install.sh", text)
 		self.assertIn('On Linux, macOS, and Windows, stop testd and run `testd uninstall` before removing the app.', text)
 
