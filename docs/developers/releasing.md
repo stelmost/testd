@@ -5,7 +5,7 @@ description: 'Release checklist, Homebrew definitions, and signing and notarizat
 
 # Releasing
 
-A free release is a version tag, CLI archives, a pinned CLI installer, public tray bundles, workspace SBOMs, generated Homebrew definitions, and `SHA256SUMS`. The tag workflow attaches them to a draft GitHub release only after required unprivileged checks (including dependency policy/MSRV), minimum-runtime fixtures, website, artifacts, and SBOM gates pass. No commercial service or updater participates.
+A free release is a version tag, CLI archives, a pinned CLI installer, public tray bundles, workspace SBOMs, generated Homebrew definitions, and `SHA256SUMS`. The tag workflow uploads them and publishes the GitHub release automatically only after required unprivileged checks (including dependency policy/MSRV), minimum-runtime fixtures, website, artifacts, and SBOM gates pass. No commercial service or updater participates.
 
 ### Before tagging
 
@@ -92,14 +92,13 @@ cannot produce notarized or Authenticode-signed artifacts.
 ### Publish
 
 - [ ] Tag `vX.Y.Z` and push the tag after the pre-tag checks
-- [ ] Let CI build CLI archives and tray bundles, generate the pinned installer, SBOMs, Homebrew definitions and checksums, and attach them to a draft GitHub release
-- [ ] Download the draft assets and run artifact, host, browser, and desktop validation on the real supported platforms
-- [ ] Validate any useful, owner-approved free macOS ad-hoc resource sealing before generating definitions/checksums from final bytes; do not claim trusted signing or notarization
+- [ ] Let CI build CLI archives and tray bundles, generate the pinned installer, SBOMs, Homebrew definitions and checksums, upload all assets, and publish the GitHub release automatically
+- [ ] Download the published assets and confirm they match the validated candidate
 - [ ] Copy the generated `testd.rb` and `testd-gui.rb` into the Homebrew tap, then audit and install them locally
-- [ ] Publish the draft with the changelog entry and validation results
+- [ ] Confirm the published release includes the changelog entry and retain the pre-tag validation results
 - [ ] After the release assets are public, publish the site with the matching root `Cargo.toml` package version
 
-The public workflow does not use trusted distribution signing. A tag-push run creates a draft only if the release does not already exist. A rerun can add missing assets to an existing release, including a public one, but does not replace existing assets. Do not rerun against a public release unless adding assets is intended. Back up any asset before explicitly replacing it, and do not move an existing release tag to different source.
+The public workflow does not use trusted distribution signing. A tag-push run creates a draft only if the release does not already exist, uploads all assets, then publishes it. Failed uploads leave a new release as a draft. Prerelease tags retain their prerelease status. Manual workflow runs build candidate artifacts without publishing. A rerun can add missing assets to an existing release, including a public one, and publishes an existing draft after a successful upload, but does not replace existing assets. Do not rerun against a public release unless adding assets is intended. Back up any asset before explicitly replacing it, and do not move an existing release tag to different source.
 
 ### CLI installer
 

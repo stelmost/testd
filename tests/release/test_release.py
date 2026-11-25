@@ -293,6 +293,45 @@ class ReleaseTests(unittest.TestCase):
 		condition = next(line.strip() for line in release_job.splitlines() if line.strip().startswith('if:'))
 		self.assertEqual(condition, "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
 
+	@unittest.skipUnless(shutil.which('bash'), 'Bash is not installed')
+	def test_tag_release_publishes_only_after_successful_upload(self):
+		workflow = (ROOT / '.github/workflows/release.yml').read_text(encoding='utf-8')
+		job = workflow.split('\n  release:\n', 1)[1]
+		script = '\n'.join(line[10:] for line in job.split('        run: |\n', 1)[1].splitlines())
+		stub = '''
+python() { :; }
+gh() {
+	printf '%s\\n' "$*" >> "$GH_LOG"
+	case "$2" in
+		view) return "$VIEW_STATUS" ;;
+		upload) return "$UPLOAD_STATUS" ;;
+	esac
+}
+'''
+		for tag in ('v1.0.0', 'v1.0.0-alpha.1'):
+			for view_status, upload_status in ((1, 0), (0, 0), (1, 1), (0, 1)):
+				with self.subTest(tag=tag, existing=not view_status, upload_status=upload_status), \
+						tempfile.TemporaryDirectory() as temporary:
+					root = pathlib.Path(temporary)
+					(root / 'dist').mkdir()
+					(root / 'dist/artifact').touch()
+					log = root / 'gh.log'
+					env = {**os.environ, 'GITHUB_REF_NAME': tag, 'GH_LOG': str(log),
+						'VIEW_STATUS': str(view_status), 'UPLOAD_STATUS': str(upload_status)}
+					result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', stub + script],
+						cwd=root, env=env, capture_output=True, text=True, timeout=10)
+					calls = log.read_text().splitlines()
+					self.assertEqual(result.returncode, upload_status, result.stderr)
+					self.assertEqual(f'release edit {tag} --draft=false' in calls, not upload_status)
+					if not upload_status:
+						self.assertEqual(calls[-1], f'release edit {tag} --draft=false')
+						self.assertEqual(calls[-2], f'release upload {tag} dist/artifact')
+					creates = [call for call in calls if call.startswith('release create ')]
+					self.assertEqual(len(creates), view_status)
+					if creates:
+						self.assertIn('--draft', creates[0])
+						self.assertEqual('--prerelease' in creates[0], '-' in tag)
+
 	def test_release_notes_select_current_changes_and_include_distribution_policy(self):
 		version = workspace_version()
 		with patch.object(sys, 'argv', ['release.py', 'release-notes', version]), \
