@@ -4,6 +4,12 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 
 ## [Unreleased]
 
+## [0.1.0-alpha.3] - 2026-11-25
+
+### Fixed
+
+- macOS certificate repair now requests administrator authorization for an existing untrusted root owned by this installation, restores missing trust, and refreshes its ownership receipt; unowned certificates and externally changed trust settings remain untouched
+
 ## [0.1.0-alpha.2] - 2026-11-24
 
 ### Added
