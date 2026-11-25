@@ -2,7 +2,6 @@ import hashlib
 import io
 import os
 import pathlib
-import re
 import shutil
 import subprocess
 import sys
@@ -23,8 +22,7 @@ class InstallerTests(unittest.TestCase):
 		temporary = tempfile.TemporaryDirectory()
 		self.addCleanup(temporary.cleanup)
 		self.root = pathlib.Path(temporary.name)
-		installer = (ROOT / 'install.sh').read_text(encoding='utf-8')
-		self.version = re.search(r'^version=\$\{TESTD_VERSION:-([^}]+)\}$', installer, re.MULTILINE).group(1)
+		self.version = '1.2.3'
 		tools = self.root / 'tools'
 		tools.mkdir()
 		uname = tools / 'uname'
@@ -59,18 +57,19 @@ class InstallerTests(unittest.TestCase):
 		return subprocess.run(['sh', str(installer)], env={**self.env, **env},
 			capture_output=True, text=True, timeout=15)
 
-	def test_default_version_installs_without_release_discovery(self):
+	def test_default_version_resolves_the_latest_release(self):
 		result = self.run_installer()
 		self.assertEqual(result.returncode, 0, result.stderr)
 		self.assertEqual(self.installed.read_bytes(), BINARY)
 		self.assertIn(f'testd {self.version} ({TARGET})', result.stdout)
 		requests = self.requests.read_text().splitlines()
-		self.assertEqual(len(requests), 2)
+		self.assertEqual(len(requests), 3)
+		self.assertTrue(requests[0].endswith('https://github.com/fixture/testd/releases/latest'))
 		base = f'https://github.com/fixture/testd/releases/download/v{self.version}'
-		self.assertTrue(requests[0].endswith(f'{base}/{self.archive.name}'))
-		self.assertTrue(requests[1].endswith(f'{base}/SHA256SUMS'))
+		self.assertTrue(requests[1].endswith(f'{base}/{self.archive.name}'))
+		self.assertTrue(requests[2].endswith(f'{base}/SHA256SUMS'))
 
-	def test_empty_version_uses_the_pinned_default(self):
+	def test_empty_version_uses_latest(self):
 		result = self.run_installer(TESTD_VERSION='')
 		self.assertEqual(result.returncode, 0, result.stderr)
 		self.assertEqual(self.installed.read_bytes(), BINARY)
@@ -82,6 +81,7 @@ class InstallerTests(unittest.TestCase):
 		self.assertEqual(self.installed.read_bytes(), BINARY)
 		self.assertIn(f'testd {OVERRIDE_VERSION} ({TARGET})', result.stdout)
 		self.assertIn(f'/releases/download/v{OVERRIDE_VERSION}/', self.requests.read_text())
+		self.assertEqual(len(self.requests.read_text().splitlines()), 2)
 
 	def test_generated_installer_uses_its_release_default(self):
 		output = self.root / 'release'
@@ -93,17 +93,27 @@ class InstallerTests(unittest.TestCase):
 		self.assertEqual(result.returncode, 0, result.stderr)
 		self.assertEqual(self.installed.read_bytes(), BINARY)
 		self.assertIn(f'testd {OVERRIDE_VERSION} ({TARGET})', result.stdout)
+		self.assertEqual(len(self.requests.read_text().splitlines()), 2)
 
-	def test_github_token_does_not_trigger_discovery_or_send_credentials(self):
+	def test_github_token_does_not_send_credentials(self):
 		result = self.run_installer(GITHUB_TOKEN='fixture-token')
 		self.assertEqual(result.returncode, 0, result.stderr)
 		self.assertEqual(self.installed.read_bytes(), BINARY)
 		self.assertNotIn('fixture-token', self.requests.read_text() + result.stdout + result.stderr)
 
+	def test_failed_or_invalid_discovery_leaves_no_installation(self):
+		for env in ({'FIXTURE_DOWNLOAD': 'missing-release'},
+			{'FIXTURE_RELEASE_URL': 'https://github.com/fixture/testd/releases/latest'}):
+			with self.subTest(env=env):
+				result = self.run_installer(**env)
+				self.assertNotEqual(result.returncode, 0)
+				self.assertIn('could not resolve latest release', result.stderr)
+				self.assertFalse(self.installed.exists())
+
 	def test_failed_downloads_leave_no_installation(self):
 		for failure, message in (('forbidden', 'download failed:'), ('missing-checksums', 'checksum file unavailable')):
 			with self.subTest(failure=failure):
-				result = self.run_installer(FIXTURE_DOWNLOAD=failure)
+				result = self.run_installer(TESTD_VERSION=self.version, FIXTURE_DOWNLOAD=failure)
 				self.assertNotEqual(result.returncode, 0)
 				self.assertIn(message, result.stderr)
 				self.assertFalse(self.installed.exists())

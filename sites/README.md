@@ -57,12 +57,12 @@ Workers static assets would serve the same tree and also honour `_headers` and `
 
 CI builds and link-checks `dist/` on every run and does not deploy it; publication belongs to the Pages Git integration alone.
 
-The product version label and checksum link use the published version pinned in root `install.sh`. Development Cargo version changes do not advance the public installer. After a release's assets are public, use the [installer promotion procedure](../docs/developers/releasing.md#cli-installer), then commit and publish the canonical installer change.
+The product version label, download links, and `/update.json` use the root `Cargo.toml` package version. Vite pins the served and built `/install.sh` to that same version; the source installer defaults to `latest`. Publish the matching [release assets](../docs/developers/releasing.md#cli-installer) before deploying the site.
 
 ## Layout
 
 - `assets/`: canonical brand and social images
-- `install.sh`: canonical installer; Vite serves and publishes it at `/install.sh`
+- `install.sh`: installer source; Vite pins its default to the Cargo package version at `/install.sh`
 - `sites/tokens.css`: the palette and font stack, shared by the product page and the docs
 - `sites/product/`: product landing page, styles, deploy files, and its Vite config
 - `docs/`: documentation Markdown

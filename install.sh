@@ -1,12 +1,12 @@
 #!/bin/sh
-# Installs its pinned testd release. Reads no configuration and needs no account.
+# Installs the latest testd release unless pinned. Reads no configuration and needs no account.
 # Env: TESTD_VERSION, TESTD_INSTALL_DIR, TESTD_REPO, TESTD_LIBC.
 set -eu
 
 repo=${TESTD_REPO:-stelmost/testd}
 install_dir=${TESTD_INSTALL_DIR:-"$HOME/.local/bin"}
-# Promote this default only after the release assets are public.
-version=${TESTD_VERSION:-0.1.0-alpha.1}
+# Site and release builds replace this default with their version.
+version=${TESTD_VERSION:-latest}
 
 fail() {
 	printf 'install.sh: %s\n' "$*" >&2
@@ -36,6 +36,15 @@ Linux:aarch64 | Linux:arm64)
 	fail "unsupported platform $os/$arch; see https://testd.dev/#install"
 	;;
 esac
+
+if [ "$version" = latest ]; then
+	release_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+		"https://github.com/$repo/releases/latest") || fail 'could not resolve latest release'
+	case "$release_url" in
+	"https://github.com/$repo/releases/tag/v"[0-9]*) version=${release_url##*/v} ;;
+	*) fail 'could not resolve latest release version' ;;
+	esac
+fi
 
 archive="testd-$version-$target.tar.gz"
 base="https://github.com/$repo/releases/download/v$version"

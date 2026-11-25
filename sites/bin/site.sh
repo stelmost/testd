@@ -144,6 +144,7 @@ run() {
 		--volume "$root/scripts:/src/scripts$dir_label" \
 		--volume "$root/tests:/src/tests:ro$file_label" \
 		--volume "$root/install.sh:/src/install.sh:ro$file_label" \
+		--volume "$root/Cargo.toml:/src/Cargo.toml:ro$file_label" \
 		--volume "$root/package.json:/src/package.json:ro$file_label" \
 		--volume "$root/bun.lock:/src/bun.lock:ro$file_label" \
 		--volume "$root/tsconfig.json:/src/tsconfig.json:ro$file_label" \

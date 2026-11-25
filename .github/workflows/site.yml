@@ -15,6 +15,7 @@ on:
       - 'bun.lock'
       - 'tsconfig.json'
       - 'install.sh'
+      - 'Cargo.toml'
   pull_request:
     paths:
       - '.github/workflows/site.yml'
@@ -28,6 +29,7 @@ on:
       - 'bun.lock'
       - 'tsconfig.json'
       - 'install.sh'
+      - 'Cargo.toml'
   workflow_dispatch:
   workflow_call:
 

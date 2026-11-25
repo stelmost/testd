@@ -3,7 +3,15 @@ set -eu
 
 printf '%s\n' "$*" >> "$FIXTURE_REQUESTS"
 
-# Discovery requests and credentials are rejected; only exact-version assets work.
+if [ "$#" = 6 ] && [ "$1" = -fsSL ] && [ "$2" = -o ] && [ "$3" = /dev/null ] &&
+	[ "$4" = -w ] && [ "$5" = '%{url_effective}' ] &&
+	[ "$6" = https://github.com/fixture/testd/releases/latest ]; then
+	[ "$FIXTURE_DOWNLOAD" != missing-release ] || exit 22
+	printf '%s' "${FIXTURE_RELEASE_URL:-https://github.com/fixture/testd/releases/tag/v$FIXTURE_VERSION}"
+	exit 0
+fi
+
+# Reject credentials and unexpected requests; downloads must use exact-version assets.
 [ "$#" = 4 ] && [ "$1" = -fsSL ] && [ "$2" = -o ] || {
 	printf 'curl: (56) The requested URL returned error: 403\n' >&2
 	exit 56

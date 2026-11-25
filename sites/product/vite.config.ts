@@ -10,13 +10,13 @@ const assetsRoot = fileURLToPath(new URL('../../assets/', import.meta.url));
 const installerPath = new URL('../../install.sh', import.meta.url);
 
 function readReleaseVersion(): string {
-	const installer = readFileSync(installerPath, 'utf8');
-	const match = installer.match(/^version=\$\{TESTD_VERSION:-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\}$/m);
-	if (!match) throw new Error('could not read the published release version from install.sh');
+	const manifest = readFileSync(new URL('../../Cargo.toml', import.meta.url), 'utf8');
+	const packageSection = manifest.split(/^\[package\]\s*$/m)[1]?.split(/^\[/m)[0];
+	const match = packageSection?.match(/^version\s*=\s*"(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)"\s*$/m);
+	if (!match) throw new Error('could not read the package version from Cargo.toml');
 	return match[1];
 }
 
-// Advertise the published installer version independently of development package versions.
 function releaseVersion(): Plugin {
 	const version = readReleaseVersion();
 	return {
@@ -44,12 +44,15 @@ function publicAssets(): Plugin {
 	const assets = [
 		{
 			fileName: 'og.png',
-			path: new URL('../../assets/social/og.png', import.meta.url),
+			read: () => readFileSync(new URL('../../assets/social/og.png', import.meta.url)),
 			contentType: 'image/png',
 		},
 		{
 			fileName: 'install.sh',
-			path: installerPath,
+			read: () => readFileSync(installerPath, 'utf8').replace(
+				/^version=\$\{TESTD_VERSION:-latest\}$/m,
+				`version=\${TESTD_VERSION:-${readReleaseVersion()}}`,
+			),
 			contentType: 'text/x-shellscript; charset=utf-8',
 		},
 	];
@@ -59,7 +62,7 @@ function publicAssets(): Plugin {
 			for (const asset of assets) {
 				server.middlewares.use(`/${asset.fileName}`, (_req, res) => {
 					res.setHeader('Content-Type', asset.contentType);
-					res.end(readFileSync(asset.path));
+					res.end(asset.read());
 				});
 			}
 			server.middlewares.use('/update.json', (_req, res) => {
@@ -71,7 +74,7 @@ function publicAssets(): Plugin {
 		generateBundle() {
 			this.emitFile({ type: 'asset', fileName: 'update.json', source: JSON.stringify({ version: readReleaseVersion() }) + '\n' });
 			for (const asset of assets) {
-				this.emitFile({ type: 'asset', fileName: asset.fileName, source: readFileSync(asset.path) });
+				this.emitFile({ type: 'asset', fileName: asset.fileName, source: asset.read() });
 			}
 		},
 	};

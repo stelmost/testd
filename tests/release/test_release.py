@@ -176,7 +176,7 @@ class ReleaseTests(unittest.TestCase):
 			self.assertIn(package, dependencies)
 
 	@unittest.skipIf(os.name == 'nt', 'not applicable: the site container fixture uses a Unix shell')
-	def test_site_container_mounts_tests_and_installer_read_only(self):
+	def test_site_container_mounts_tests_installer_and_manifest_read_only(self):
 		with tempfile.TemporaryDirectory() as temporary:
 			root = pathlib.Path(temporary).resolve()
 			entrypoint = root / 'sites/bin/site.sh'
@@ -199,6 +199,7 @@ class ReleaseTests(unittest.TestCase):
 						capture_output=True, text=True, check=True, timeout=10)
 					self.assertIn(f'{root}/tests:/src/tests:ro{suffix}', result.stdout.splitlines())
 					self.assertIn(f'{root}/install.sh:/src/install.sh:ro{suffix}', result.stdout.splitlines())
+					self.assertIn(f'{root}/Cargo.toml:/src/Cargo.toml:ro{suffix}', result.stdout.splitlines())
 					self.assertIn('/src/sites/bin/entrypoint.sh', result.stdout.splitlines())
 
 	def test_root_typescript_config_checks_the_relocated_link_checker(self):
@@ -207,7 +208,7 @@ class ReleaseTests(unittest.TestCase):
 		self.assertTrue((ROOT / 'tests/check-links.ts').is_file())
 
 	@unittest.skipUnless(shutil.which('bun'), 'Bun is not installed')
-	def test_product_site_uses_the_installer_pin_instead_of_the_development_version(self):
+	def test_product_site_pins_the_installer_and_update_feed_to_the_cargo_version(self):
 		staging = ROOT / 'worktrees'
 		staging.mkdir(exist_ok=True)
 		with tempfile.TemporaryDirectory(prefix='site-version-', dir=staging) as temporary:
@@ -217,8 +218,9 @@ class ReleaseTests(unittest.TestCase):
 			shutil.copyfile(ROOT / 'sites/product/vite.config.ts', product / 'vite.config.ts')
 			(product / 'index.html').write_text('<!doctype html><p>Release __TESTD_VERSION__</p>')
 			(product / '404.html').write_text('<!doctype html><p>Not found</p>')
-			(root / 'Cargo.toml').write_text('[package]\nversion = "8.0.0-dev"\n')
-			installer = 'version=${TESTD_VERSION:-7.6.5}\n'
+			(root / 'Cargo.toml').write_text('[workspace.package]\nversion = "7.6.5"\n'
+				'[package]\nversion = "8.0.0-fixture.1"\n')
+			installer = 'version=${TESTD_VERSION:-latest}\n'
 			(root / 'install.sh').write_text(installer)
 			assets = root / 'assets/social'
 			assets.mkdir(parents=True)
@@ -227,9 +229,10 @@ class ReleaseTests(unittest.TestCase):
 			result = subprocess.run(['bun', 'run', '--bun', 'vite', 'build', str(product)], cwd=ROOT,
 				env={**os.environ, 'TESTD_SITE_OUT_DIR': str(output)}, capture_output=True, text=True, timeout=90)
 			self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-			self.assertIn('Release 7.6.5', (output / 'index.html').read_text())
-			self.assertNotIn('8.0.0-dev', (output / 'index.html').read_text())
-			self.assertEqual((output / 'install.sh').read_text(), installer)
+			self.assertIn('Release 8.0.0-fixture.1', (output / 'index.html').read_text())
+			self.assertEqual((output / 'install.sh').read_text(), installer.replace('latest', '8.0.0-fixture.1'))
+			self.assertEqual(json.loads((output / 'update.json').read_text()), {'version': '8.0.0-fixture.1'})
+			self.assertEqual((root / 'install.sh').read_text(), installer)
 
 	@unittest.skipUnless(shutil.which('bun'), 'Bun is not installed')
 	def test_link_checker_uses_the_isolated_site_output(self):
