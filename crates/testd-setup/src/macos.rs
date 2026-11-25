@@ -30,7 +30,7 @@ pub(super) fn run(script: &str, elevation: Elevation) -> io::Result<()> {
 	}
 }
 
-#[cfg(target_os = "macos")]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(super) fn present(path: &Path) -> io::Result<bool> {
 	match std::fs::symlink_metadata(path) {
 		Ok(_) => Ok(true),

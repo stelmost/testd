@@ -91,16 +91,13 @@ pub(super) fn is_trusted(pem: &str) -> bool {
 pub(super) fn install(pem: &str, elevation: Elevation) -> io::Result<()> {
 	let root = Root::new(pem)?;
 	let store = certificates()?;
-	if matching_count(&root, &store)? == 1 {
-		return if is_trusted(pem) {
-			Ok(())
-		} else {
-			Err(io::Error::other("the certificate already exists without the requested trust; it was left untouched"))
-		};
+	let certificate_count = matching_count(&root, &store)?;
+	if certificate_count == 1 && is_trusted(pem) {
+		return Ok(());
 	}
 	let owner = ownership::InstallationId::load_or_create()?;
 	let script = root.script(&owner.fingerprint(), &sha256_hex(store.as_bytes()));
-	macos::run(&format!("{script}\ninstall_trust"), elevation)?;
+	macos::run(&format!("{script}\ncertificate_count={certificate_count}\ninstall_trust"), elevation)?;
 	if !is_trusted(pem) {
 		return Err(io::Error::other("the installed certificate did not pass the macOS trust check"));
 	}

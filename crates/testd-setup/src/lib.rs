@@ -12,7 +12,8 @@ mod linux_resolver;
 mod ownership;
 #[cfg(any(target_os = "macos", all(test, unix)))]
 mod macos;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", all(test, unix)))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod macos_trust;
 #[cfg(any(target_os = "windows", test))]
 mod windows_helper;
