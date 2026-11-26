@@ -4,6 +4,14 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 
 ## [Unreleased]
 
+## [0.1.0-alpha.4] - 2026-11-26
+
+### Fixed
+
+- The website installer, download links, and update feed now use the Cargo package version; the source installer resolves the latest stable release unless an explicit version is supplied
+- Tag releases now publish automatically after all release assets upload successfully; failed uploads leave new releases as drafts
+- Windows CI classifies POSIX-only SSH and release-publication fixtures as inapplicable, and Fedora CI installs the SHA-256 fallback tool required by the SSH fixtures
+
 ## [0.1.0-alpha.3] - 2026-11-25
 
 ### Fixed
