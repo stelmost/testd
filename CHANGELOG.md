@@ -4,7 +4,7 @@ Format: Keep a Changelog. Versions follow SemVer. The CLI, daemon, and tray ship
 
 ## [Unreleased]
 
-## [0.1.0-alpha.4] - 2026-11-26
+## [0.1.0-alpha.5] - 2026-11-26
 
 ### Fixed
 
