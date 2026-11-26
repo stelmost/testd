@@ -293,6 +293,7 @@ class ReleaseTests(unittest.TestCase):
 		condition = next(line.strip() for line in release_job.splitlines() if line.strip().startswith('if:'))
 		self.assertEqual(condition, "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
 
+	@unittest.skipIf(os.name == 'nt', 'not applicable: release publication runs on a POSIX host')
 	@unittest.skipUnless(shutil.which('bash'), 'Bash is not installed')
 	def test_tag_release_publishes_only_after_successful_upload(self):
 		workflow = (ROOT / '.github/workflows/release.yml').read_text(encoding='utf-8')
