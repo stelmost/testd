@@ -316,12 +316,12 @@ gh() {
 					(root / 'dist').mkdir()
 					(root / 'dist/artifact').touch()
 					log = root / 'gh.log'
-					env = {**os.environ, 'GITHUB_REF_NAME': tag, 'GH_LOG': str(log),
+					env = {**os.environ, 'GITHUB_REF_NAME': tag, 'GH_LOG': log.name,
 						'VIEW_STATUS': str(view_status), 'UPLOAD_STATUS': str(upload_status)}
 					result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', stub + script],
 						cwd=root, env=env, capture_output=True, text=True, timeout=10)
-					calls = log.read_text().splitlines()
 					self.assertEqual(result.returncode, upload_status, result.stderr)
+					calls = log.read_text().splitlines()
 					self.assertEqual(f'release edit {tag} --draft=false' in calls, not upload_status)
 					if not upload_status:
 						self.assertEqual(calls[-1], f'release edit {tag} --draft=false')
