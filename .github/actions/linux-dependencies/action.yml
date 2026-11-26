@@ -17,7 +17,7 @@ runs:
             ;;
           fedora)
             "${privilege[@]}" dnf install -y gcc gcc-c++ make pkgconf-pkg-config python3 curl wget file \
-              findutils gawk grep sed unzip xz zstd openssl openssl-devel gtk3-devel \
+              findutils gawk grep sed unzip xz zstd openssl openssl-devel perl-Digest-SHA gtk3-devel \
               libappindicator-gtk3-devel librsvg2-devel dbus-devel systemd patchelf
             ;;
           *)

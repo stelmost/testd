@@ -19,7 +19,7 @@ APPROVAL = '{"type":"Install"}\n'
 TOOLS = ['awk', 'chmod', 'cp', 'gzip', 'mkdir', 'mktemp', 'mv', 'rm', 'sh', 'tar', 'sha256sum', 'shasum']
 
 
-@unittest.skipUnless(os.name == 'posix', 'remote installation fixtures require a POSIX shell')
+@unittest.skipUnless(os.name == 'posix', 'not applicable: remote installation fixtures require a POSIX shell')
 class SshInstallTests(unittest.TestCase):
 	def setUp(self):
 		self.temporary = tempfile.TemporaryDirectory()
